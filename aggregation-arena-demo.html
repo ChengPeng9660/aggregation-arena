@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Aggregation Arena — a live benchmark for AI forecast aggregation on prediction markets." />
+  <title>Aggregation Arena — Live Benchmark</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><circle cx=%2232%22 cy=%2232%22 r=%2230%22 fill=%22%233151c6%22/><circle cx=%2232%22 cy=%2220%22 r=%228%22 fill=%22%23ffcf54%22/><path d=%22M15 49c2-11 9-16 17-16s15 5 17 16%22 fill=%22white%22/></svg>">
+  <style>
+    :root {
+      --paper: #fbfaf7;
+      --surface: #ffffff;
+      --ink: #202128;
+      --muted: #62697b;
+      --quiet: #8a90a0;
+      --line: #e8e3d9;
+      --line-strong: #dcd5c8;
+      --gold: #b68116;
+      --gold-soft: #f5ecd7;
+      --blue: #3151c6;
+      --blue-soft: #edf1ff;
+      --green: #18855d;
+      --green-soft: #eaf7f1;
+      --red: #b34949;
+      --red-soft: #fff0ee;
+      --shadow: 0 1px 2px rgba(27, 29, 38, .04), 0 10px 30px rgba(27, 29, 38, .035);
+      --radius: 14px;
+    }
+
+    [data-theme="dark"] {
+      --paper: #171816;
+      --surface: #20211f;
+      --ink: #f2f0ea;
+      --muted: #b4b5ae;
+      --quiet: #858780;
+      --line: #30312e;
+      --line-strong: #41423e;
+      --gold: #d3a02f;
+      --gold-soft: #332b18;
+      --blue: #8da4ff;
+      --blue-soft: #252b42;
+      --green: #62c59c;
+      --green-soft: #20352d;
+      --red: #e58c83;
+      --red-soft: #3b2725;
+      --shadow: 0 12px 30px rgba(0, 0, 0, .18);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background-color: var(--paper);
+      background-image: radial-gradient(circle, color-mix(in srgb, var(--ink) 9%, transparent) .7px, transparent .8px);
+      background-size: 22px 22px;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, select { font: inherit; }
+    button { color: inherit; }
+    a { color: inherit; text-decoration: none; }
+    .shell { width: min(1180px, calc(100% - 48px)); margin: 0 auto; }
+
+    header {
+      position: sticky;
+      z-index: 30;
+      top: 0;
+      height: 64px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--paper) 92%, transparent);
+      backdrop-filter: blur(14px);
+    }
+    .nav { height: 100%; display: flex; align-items: center; justify-content: space-between; }
+    .nav-left, .nav-links, .nav-actions { display: flex; align-items: center; }
+    .nav-left { gap: 38px; }
+    .nav-links { gap: 30px; color: var(--muted); font-size: 14px; font-weight: 600; }
+    .nav-links a { transition: color .2s ease; }
+    .nav-links a:hover, .nav-links a.active { color: var(--blue); }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 750; letter-spacing: -.02em; }
+    .brand-mark {
+      position: relative;
+      width: 21px; height: 21px;
+      border-radius: 50%;
+      background: linear-gradient(145deg, #128ac0, #1745aa 70%);
+      box-shadow: inset 0 0 0 2px rgba(255,255,255,.35);
+    }
+    .brand-mark::before { content: ""; position: absolute; width: 7px; height: 7px; border-radius: 50%; background: #ffcf54; top: 3px; left: 7px; }
+    .brand-mark::after { content: ""; position: absolute; width: 11px; height: 5px; border-radius: 50% 50% 35% 35%; background: #f8f4df; bottom: 3px; left: 5px; opacity: .9; }
+    .nav-actions { gap: 12px; }
+    .icon-button, .outline-button, .primary-button, .segmented button, .view-button {
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      cursor: pointer;
+      transition: transform .18s ease, border-color .18s ease, background .18s ease;
+    }
+    .icon-button:hover, .outline-button:hover, .view-button:hover { border-color: var(--blue); transform: translateY(-1px); }
+    .icon-button { width: 35px; height: 35px; display: grid; place-items: center; border-color: transparent; border-radius: 9px; background: transparent; }
+    .primary-button { border-color: var(--blue); border-radius: 9px; padding: 10px 16px; color: white; background: var(--blue); font-size: 14px; font-weight: 700; }
+    .primary-button:hover { transform: translateY(-1px); box-shadow: 0 7px 18px color-mix(in srgb, var(--blue) 22%, transparent); }
+
+    main { min-height: calc(100vh - 64px); }
+    .intro { padding: 62px 0 34px; display: flex; justify-content: space-between; gap: 40px; align-items: flex-end; }
+    .eyebrow { margin: 0 0 14px; color: var(--gold); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; letter-spacing: .21em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(38px, 5vw, 58px); line-height: 1.02; letter-spacing: -.055em; }
+    h1 em { color: var(--gold); font-weight: 720; }
+    .intro-copy { max-width: 700px; }
+    .intro-copy > p:last-child { max-width: 640px; margin: 17px 0 0; color: var(--muted); font-size: 17px; line-height: 1.65; }
+    .connection {
+      display: flex; align-items: center; gap: 10px; white-space: nowrap;
+      padding: 11px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); box-shadow: var(--shadow);
+      color: var(--muted); font-size: 13px; font-weight: 650;
+    }
+    .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #2bb47d; box-shadow: 0 0 0 5px rgba(43,180,125,.11); animation: breathe 2s ease-in-out infinite; }
+
+    .ticker {
+      border-block: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 75%, transparent);
+      overflow: hidden;
+    }
+    .ticker-track { width: max-content; display: flex; animation: ticker 34s linear infinite; }
+    .ticker-item { display: flex; gap: 10px; align-items: center; padding: 13px 26px; border-right: 1px solid var(--line); font-size: 13px; }
+    .ticker-item strong { font-size: 12px; color: var(--quiet); letter-spacing: .05em; }
+    .ticker-item .up { color: var(--green); font-variant-numeric: tabular-nums; }
+    .ticker-item .down { color: var(--red); font-variant-numeric: tabular-nums; }
+
+    .workspace { padding: 32px 0 76px; }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; }
+    .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 10px; }
+    .segmented { display: inline-flex; padding: 3px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
+    .segmented button { padding: 8px 13px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; font-size: 13px; }
+    .segmented button.active { color: var(--blue); background: var(--blue-soft); font-weight: 700; }
+    select { min-width: 165px; padding: 10px 36px 10px 13px; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); outline: none; }
+    select:focus { border-color: var(--blue); }
+    .view-button { width: 39px; height: 39px; display: grid; place-items: center; border-radius: 9px; }
+
+    .section-heading { margin-bottom: 15px; padding-left: 14px; border-left: 2px solid var(--blue); }
+    .section-heading h2 { margin: 0 0 5px; font-size: 18px; letter-spacing: -.02em; }
+    .section-heading p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+
+    .data-layout { display: grid; grid-template-columns: minmax(0, 1fr) 318px; gap: 18px; align-items: start; }
+    .leaderboard, .market-panel, .chart-panel {
+      border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); overflow: hidden;
+    }
+    .leaderboard { min-width: 0; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th { padding: 14px 15px; text-align: right; color: var(--quiet); border-bottom: 1px solid var(--line-strong); font-size: 11px; letter-spacing: .075em; text-transform: uppercase; white-space: nowrap; }
+    th:first-child, th:nth-child(2), td:first-child, td:nth-child(2) { text-align: left; }
+    td { padding: 15px; border-bottom: 1px solid var(--line); text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; transition: background .35s ease; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr { transition: background .2s ease; }
+    tbody tr:hover { background: color-mix(in srgb, var(--blue-soft) 55%, transparent); }
+    tbody tr.updated td { animation: value-flash .75s ease; }
+    .rank { width: 42px; color: var(--quiet); font-weight: 750; }
+    .rank.medal { color: var(--gold); font-size: 15px; }
+    .method { display: flex; align-items: center; gap: 11px; min-width: 196px; }
+    .method-icon { width: 30px; height: 30px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 8px; color: white; font-size: 11px; font-weight: 800; }
+    .method-name, .method-meta { display: block; }
+    .method-name { font-weight: 720; color: var(--ink); }
+    .method-meta { margin-top: 3px; color: var(--quiet); font-size: 11px; }
+    .score { font-weight: 760; font-size: 14px; }
+    .gain { color: var(--green); font-weight: 690; }
+    .loss { color: var(--red); font-weight: 690; }
+    .coverage { display: inline-flex; align-items: center; gap: 7px; }
+    .coverage-bar { width: 33px; height: 4px; overflow: hidden; border-radius: 99px; background: var(--line); }
+    .coverage-bar i { display: block; height: 100%; border-radius: inherit; background: var(--blue); }
+    .badge { display: inline-flex; padding: 4px 7px; border-radius: 6px; color: var(--green); background: var(--green-soft); font-size: 11px; font-weight: 750; }
+
+    .panel-header { padding: 17px 18px 14px; border-bottom: 1px solid var(--line); }
+    .panel-title-row { display: flex; justify-content: space-between; align-items: center; }
+    .panel-header h3 { margin: 0; font-size: 15px; }
+    .panel-header p { margin: 6px 0 0; color: var(--quiet); font-size: 12px; }
+    .market-count { color: var(--gold); font-family: ui-monospace, monospace; font-size: 11px; }
+    .market-list { max-height: 474px; overflow: auto; }
+    .market-item { width: 100%; padding: 15px 18px; border: 0; border-bottom: 1px solid var(--line); text-align: left; background: transparent; cursor: pointer; transition: background .2s ease; }
+    .market-item:last-child { border-bottom: 0; }
+    .market-item:hover, .market-item.active { background: var(--gold-soft); }
+    .market-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+    .source { color: var(--gold); font-family: ui-monospace, monospace; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    .market-price { font-weight: 780; }
+    .market-title { margin: 0; display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 12.5px; line-height: 1.45; }
+    .market-foot { margin-top: 9px; display: flex; justify-content: space-between; color: var(--quiet); font-size: 10.5px; }
+
+    .chart-section { padding-top: 36px; }
+    .chart-panel { padding: 20px; }
+    .chart-meta { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 8px; }
+    .chart-meta strong { font-size: 14px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: 11px; }
+    .legend span { display: flex; align-items: center; gap: 6px; }
+    .legend i { width: 15px; height: 2px; display: inline-block; }
+    .chart { width: 100%; height: auto; display: block; }
+    .chart text { fill: var(--quiet); font: 10px ui-sans-serif, sans-serif; }
+    .chart .grid { stroke: var(--line); stroke-width: 1; }
+    .chart .line { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 700; stroke-dashoffset: 700; animation: draw-line 1.5s .25s ease forwards; }
+    .chart .area { opacity: .08; }
+
+    .methodology { margin-top: 36px; padding: 29px 0 10px; display: grid; grid-template-columns: 185px 1fr; gap: 22px; border-top: 1px solid var(--line); }
+    .methodology h2 { margin: 0; font-size: 15px; }
+    .methodology p { max-width: 760px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
+    .methodology a { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; }
+
+    footer { border-top: 1px solid var(--line); background: var(--surface); }
+    .footer-inner { min-height: 86px; display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px; }
+    .footer-links { display: flex; gap: 26px; }
+
+    .toast { position: fixed; z-index: 50; right: 22px; bottom: 22px; padding: 11px 14px; transform: translateY(18px); opacity: 0; pointer-events: none; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); color: var(--muted); font-size: 12px; transition: .25s ease; }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .hidden { display: none !important; }
+
+    @keyframes breathe { 50% { box-shadow: 0 0 0 8px rgba(43,180,125,0); } }
+    @keyframes ticker { to { transform: translateX(-50%); } }
+    @keyframes value-flash { 0%, 100% { background: transparent; } 35% { background: var(--green-soft); } }
+    @keyframes draw-line { to { stroke-dashoffset: 0; } }
+    @keyframes rise { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: translateY(0); } }
+    .intro > *, .toolbar, .data-layout, .chart-section { animation: rise .55s ease both; }
+    .intro > *:nth-child(2) { animation-delay: .08s; }
+    .toolbar { animation-delay: .12s; }
+    .data-layout { animation-delay: .18s; }
+    .chart-section { animation-delay: .24s; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+    }
+    @media (max-width: 900px) {
+      .nav-links { display: none; }
+      .data-layout { grid-template-columns: 1fr; }
+      .market-list { max-height: 310px; }
+      .intro { align-items: flex-start; flex-direction: column; }
+      .connection { align-self: flex-start; }
+    }
+    @media (max-width: 640px) {
+      .shell { width: min(100% - 28px, 1180px); }
+      header { height: 58px; }
+      .brand span:last-child { display: none; }
+      .primary-button { padding: 9px 11px; }
+      .intro { padding-top: 42px; }
+      h1 { font-size: 40px; }
+      .toolbar { align-items: stretch; flex-direction: column; }
+      .toolbar-left, .toolbar-right { justify-content: space-between; }
+      .segmented { width: 100%; }
+      .segmented button { flex: 1; }
+      select { flex: 1; min-width: 0; }
+      .methodology { grid-template-columns: 1fr; }
+      .footer-inner { padding: 24px 0; align-items: flex-start; flex-direction: column; gap: 18px; }
+      .footer-links { gap: 15px; flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="shell nav">
+      <div class="nav-left">
+        <a class="brand" href="#top" aria-label="Aggregation Arena home">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span>Aggregation Arena</span>
+        </a>
+        <nav class="nav-links" aria-label="Primary navigation">
+          <a href="#markets">Markets</a>
+          <a class="active" href="#leaderboard">Leaderboard</a>
+          <a href="#methods">Methods</a>
+          <a href="#research">Research</a>
+          <a href="#about">About</a>
+        </nav>
+      </div>
+      <div class="nav-actions">
+        <button class="icon-button" id="themeToggle" aria-label="Toggle theme" title="Toggle theme">☾</button>
+        <button class="primary-button" id="submitButton">Submit aggregator</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="shell intro">
+      <div class="intro-copy">
+        <p class="eyebrow">Aggregation Arena · Live benchmark</p>
+        <h1>Which ensemble reads<br><em>the future</em> best?</h1>
+        <p>Aggregation methods combine the same AI forecasts on live prediction markets. When events resolve, the standings update in public.</p>
+      </div>
+      <div class="connection"><span class="live-dot"></span><span>2 sources connected</span><strong>· 37 live markets</strong></div>
+    </section>
+
+    <div class="ticker" aria-label="Live market ticker">
+      <div class="ticker-track" id="tickerTrack"></div>
+    </div>
+
+    <section class="shell workspace" id="leaderboard">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <div class="segmented" id="trackTabs" aria-label="Leaderboard track">
+            <button class="active" data-track="all">All</button>
+            <button data-track="model">Model-only</button>
+            <button data-track="market">Market-aware</button>
+          </div>
+        </div>
+        <div class="toolbar-right">
+          <select id="categoryFilter" aria-label="Select a category">
+            <option value="all">All categories</option>
+            <option value="Politics">Politics</option>
+            <option value="Economics">Economics</option>
+            <option value="Sports">Sports</option>
+            <option value="Technology">Technology</option>
+          </select>
+          <button class="view-button" id="viewToggle" title="Switch view" aria-label="Switch between table and chart">▥</button>
+        </div>
+      </div>
+
+      <div class="section-heading">
+        <h2>Live rankings</h2>
+        <p>Outcome-based performance across resolved prediction markets. Provisional until 50 resolved forecasts.</p>
+      </div>
+
+      <div class="data-layout" id="markets">
+        <div class="leaderboard" id="tablePanel">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Rank</th><th>Aggregation method</th><th>Brier ↓</th><th>Index ↑</th><th>vs Mean</th><th>vs Market</th><th>Resolved</th><th>Coverage</th>
+                </tr>
+              </thead>
+              <tbody id="leaderboardBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <aside class="market-panel" aria-label="Live market feed">
+          <div class="panel-header">
+            <div class="panel-title-row"><h3>Market feed</h3><span class="market-count">LIVE · 37</span></div>
+            <p>Incoming questions from connected venues</p>
+          </div>
+          <div class="market-list" id="marketList"></div>
+        </aside>
+      </div>
+
+      <section class="chart-section" id="methods">
+        <div class="section-heading">
+          <h2>Historical performance</h2>
+          <p>Rolling Brier Index over the last 90 days</p>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-meta">
+            <strong>Top aggregators</strong>
+            <div class="legend">
+              <span><i style="background:#3151c6"></i>Adaptive Logit Pool</span>
+              <span><i style="background:#b68116"></i>Market-Calibrated Stack</span>
+              <span><i style="background:#8c92a4"></i>Equal Mean</span>
+            </div>
+          </div>
+          <svg class="chart" viewBox="0 0 1000 250" role="img" aria-label="Historical Brier Index line chart">
+            <defs>
+              <linearGradient id="blueArea" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#3151c6"/><stop offset="1" stop-color="#3151c6" stop-opacity="0"/></linearGradient>
+            </defs>
+            <g>
+              <line class="grid" x1="45" y1="35" x2="980" y2="35"/><line class="grid" x1="45" y1="85" x2="980" y2="85"/>
+              <line class="grid" x1="45" y1="135" x2="980" y2="135"/><line class="grid" x1="45" y1="185" x2="980" y2="185"/>
+              <text x="9" y="39">68</text><text x="9" y="89">64</text><text x="9" y="139">60</text><text x="9" y="189">56</text>
+              <text x="45" y="227">APR 20</text><text x="350" y="227">MAY 20</text><text x="660" y="227">JUN 20</text><text x="925" y="227">JUL 19</text>
+            </g>
+            <path class="area" fill="url(#blueArea)" d="M45 177 C120 162 165 169 225 146 S350 129 425 118 S535 108 610 88 S715 81 790 60 S900 65 980 42 L980 210 L45 210 Z"/>
+            <path class="line" stroke="#8c92a4" d="M45 184 C145 175 190 179 270 165 S420 163 500 147 S640 143 720 137 S865 137 980 126"/>
+            <path class="line" stroke="#b68116" d="M45 191 C120 176 180 168 245 156 S365 149 430 131 S555 126 615 104 S745 105 810 83 S915 86 980 67"/>
+            <path class="line" stroke="#3151c6" d="M45 177 C120 162 165 169 225 146 S350 129 425 118 S535 108 610 88 S715 81 790 60 S900 65 980 42"/>
+          </svg>
+        </div>
+      </section>
+
+      <section class="methodology" id="research">
+        <h2>How scoring works</h2>
+        <p>Every aggregator receives the same frozen panel of model forecasts. Predictions are locked before market close and scored against the real outcome using Brier score. Market-aware methods compete in a separate track. <a href="#">Read the methodology</a>.</p>
+      </section>
+    </section>
+  </main>
+
+  <footer id="about">
+    <div class="shell footer-inner">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Aggregation Arena</span><span style="color:var(--quiet);font-weight:500">© 2026</span></div>
+      <div class="footer-links"><a href="#about">About</a><a href="#research">Research</a><a href="#leaderboard">Leaderboard</a><a href="#">Add your method</a></div>
+    </div>
+  </footer>
+  <div class="toast" id="toast">Demo action completed</div>
+
+  <script>
+    const methods = [
+      {name:"Adaptive Logit Pool", meta:"rolling weights · v1.4", short:"AL", color:"#3151c6", brier:.167, index:67.8, mean:8.7, market:2.9, n:184, coverage:99, track:"model"},
+      {name:"Market-Calibrated Stack", meta:"market-aware · v2.1", short:"MC", color:"#b68116", brier:.171, index:67.1, mean:6.6, market:1.8, n:177, coverage:96, track:"market"},
+      {name:"Diversity Selector", meta:"dynamic subset · v0.9", short:"DS", color:"#7a56a8", brier:.176, index:66.3, mean:3.8, market:.5, n:184, coverage:100, track:"model"},
+      {name:"Recency Weighted", meta:"90-day window · v1.2", short:"RW", color:"#248e82", brier:.179, index:65.7, mean:2.2, market:-.4, n:181, coverage:98, track:"model"},
+      {name:"Trimmed Logit Mean", meta:"10% trim · baseline", short:"TL", color:"#68717e", brier:.181, index:65.3, mean:1.1, market:-1.2, n:184, coverage:100, track:"model"},
+      {name:"Equal Probability Mean", meta:"canonical baseline", short:"μ", color:"#9297a3", brier:.183, index:64.9, mean:0, market:-2.1, n:184, coverage:100, track:"model"},
+      {name:"Market Midpoint", meta:"crowd baseline", short:"PM", color:"#c38c24", brier:.187, index:64.1, mean:-2.2, market:0, n:184, coverage:100, track:"market"}
+    ];
+
+    const markets = [
+      {source:"Polymarket", title:"Will the Fed cut rates at the September meeting?", price:62, move:+3.1, closes:"43d", category:"Economics", volume:"$8.4m"},
+      {source:"Kalshi", title:"Will US CPI inflation be above 3.0% in August?", price:41, move:-1.4, closes:"29d", category:"Economics", volume:"$1.2m"},
+      {source:"Polymarket", title:"Will a new frontier AI model launch before October?", price:73, move:+5.7, closes:"71d", category:"Technology", volume:"$2.7m"},
+      {source:"Kalshi", title:"Will the S&P 500 close above 6,500 this quarter?", price:54, move:+.8, closes:"74d", category:"Economics", volume:"$940k"},
+      {source:"Polymarket", title:"Will the incumbent coalition win the next election?", price:47, move:-2.2, closes:"98d", category:"Politics", volume:"$5.1m"},
+      {source:"Polymarket", title:"Will the championship final go to seven games?", price:31, move:+1.2, closes:"11d", category:"Sports", volume:"$780k"}
+    ];
+
+    let currentTrack = "all";
+    let category = "all";
+    const body = document.getElementById("leaderboardBody");
+    const marketList = document.getElementById("marketList");
+    const toast = document.getElementById("toast");
+
+    function renderMethods(flash=false) {
+      const visible = methods.filter(m => currentTrack === "all" || m.track === currentTrack).sort((a,b)=>a.brier-b.brier);
+      body.innerHTML = visible.map((m,i)=>`
+        <tr class="${flash && i < 2 ? "updated" : ""}">
+          <td class="rank ${i<3?"medal":""}">${i+1}</td>
+          <td><div class="method"><span class="method-icon" style="background:${m.color}">${m.short}</span><span><span class="method-name">${m.name}</span><span class="method-meta">${m.meta}</span></span></div></td>
+          <td class="score">${m.brier.toFixed(3)}</td>
+          <td><span class="badge">${m.index.toFixed(1)}</span></td>
+          <td class="${m.mean>=0?"gain":"loss"}">${m.mean>=0?"+":""}${m.mean.toFixed(1)}%</td>
+          <td class="${m.market>=0?"gain":"loss"}">${m.market>=0?"+":""}${m.market.toFixed(1)}%</td>
+          <td>${m.n}</td>
+          <td><span class="coverage"><span class="coverage-bar"><i style="width:${m.coverage}%"></i></span>${m.coverage}%</span></td>
+        </tr>`).join("");
+    }
+
+    function renderMarkets() {
+      const visible = markets.filter(m => category === "all" || m.category === category);
+      marketList.innerHTML = visible.length ? visible.map((m,i)=>`
+        <button class="market-item ${i===0?"active":""}" data-market="${i}">
+          <span class="market-top"><span class="source">${m.source}</span><span class="market-price">${m.price}¢</span></span>
+          <span class="market-title">${m.title}</span>
+          <span class="market-foot"><span>${m.category} · ${m.volume}</span><span class="${m.move>=0?"gain":"loss"}">${m.move>=0?"+":""}${m.move}% · ${m.closes}</span></span>
+        </button>`).join("") : `<div style="padding:28px;color:var(--quiet);font-size:13px;text-align:center">No live markets in this category.</div>`;
+      document.querySelectorAll(".market-item").forEach(btn => btn.addEventListener("click", () => {
+        document.querySelectorAll(".market-item").forEach(x=>x.classList.remove("active")); btn.classList.add("active"); showToast("Market selected · forecast panel ready");
+      }));
+    }
+
+    function renderTicker() {
+      const items = [...markets, ...markets];
+      document.getElementById("tickerTrack").innerHTML = items.map(m=>`<div class="ticker-item"><strong>${m.source.toUpperCase()}</strong><span>${m.title}</span><b>${m.price}¢</b><span class="${m.move>=0?"up":"down"}">${m.move>=0?"▲":"▼"} ${Math.abs(m.move)}%</span></div>`).join("");
+    }
+
+    function showToast(text) {
+      toast.textContent = text; toast.classList.add("show"); clearTimeout(window.toastTimer); window.toastTimer=setTimeout(()=>toast.classList.remove("show"),2200);
+    }
+
+    document.querySelectorAll("#trackTabs button").forEach(btn=>btn.addEventListener("click",()=>{
+      document.querySelectorAll("#trackTabs button").forEach(x=>x.classList.remove("active")); btn.classList.add("active"); currentTrack=btn.dataset.track; renderMethods();
+    }));
+    document.getElementById("categoryFilter").addEventListener("change",e=>{category=e.target.value;renderMarkets();});
+    document.getElementById("themeToggle").addEventListener("click",()=>{
+      const dark=document.documentElement.dataset.theme==="dark"; document.documentElement.dataset.theme=dark?"light":"dark"; document.getElementById("themeToggle").textContent=dark?"☾":"☀";
+    });
+    document.getElementById("submitButton").addEventListener("click",()=>showToast("Submission flow would open here"));
+    document.getElementById("viewToggle").addEventListener("click",()=>{
+      document.getElementById("tablePanel").classList.toggle("hidden"); showToast(document.getElementById("tablePanel").classList.contains("hidden")?"Chart focus enabled":"Table view restored");
+    });
+
+    setInterval(()=>{
+      const m=methods[Math.floor(Math.random()*3)]; m.index=Math.max(50,Math.min(75,m.index+(Math.random()-.45)*.18)); m.brier=Math.max(.12,Math.min(.25,m.brier+(Math.random()-.55)*.0005)); renderMethods(true);
+    },4200);
+
+    renderMethods(); renderMarkets(); renderTicker();
+  </script>
+</body>
+</html>
