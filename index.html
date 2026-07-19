@@ -112,6 +112,9 @@
       color: var(--muted); font-size: 13px; font-weight: 650;
     }
     .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #2bb47d; box-shadow: 0 0 0 5px rgba(43,180,125,.11); animation: breathe 2s ease-in-out infinite; }
+    .connection.syncing .live-dot { background: var(--gold); box-shadow: 0 0 0 5px color-mix(in srgb, var(--gold) 15%, transparent); }
+    .connection.error .live-dot { background: var(--red); box-shadow: 0 0 0 5px color-mix(in srgb, var(--red) 15%, transparent); animation: none; }
+    .sync-time { color: var(--quiet); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; font-weight: 560; }
 
     .ticker {
       border-block: 1px solid var(--line);
@@ -277,7 +280,9 @@
         <h1>Which ensemble reads<br><em>the future</em> best?</h1>
         <p>Aggregation methods combine the same AI forecasts on live prediction markets. When events resolve, the standings update in public.</p>
       </div>
-      <div class="connection"><span class="live-dot"></span><span>2 sources connected</span><strong>· 37 live markets</strong></div>
+      <div class="connection syncing" id="connectionStatus" title="Polymarket Gamma API">
+        <span class="live-dot"></span><span id="connectionLabel">Connecting to Polymarket</span><strong id="connectionCount">· syncing</strong><span class="sync-time" id="syncTime"></span>
+      </div>
     </section>
 
     <div class="ticker" aria-label="Live market ticker">
@@ -326,8 +331,8 @@
 
         <aside class="market-panel" aria-label="Live market feed">
           <div class="panel-header">
-            <div class="panel-title-row"><h3>Market feed</h3><span class="market-count">LIVE · 37</span></div>
-            <p>Incoming questions from connected venues</p>
+            <div class="panel-title-row"><h3>Market feed</h3><span class="market-count" id="marketCount">SYNCING</span></div>
+            <p id="marketMeta">Live questions ranked by 24h market volume</p>
           </div>
           <div class="market-list" id="marketList"></div>
         </aside>
@@ -391,20 +396,106 @@
       {name:"Market Midpoint", meta:"crowd baseline", short:"PM", color:"#c38c24", brier:.187, index:64.1, mean:-2.2, market:0, n:184, coverage:100, track:"market"}
     ];
 
-    const markets = [
+    const fallbackMarkets = [
       {source:"Polymarket", title:"Will the Fed cut rates at the September meeting?", price:62, move:+3.1, closes:"43d", category:"Economics", volume:"$8.4m"},
-      {source:"Kalshi", title:"Will US CPI inflation be above 3.0% in August?", price:41, move:-1.4, closes:"29d", category:"Economics", volume:"$1.2m"},
       {source:"Polymarket", title:"Will a new frontier AI model launch before October?", price:73, move:+5.7, closes:"71d", category:"Technology", volume:"$2.7m"},
-      {source:"Kalshi", title:"Will the S&P 500 close above 6,500 this quarter?", price:54, move:+.8, closes:"74d", category:"Economics", volume:"$940k"},
       {source:"Polymarket", title:"Will the incumbent coalition win the next election?", price:47, move:-2.2, closes:"98d", category:"Politics", volume:"$5.1m"},
       {source:"Polymarket", title:"Will the championship final go to seven games?", price:31, move:+1.2, closes:"11d", category:"Sports", volume:"$780k"}
     ];
+    let markets = [...fallbackMarkets];
+    const POLYMARKET_API = "https://gamma-api.polymarket.com/events?active=true&closed=false&order=volume_24hr&ascending=false&limit=20";
 
     let currentTrack = "all";
     let category = "all";
     const body = document.getElementById("leaderboardBody");
     const marketList = document.getElementById("marketList");
     const toast = document.getElementById("toast");
+    const connectionStatus = document.getElementById("connectionStatus");
+
+    function escapeHTML(value="") {
+      return String(value).replace(/[&<>'"]/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
+    }
+
+    function parseJSONList(value) {
+      if (Array.isArray(value)) return value;
+      try { return JSON.parse(value || "[]"); } catch { return []; }
+    }
+
+    function formatVolume(value) {
+      const amount = Number(value || 0);
+      if (amount >= 1e6) return `$${(amount / 1e6).toFixed(amount >= 1e7 ? 0 : 1)}m`;
+      if (amount >= 1e3) return `$${(amount / 1e3).toFixed(amount >= 1e5 ? 0 : 1)}k`;
+      return `$${Math.round(amount)}`;
+    }
+
+    function formatCloses(endDate) {
+      const remaining = new Date(endDate).getTime() - Date.now();
+      if (!Number.isFinite(remaining)) return "open";
+      if (remaining <= 0) return "closing";
+      const days = Math.ceil(remaining / 86400000);
+      if (days > 1) return `${days}d`;
+      return `${Math.max(1, Math.ceil(remaining / 3600000))}h`;
+    }
+
+    function inferCategory(event, market) {
+      const text = `${event.category || ""} ${event.title || ""} ${market.question || ""} ${(event.tags || []).map(tag => tag.label || tag.slug || "").join(" ")}`.toLowerCase();
+      if (/sport|nba|nfl|mlb|nhl|soccer|football|tennis|cricket|ufc|f1|formula/.test(text)) return "Sports";
+      if (/ai|tech|bitcoin|crypto|ethereum|software|spacex|apple|google|openai/.test(text)) return "Technology";
+      if (/election|president|congress|senate|minister|party|politic|war|ceasefire/.test(text)) return "Politics";
+      return "Economics";
+    }
+
+    function normalizeMarket(event, market) {
+      const outcomes = parseJSONList(market.outcomes);
+      const prices = parseJSONList(market.outcomePrices).map(Number);
+      const yesIndex = Math.max(0, outcomes.findIndex(outcome => String(outcome).toLowerCase() === "yes"));
+      const rawPrice = prices[yesIndex] ?? Number(market.lastTradePrice) ?? 0;
+      const rawMove = Number(market.oneDayPriceChange ?? market.priceChange24h ?? 0);
+      return {
+        source: "Polymarket",
+        title: market.question || event.title || "Untitled market",
+        price: Math.round(Math.max(0, Math.min(1, rawPrice)) * 100),
+        move: Number((rawMove * 100).toFixed(1)),
+        closes: formatCloses(market.endDate || event.endDate),
+        category: inferCategory(event, market),
+        volume: formatVolume(market.volume24hr || event.volume24hr || market.volume || event.volume),
+        url: `https://polymarket.com/event/${encodeURIComponent(event.slug || market.slug || "")}`
+      };
+    }
+
+    async function syncPolymarket() {
+      connectionStatus.className = "connection syncing";
+      document.getElementById("connectionLabel").textContent = "Syncing Polymarket";
+      document.getElementById("connectionCount").textContent = "· live API";
+      try {
+        const response = await fetch(POLYMARKET_API, {headers:{Accept:"application/json"}});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const events = await response.json();
+        const fresh = events.flatMap(event => (event.markets || [])
+          .filter(market => market.active !== false && market.closed !== true && market.acceptingOrders !== false)
+          .map(market => normalizeMarket(event, market)))
+          .filter(market => market.title && Number.isFinite(market.price))
+          .slice(0, 12);
+        if (!fresh.length) throw new Error("No active markets returned");
+        markets = fresh;
+        connectionStatus.className = "connection";
+        document.getElementById("connectionLabel").textContent = "Polymarket connected";
+        document.getElementById("connectionCount").textContent = `· ${markets.length} live markets`;
+        document.getElementById("syncTime").textContent = new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+        document.getElementById("marketCount").textContent = `LIVE · ${markets.length}`;
+        document.getElementById("marketMeta").textContent = "Polymarket questions ranked by 24h volume · refreshes every 60s";
+        renderMarkets(); renderTicker();
+      } catch (error) {
+        connectionStatus.className = "connection error";
+        document.getElementById("connectionLabel").textContent = "Polymarket unavailable";
+        document.getElementById("connectionCount").textContent = "· cached demo";
+        document.getElementById("syncTime").textContent = "retrying";
+        document.getElementById("marketCount").textContent = "OFFLINE CACHE";
+        document.getElementById("marketMeta").textContent = "Showing cached examples while the live API reconnects";
+        renderMarkets(); renderTicker();
+        console.warn("Polymarket sync failed", error);
+      }
+    }
 
     function renderMethods(flash=false) {
       const visible = methods.filter(m => currentTrack === "all" || m.track === currentTrack).sort((a,b)=>a.brier-b.brier);
@@ -424,19 +515,21 @@
     function renderMarkets() {
       const visible = markets.filter(m => category === "all" || m.category === category);
       marketList.innerHTML = visible.length ? visible.map((m,i)=>`
-        <button class="market-item ${i===0?"active":""}" data-market="${i}">
-          <span class="market-top"><span class="source">${m.source}</span><span class="market-price">${m.price}¢</span></span>
-          <span class="market-title">${m.title}</span>
-          <span class="market-foot"><span>${m.category} · ${m.volume}</span><span class="${m.move>=0?"gain":"loss"}">${m.move>=0?"+":""}${m.move}% · ${m.closes}</span></span>
+        <button class="market-item ${i===0?"active":""}" data-market="${i}" data-url="${escapeHTML(m.url || "")}">
+          <span class="market-top"><span class="source">${escapeHTML(m.source)}</span><span class="market-price">${m.price}¢</span></span>
+          <span class="market-title">${escapeHTML(m.title)}</span>
+          <span class="market-foot"><span>${escapeHTML(m.category)} · ${escapeHTML(m.volume)}</span><span class="${m.move>=0?"gain":"loss"}">${m.move>=0?"+":""}${m.move}% · ${escapeHTML(m.closes)}</span></span>
         </button>`).join("") : `<div style="padding:28px;color:var(--quiet);font-size:13px;text-align:center">No live markets in this category.</div>`;
       document.querySelectorAll(".market-item").forEach(btn => btn.addEventListener("click", () => {
-        document.querySelectorAll(".market-item").forEach(x=>x.classList.remove("active")); btn.classList.add("active"); showToast("Market selected · forecast panel ready");
+        document.querySelectorAll(".market-item").forEach(x=>x.classList.remove("active")); btn.classList.add("active");
+        if (btn.dataset.url) window.open(btn.dataset.url, "_blank", "noopener");
+        showToast("Opening live Polymarket question");
       }));
     }
 
     function renderTicker() {
       const items = [...markets, ...markets];
-      document.getElementById("tickerTrack").innerHTML = items.map(m=>`<div class="ticker-item"><strong>${m.source.toUpperCase()}</strong><span>${m.title}</span><b>${m.price}¢</b><span class="${m.move>=0?"up":"down"}">${m.move>=0?"▲":"▼"} ${Math.abs(m.move)}%</span></div>`).join("");
+      document.getElementById("tickerTrack").innerHTML = items.map(m=>`<div class="ticker-item"><strong>${escapeHTML(m.source.toUpperCase())}</strong><span>${escapeHTML(m.title)}</span><b>${m.price}¢</b><span class="${m.move>=0?"up":"down"}">${m.move>=0?"▲":"▼"} ${Math.abs(m.move)}%</span></div>`).join("");
     }
 
     function showToast(text) {
@@ -459,7 +552,8 @@
       const m=methods[Math.floor(Math.random()*3)]; m.index=Math.max(50,Math.min(75,m.index+(Math.random()-.45)*.18)); m.brier=Math.max(.12,Math.min(.25,m.brier+(Math.random()-.55)*.0005)); renderMethods(true);
     },4200);
 
-    renderMethods(); renderMarkets(); renderTicker();
+    renderMethods(); renderMarkets(); renderTicker(); syncPolymarket();
+    setInterval(syncPolymarket, 60000);
   </script>
 </body>
 </html>
