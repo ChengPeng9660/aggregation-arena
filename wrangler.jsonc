@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aggregation-arena-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "observability": { "enabled": true },
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": {
+    "ALLOWED_ORIGIN": "https://chengpeng9660.github.io",
+    "MAX_ACTIVE_MARKETS": "20"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aggregation-arena-db",
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "aggregation-arena",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 execute aggregation-arena-db --local --file=./schema.sql",
+    "db:migrate:remote": "wrangler d1 execute aggregation-arena-db --remote --file=./schema.sql",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "wrangler": "^4.112.0"
+  }
+}
