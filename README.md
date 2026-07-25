@@ -7,9 +7,12 @@ A live, auditable benchmark for forecast aggregation methods. Polymarket supplie
 - Live Polymarket ingestion from the public Gamma API
 - Frozen event definitions and first-seen market-price baselines
 - Prophet Arena-compatible HTTP forecast payloads
+- Hosted-agent connection guide built into the website
 - Authenticated forecast submission endpoint
+- Immutable prediction revision history plus a latest canonical forecast
 - Equal mean, median, trimmed mean, logit pool, performance-weighted, and market-aware aggregation
-- Binary Brier scoring and live leaderboard API
+- Binary Brier scoring, provisional listing thresholds, and live leaderboard API
+- Per-event probability panels for forecasters, aggregators, and the market baseline
 - Cloudflare D1 persistence and a five-minute scheduled sync
 - GitHub Pages UI with live-backend mode and an explicit market-only preview fallback
 
@@ -114,7 +117,9 @@ Each accepted base forecast triggers a recomputation of all aggregation methods 
 
 - `GET /api/health` — ingestion and resolution status
 - `GET /api/markets` — active normalized markets plus ensemble probabilities
+- `GET /api/markets/:id` — event metadata and its locked probability panel
 - `GET /api/leaderboard` — resolved-market Brier rankings
+- `GET /api/forecast-contract` — machine-readable hosted-agent request/response contract
 
 Protected API:
 

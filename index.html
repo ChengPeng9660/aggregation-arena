@@ -15,10 +15,10 @@
       --quiet: #8a90a0;
       --line: #e8e3d9;
       --line-strong: #dcd5c8;
-      --gold: #b68116;
+      --gold: #b47a00;
       --gold-soft: #f5ecd7;
-      --blue: #3151c6;
-      --blue-soft: #edf1ff;
+      --blue: #4f207f;
+      --blue-soft: #f2ebf8;
       --green: #18855d;
       --green-soft: #eaf7f1;
       --red: #b34949;
@@ -35,10 +35,10 @@
       --quiet: #858780;
       --line: #30312e;
       --line-strong: #41423e;
-      --gold: #d3a02f;
+      --gold: #efab02;
       --gold-soft: #332b18;
-      --blue: #8da4ff;
-      --blue-soft: #252b42;
+      --blue: #c69be8;
+      --blue-soft: #32243d;
       --green: #62c59c;
       --green-soft: #20352d;
       --red: #e58c83;
@@ -212,6 +212,44 @@
     .toast { position: fixed; z-index: 50; right: 22px; bottom: 22px; padding: 11px 14px; transform: translateY(18px); opacity: 0; pointer-events: none; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); color: var(--muted); font-size: 12px; transition: .25s ease; }
     .toast.show { transform: translateY(0); opacity: 1; }
     .hidden { display: none !important; }
+    .modal-backdrop {
+      position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 22px;
+      background: rgba(12, 9, 16, .58); backdrop-filter: blur(8px);
+      opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility .2s ease;
+    }
+    .modal-backdrop.open { opacity: 1; visibility: visible; }
+    .modal {
+      width: min(760px, 100%); max-height: min(820px, calc(100svh - 44px)); overflow: auto;
+      border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface); box-shadow: 0 24px 80px rgba(0,0,0,.3);
+      transform: translateY(14px) scale(.985); transition: transform .22s ease;
+    }
+    .modal-backdrop.open .modal { transform: translateY(0) scale(1); }
+    .modal-head { display: flex; justify-content: space-between; gap: 24px; padding: 24px 26px 20px; border-bottom: 1px solid var(--line); }
+    .modal-head h2 { margin: 5px 0 0; font-size: 22px; line-height: 1.25; letter-spacing: -.025em; }
+    .modal-close { width: 34px; height: 34px; flex: 0 0 auto; border: 0; border-radius: 9px; background: var(--paper); cursor: pointer; color: var(--muted); }
+    .modal-body { padding: 24px 26px 28px; }
+    .event-metrics { display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 25px; border-block: 1px solid var(--line); }
+    .event-metric { padding: 14px 12px 14px 0; }
+    .event-metric small, .contract-label { display: block; margin-bottom: 5px; color: var(--quiet); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    .event-metric strong { font-size: 18px; }
+    .prediction-list { border-top: 1px solid var(--line); }
+    .prediction-row { display: grid; grid-template-columns: minmax(150px, 1fr) 2fr 58px; gap: 16px; align-items: center; padding: 13px 0; border-bottom: 1px solid var(--line); }
+    .prediction-name b, .prediction-name small { display: block; }
+    .prediction-name b { font-size: 12px; }
+    .prediction-name small { margin-top: 3px; color: var(--quiet); font-size: 10px; }
+    .probability-track { height: 7px; overflow: hidden; border-radius: 999px; background: var(--line); }
+    .probability-track i { display: block; height: 100%; border-radius: inherit; background: var(--blue); transition: width .5s ease; }
+    .prediction-value { text-align: right; font-family: ui-monospace, monospace; font-size: 12px; font-weight: 750; }
+    .modal-actions { display: flex; gap: 10px; margin-top: 22px; }
+    .outline-button { border-radius: 9px; padding: 10px 14px; color: var(--muted); font-size: 13px; font-weight: 680; }
+    .contract-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    pre {
+      margin: 0; padding: 15px; overflow: auto; border: 1px solid var(--line); border-radius: 10px;
+      background: var(--paper); color: var(--ink); font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .contract-notes { margin: 20px 0 0; padding: 0 0 0 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .contract-notes li + li { margin-top: 4px; }
+    .type-chip { display: inline-flex; margin-left: 6px; padding: 2px 5px; border-radius: 4px; color: var(--blue); background: var(--blue-soft); font-size: 8px; letter-spacing: .07em; text-transform: uppercase; vertical-align: 1px; }
 
     @keyframes breathe { 50% { box-shadow: 0 0 0 8px rgba(43,180,125,0); } }
     @keyframes ticker { to { transform: translateX(-50%); } }
@@ -249,6 +287,12 @@
       .methodology { grid-template-columns: 1fr; }
       .footer-inner { padding: 24px 0; align-items: flex-start; flex-direction: column; gap: 18px; }
       .footer-links { gap: 15px; flex-wrap: wrap; }
+      .modal-backdrop { padding: 0; place-items: end center; }
+      .modal { max-height: 90svh; border-radius: 18px 18px 0 0; }
+      .modal-head, .modal-body { padding-inline: 18px; }
+      .event-metrics { grid-template-columns: 1fr 1fr; }
+      .contract-grid { grid-template-columns: 1fr; }
+      .prediction-row { grid-template-columns: 125px 1fr 48px; gap: 10px; }
     }
   </style>
 </head>
@@ -265,12 +309,12 @@
           <a class="active" href="#leaderboard">Leaderboard</a>
           <a href="#methods">Methods</a>
           <a href="#research">Research</a>
-          <a href="#about">About</a>
+          <a href="#developer" id="developerLink">Developer</a>
         </nav>
       </div>
       <div class="nav-actions">
         <button class="icon-button" id="themeToggle" aria-label="Toggle theme" title="Toggle theme">☾</button>
-        <button class="primary-button" id="submitButton">Submit aggregator</button>
+        <button class="primary-button" id="submitButton">Connect an agent</button>
       </div>
     </div>
   </header>
@@ -295,9 +339,10 @@
       <div class="toolbar">
         <div class="toolbar-left">
           <div class="segmented" id="trackTabs" aria-label="Leaderboard track">
-            <button class="active" data-track="all">All</button>
-            <button data-track="model">Model-only</button>
-            <button data-track="market">Market-aware</button>
+            <button class="active" data-kind="all">All</button>
+            <button data-kind="aggregator">Aggregators</button>
+            <button data-kind="forecaster">Forecasters</button>
+            <button data-kind="market">Market</button>
           </div>
         </div>
         <div class="toolbar-right">
@@ -329,7 +374,7 @@
             <table>
               <thead>
                 <tr>
-                  <th>Rank</th><th>Aggregation method</th><th>Brier ↓</th><th>Index ↑</th><th>vs Mean</th><th>vs Market</th><th>Resolved</th><th>Coverage</th>
+                  <th>Rank</th><th>Forecaster / method</th><th>Brier ↓</th><th>Index ↑</th><th>vs Mean</th><th>vs Market</th><th>Resolved</th><th>Coverage</th>
                 </tr>
               </thead>
               <tbody id="leaderboardBody"></tbody>
@@ -380,7 +425,7 @@
 
       <section class="methodology" id="research">
         <h2>How scoring works</h2>
-        <p>Every aggregator receives the same frozen panel of model forecasts. Predictions are locked before market close and scored against the real outcome using Brier score. Market-aware methods compete in a separate track. <a href="#">Read the methodology</a>.</p>
+        <p>Every aggregator receives the same frozen panel of model forecasts. Server timestamps create an immutable forecast history, predictions lock at market close, and provisional entrants become listed after the minimum resolved sample. Model, agent, aggregation, and market baselines remain identifiable in every score. <a href="https://github.com/ChengPeng9660/aggregation-arena#readme" target="_blank" rel="noopener">Read the methodology</a>.</p>
       </section>
     </section>
   </main>
@@ -388,21 +433,54 @@
   <footer id="about">
     <div class="shell footer-inner">
       <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Aggregation Arena</span><span style="color:var(--quiet);font-weight:500">© 2026</span></div>
-      <div class="footer-links"><a href="#about">About</a><a href="#research">Research</a><a href="#leaderboard">Leaderboard</a><a href="#">Add your method</a></div>
+      <div class="footer-links"><a href="#about">About</a><a href="#research">Research</a><a href="#leaderboard">Leaderboard</a><a href="#developer" id="footerDeveloperLink">Connect an agent</a></div>
     </div>
   </footer>
   <div class="toast" id="toast">Demo action completed</div>
+  <div class="modal-backdrop" id="eventModal" role="dialog" aria-modal="true" aria-labelledby="eventModalTitle">
+    <article class="modal">
+      <div class="modal-head">
+        <div><span class="source" id="eventModalSource">Polymarket event</span><h2 id="eventModalTitle">Loading event…</h2></div>
+        <button class="modal-close" data-close="eventModal" aria-label="Close event">✕</button>
+      </div>
+      <div class="modal-body" id="eventModalBody"></div>
+    </article>
+  </div>
+  <div class="modal-backdrop" id="developerModal" role="dialog" aria-modal="true" aria-labelledby="developerModalTitle">
+    <article class="modal" id="developer">
+      <div class="modal-head">
+        <div><span class="source">Hosted endpoint protocol</span><h2 id="developerModalTitle">Connect your forecasting agent</h2></div>
+        <button class="modal-close" data-close="developerModal" aria-label="Close developer guide">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="contract-grid">
+          <div><span class="contract-label">Arena sends</span><pre id="requestContract"></pre></div>
+          <div><span class="contract-label">Your endpoint returns</span><pre id="responseContract"></pre></div>
+        </div>
+        <ol class="contract-notes">
+          <li>Expose an HTTPS endpoint that accepts one event per POST request.</li>
+          <li>Return probabilities whose outcome names exactly match the request.</li>
+          <li>We stamp receipt time, preserve revisions, and lock the canonical forecast at market close.</li>
+          <li>Send the endpoint URL and agent name to the repository maintainers for review.</li>
+        </ol>
+        <div class="modal-actions">
+          <button class="primary-button" id="copyContract">Copy response template</button>
+          <a class="outline-button" href="https://github.com/ChengPeng9660/aggregation-arena/issues/new" target="_blank" rel="noopener">Submit endpoint on GitHub</a>
+        </div>
+      </div>
+    </article>
+  </div>
 
   <script src="./config.js"></script>
   <script>
     const fallbackMethods = [
-      {name:"Adaptive Logit Pool", meta:"rolling weights · v1.4", short:"AL", color:"#3151c6", brier:.167, index:67.8, mean:8.7, market:2.9, n:184, coverage:99, track:"model"},
-      {name:"Market-Calibrated Stack", meta:"market-aware · v2.1", short:"MC", color:"#b68116", brier:.171, index:67.1, mean:6.6, market:1.8, n:177, coverage:96, track:"market"},
-      {name:"Diversity Selector", meta:"dynamic subset · v0.9", short:"DS", color:"#7a56a8", brier:.176, index:66.3, mean:3.8, market:.5, n:184, coverage:100, track:"model"},
-      {name:"Recency Weighted", meta:"90-day window · v1.2", short:"RW", color:"#248e82", brier:.179, index:65.7, mean:2.2, market:-.4, n:181, coverage:98, track:"model"},
-      {name:"Trimmed Logit Mean", meta:"10% trim · baseline", short:"TL", color:"#68717e", brier:.181, index:65.3, mean:1.1, market:-1.2, n:184, coverage:100, track:"model"},
-      {name:"Equal Probability Mean", meta:"canonical baseline", short:"μ", color:"#9297a3", brier:.183, index:64.9, mean:0, market:-2.1, n:184, coverage:100, track:"model"},
-      {name:"Market Midpoint", meta:"crowd baseline", short:"PM", color:"#c38c24", brier:.187, index:64.1, mean:-2.2, market:0, n:184, coverage:100, track:"market"}
+      {name:"Adaptive Logit Pool", meta:"rolling weights · v1.4", short:"AL", color:"#4f207f", brier:.167, index:67.8, mean:8.7, market:2.9, n:184, coverage:99, track:"model", type:"aggregator", listing:"listed"},
+      {name:"Market-Calibrated Stack", meta:"market-aware · v2.1", short:"MC", color:"#b68116", brier:.171, index:67.1, mean:6.6, market:1.8, n:177, coverage:96, track:"market", type:"aggregator", listing:"listed"},
+      {name:"Diversity Selector", meta:"dynamic subset · v0.9", short:"DS", color:"#7a56a8", brier:.176, index:66.3, mean:3.8, market:.5, n:184, coverage:100, track:"model", type:"aggregator", listing:"listed"},
+      {name:"Recency Weighted", meta:"90-day window · v1.2", short:"RW", color:"#248e82", brier:.179, index:65.7, mean:2.2, market:-.4, n:181, coverage:98, track:"model", type:"aggregator", listing:"listed"},
+      {name:"Equal Probability Mean", meta:"canonical baseline", short:"μ", color:"#9297a3", brier:.183, index:64.9, mean:0, market:-2.1, n:184, coverage:100, track:"model", type:"aggregator", listing:"listed"},
+      {name:"GPT Research Agent", meta:"hosted endpoint · v1", short:"GA", color:"#3151c6", brier:.185, index:64.7, mean:-1.1, market:-1.3, n:12, coverage:7, track:"model", type:"forecaster", listing:"provisional"},
+      {name:"Market Midpoint", meta:"crowd baseline", short:"PM", color:"#c38c24", brier:.187, index:64.1, mean:-2.2, market:0, n:184, coverage:100, track:"market", type:"market", listing:"listed"}
     ];
     let methods = [...fallbackMethods];
 
@@ -416,12 +494,14 @@
     const POLYMARKET_API = "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=100";
     const ARENA_API = String(window.ARENA_API_URL || "").replace(/\/$/, "");
 
-    let currentTrack = "all";
+    let currentKind = "all";
     let category = "all";
     const body = document.getElementById("leaderboardBody");
     const marketList = document.getElementById("marketList");
     const toast = document.getElementById("toast");
     const connectionStatus = document.getElementById("connectionStatus");
+    const eventModal = document.getElementById("eventModal");
+    const developerModal = document.getElementById("developerModal");
 
     function escapeHTML(value="") {
       return String(value).replace(/[&<>'"]/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
@@ -477,6 +557,7 @@
 
     function normalizeArenaMarket(market) {
       return {
+        id: market.id,
         source: market.source || "Polymarket",
         title: market.title,
         price: Math.round(Number(market.price || 0) * 100),
@@ -485,6 +566,7 @@
         category: market.category || "Economics",
         volume: formatVolume(market.volume_24h),
         url: market.url,
+        detailUrl: market.detail_url,
         ensemble: Number.isFinite(Number(market.ensemble_probability)) ? Math.round(Number(market.ensemble_probability) * 100) : null,
         forecasters: Number(market.forecaster_count || 0)
       };
@@ -504,6 +586,8 @@
         n: Number(row.resolved || 0),
         coverage: Number(row.coverage || 0),
         track: row.track || "model"
+        ,type: row.type || "aggregator"
+        ,listing: row.listing_status || "provisional"
       };
     }
 
@@ -585,11 +669,11 @@
     }
 
     function renderMethods(flash=false) {
-      const visible = methods.filter(m => currentTrack === "all" || m.track === currentTrack).sort((a,b)=>a.brier-b.brier);
+      const visible = methods.filter(m => currentKind === "all" || m.type === currentKind).sort((a,b)=>a.brier-b.brier);
       body.innerHTML = visible.length ? visible.map((m,i)=>`
         <tr class="${flash && i < 2 ? "updated" : ""}">
           <td class="rank ${i<3?"medal":""}">${i+1}</td>
-          <td><div class="method"><span class="method-icon" style="background:${m.color}">${m.short}</span><span><span class="method-name">${m.name}</span><span class="method-meta">${m.meta}</span></span></div></td>
+          <td><div class="method"><span class="method-icon" style="background:${m.color}">${m.short}</span><span><span class="method-name">${escapeHTML(m.name)}<span class="type-chip">${escapeHTML(m.type)}</span></span><span class="method-meta">${escapeHTML(m.meta)}${m.listing==="provisional"?" · provisional":""}</span></span></div></td>
           <td class="score">${m.brier.toFixed(3)}</td>
           <td><span class="badge">${m.index.toFixed(1)}</span></td>
           <td class="${m.mean==null?"":m.mean>=0?"gain":"loss"}">${m.mean==null?"—":`${m.mean>=0?"+":""}${m.mean.toFixed(1)}%`}</td>
@@ -600,17 +684,16 @@
     }
 
     function renderMarkets() {
-      const visible = markets.filter(m => category === "all" || m.category === category);
+      const visible = markets.map((market, index) => ({...market, _sourceIndex:index})).filter(m => category === "all" || m.category === category);
       marketList.innerHTML = visible.length ? visible.map((m,i)=>`
-        <button class="market-item ${i===0?"active":""}" data-market="${i}" data-url="${escapeHTML(m.url || "")}">
+        <button class="market-item ${i===0?"active":""}" data-market="${m._sourceIndex}">
           <span class="market-top"><span class="source">${escapeHTML(m.source)}</span><span class="market-price">${m.price}¢</span></span>
           <span class="market-title">${escapeHTML(m.title)}</span>
           <span class="market-foot"><span>${escapeHTML(m.category)} · ${escapeHTML(m.volume)}${m.ensemble!=null?` · Ensemble ${m.ensemble}¢`:""}</span><span class="${m.move>=0?"gain":"loss"}">${m.move>=0?"+":""}${m.move}% · ${escapeHTML(m.closes)}</span></span>
         </button>`).join("") : `<div style="padding:28px;color:var(--quiet);font-size:13px;text-align:center">No live markets in this category.</div>`;
       document.querySelectorAll(".market-item").forEach(btn => btn.addEventListener("click", () => {
         document.querySelectorAll(".market-item").forEach(x=>x.classList.remove("active")); btn.classList.add("active");
-        if (btn.dataset.url) window.open(btn.dataset.url, "_blank", "noopener");
-        showToast("Opening live Polymarket question");
+        openEvent(Number(btn.dataset.market));
       }));
     }
 
@@ -624,13 +707,96 @@
     }
 
     document.querySelectorAll("#trackTabs button").forEach(btn=>btn.addEventListener("click",()=>{
-      document.querySelectorAll("#trackTabs button").forEach(x=>x.classList.remove("active")); btn.classList.add("active"); currentTrack=btn.dataset.track; renderMethods();
+      document.querySelectorAll("#trackTabs button").forEach(x=>x.classList.remove("active")); btn.classList.add("active"); currentKind=btn.dataset.kind; renderMethods();
     }));
     document.getElementById("categoryFilter").addEventListener("change",e=>{category=e.target.value;renderMarkets();});
     document.getElementById("themeToggle").addEventListener("click",()=>{
       const dark=document.documentElement.dataset.theme==="dark"; document.documentElement.dataset.theme=dark?"light":"dark"; document.getElementById("themeToggle").textContent=dark?"☾":"☀";
     });
-    document.getElementById("submitButton").addEventListener("click",()=>showToast("Submission flow would open here"));
+    const requestTemplate = {
+      event_ticker:"12345", title:"Will ...?", description:"Event context", category:"Politics",
+      rules:"Resolution rules", close_time:"2026-10-01T00:00:00Z", outcomes:["Yes","No"], resolved_outcome:null
+    };
+    const responseTemplate = {
+      probabilities:[{market:"Yes", probability:0.68},{market:"No", probability:0.32}],
+      rationale:"Optional concise reasoning", model_version:"v1"
+    };
+    document.getElementById("requestContract").textContent = JSON.stringify(requestTemplate, null, 2);
+    document.getElementById("responseContract").textContent = JSON.stringify(responseTemplate, null, 2);
+
+    function openModal(modal) {
+      modal.classList.add("open");
+      document.body.style.overflow = "hidden";
+    }
+    function closeModal(modal) {
+      modal.classList.remove("open");
+      if (!document.querySelector(".modal-backdrop.open")) document.body.style.overflow = "";
+    }
+    document.querySelectorAll("[data-close]").forEach(button => button.addEventListener("click", () => closeModal(document.getElementById(button.dataset.close))));
+    document.querySelectorAll(".modal-backdrop").forEach(modal => modal.addEventListener("click", event => {
+      if (event.target === modal) closeModal(modal);
+    }));
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") document.querySelectorAll(".modal-backdrop.open").forEach(closeModal);
+    });
+
+    async function openEvent(index) {
+      const market = markets[index];
+      if (!market) return;
+      document.getElementById("eventModalTitle").textContent = market.title;
+      document.getElementById("eventModalSource").textContent = `${market.source} · ${market.category}`;
+      document.getElementById("eventModalBody").innerHTML = `<div style="padding:34px 0;text-align:center;color:var(--quiet)">Loading locked forecasts…</div>`;
+      openModal(eventModal);
+      if (!ARENA_API || !market.id) {
+        renderEventDetail({event:{...market, market_probability:market.price/100, volume_24h:market.volume, closes_at:market.closes, url:market.url}, predictions:[]});
+        return;
+      }
+      try {
+        const response = await fetch(`${ARENA_API}/api/markets/${encodeURIComponent(market.id)}`, {headers:{Accept:"application/json"}});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        renderEventDetail(await response.json());
+      } catch (error) {
+        renderEventDetail({event:{...market, market_probability:market.price/100, volume_24h:market.volume, closes_at:market.closes, url:market.url}, predictions:[]});
+      }
+    }
+
+    function renderEventDetail(payload) {
+      const event = payload.event || {};
+      const predictions = payload.predictions || [];
+      const marketProbability = Number(event.market_probability ?? event.price / 100 ?? 0);
+      document.getElementById("eventModalBody").innerHTML = `
+        <div class="event-metrics">
+          <div class="event-metric"><small>Market Yes</small><strong>${Math.round(marketProbability*100)}%</strong></div>
+          <div class="event-metric"><small>Forecasts</small><strong>${predictions.length}</strong></div>
+          <div class="event-metric"><small>Volume 24h</small><strong>${typeof event.volume_24h==="number"?formatVolume(event.volume_24h):escapeHTML(event.volume_24h||"—")}</strong></div>
+          <div class="event-metric"><small>Status</small><strong>${escapeHTML(event.status||"open")}</strong></div>
+        </div>
+        <span class="contract-label">Locked probability panel</span>
+        <div class="prediction-list">${predictions.length ? predictions.map(row=>`
+          <div class="prediction-row">
+            <div class="prediction-name"><b>${escapeHTML(row.name)}</b><small>${escapeHTML(row.type)} · ${escapeHTML(row.version||"v1")}</small></div>
+            <span class="probability-track"><i style="width:${Math.round(Number(row.probability_yes)*100)}%"></i></span>
+            <span class="prediction-value">${Math.round(Number(row.probability_yes)*100)}% Yes</span>
+          </div>`).join("") : `<div style="padding:25px 0;color:var(--quiet);font-size:12px">No hosted-agent forecasts yet. The market baseline is live and the panel will populate as endpoints submit.</div>`}</div>
+        ${event.description?`<p style="margin:20px 0 0;color:var(--muted);font-size:12px;line-height:1.65">${escapeHTML(event.description)}</p>`:""}
+        <div class="modal-actions">
+          ${event.url?`<a class="primary-button" href="${escapeHTML(event.url)}" target="_blank" rel="noopener">Open on Polymarket</a>`:""}
+          <button class="outline-button" id="eventConnectAgent">Connect an agent</button>
+        </div>`;
+      document.getElementById("eventConnectAgent")?.addEventListener("click", () => { closeModal(eventModal); openModal(developerModal); });
+    }
+
+    function showDeveloper(event) {
+      event?.preventDefault();
+      openModal(developerModal);
+    }
+    document.getElementById("submitButton").addEventListener("click",showDeveloper);
+    document.getElementById("developerLink").addEventListener("click",showDeveloper);
+    document.getElementById("footerDeveloperLink").addEventListener("click",showDeveloper);
+    document.getElementById("copyContract").addEventListener("click", async ()=>{
+      await navigator.clipboard.writeText(JSON.stringify(responseTemplate, null, 2));
+      showToast("Response template copied");
+    });
     document.getElementById("viewToggle").addEventListener("click",()=>{
       document.getElementById("tablePanel").classList.toggle("hidden"); showToast(document.getElementById("tablePanel").classList.contains("hidden")?"Chart focus enabled":"Table view restored");
     });

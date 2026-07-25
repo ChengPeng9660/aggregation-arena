@@ -27,7 +27,11 @@ async function route(request, env, context) {
   }
   if (request.method === "GET" && url.pathname === "/api/health") return health(request, env);
   if (request.method === "GET" && url.pathname === "/api/markets") return listMarkets(request, env, url);
+  if (request.method === "GET" && url.pathname.startsWith("/api/markets/")) {
+    return marketDetail(request, env, decodeURIComponent(url.pathname.slice("/api/markets/".length)));
+  }
   if (request.method === "GET" && url.pathname === "/api/leaderboard") return leaderboard(request, env, url);
+  if (request.method === "GET" && url.pathname === "/api/forecast-contract") return forecastContract(request, env);
   if (request.method === "POST" && url.pathname === "/api/predictions") {
     requireAdmin(request, env);
     return acceptPrediction(request, env);
@@ -86,9 +90,88 @@ async function listMarkets(request, env, url) {
       closes_at: row.closes_at,
       url: row.source_url,
       ensemble_probability: row.ensemble_probability,
-      forecaster_count: Number(row.forecaster_count || 0)
+      forecaster_count: Number(row.forecaster_count || 0),
+      detail_url: `/api/markets/${encodeURIComponent(row.event_id)}`
     })),
     updated_at: new Date().toISOString()
+  }, 200, request, env);
+}
+
+async function marketDetail(request, env, eventId) {
+  const event = await env.DB.prepare("SELECT * FROM events WHERE event_id = ?").bind(eventId).first();
+  if (!event) throw new HttpError(404, "Unknown event_id");
+  const predictions = await env.DB.prepare(`
+    SELECT participant_id, participant_name, participant_type, track, probability_yes,
+      rationale, version, components_json, forecasted_at, locked_at
+    FROM predictions
+    WHERE event_id = ?
+    ORDER BY
+      CASE participant_type WHEN 'aggregator' THEN 0 WHEN 'forecaster' THEN 1 ELSE 2 END,
+      probability_yes DESC
+  `).bind(eventId).all();
+  return json({
+    event: {
+      id: event.event_id,
+      source: "Polymarket",
+      title: event.title,
+      description: event.description,
+      category: event.category,
+      rules: event.rules,
+      outcomes: safeJson(event.outcomes_json, ["Yes", "No"]),
+      status: event.status,
+      resolved_outcome: event.resolved_outcome,
+      market_probability: event.market_probability,
+      move_24h: event.price_change_24h,
+      volume_24h: event.volume_24h,
+      closes_at: event.closes_at,
+      resolved_at: event.resolved_at,
+      url: event.source_url
+    },
+    predictions: predictions.results.map(row => ({
+      participant_id: row.participant_id,
+      name: row.participant_name,
+      type: row.participant_type,
+      track: row.track,
+      probability_yes: row.probability_yes,
+      probability_no: 1 - row.probability_yes,
+      rationale: row.rationale,
+      version: row.version,
+      components: safeJson(row.components_json, []),
+      forecasted_at: row.forecasted_at,
+      locked_at: row.locked_at
+    })),
+    updated_at: event.updated_at
+  }, 200, request, env);
+}
+
+function forecastContract(request, env) {
+  return json({
+    version: "2026-07-01",
+    transport: "HTTPS POST",
+    request: {
+      event_ticker: "polymarket-market-id",
+      market_ticker: "polymarket-market-id",
+      title: "Will ...?",
+      description: "Event context",
+      category: "Politics",
+      rules: "Resolution rules",
+      close_time: "2026-10-01T00:00:00Z",
+      outcomes: ["Yes", "No"],
+      resolved_outcome: null
+    },
+    response: {
+      probabilities: [
+        { market: "Yes", probability: 0.68 },
+        { market: "No", probability: 0.32 }
+      ],
+      rationale: "Optional concise reasoning",
+      model_version: "v1"
+    },
+    rules: [
+      "Outcome names must exactly match the request.",
+      "Probabilities must be between 0 and 1.",
+      "The arena records server receipt time and locks forecasts at market close."
+    ]
   }, 200, request, env);
 }
 
@@ -113,6 +196,7 @@ async function leaderboard(request, env, url) {
 
   const allResolvedCount = Number((await env.DB.prepare("SELECT COUNT(*) AS count FROM events WHERE status = 'resolved'").first())?.count || 0);
   const participantEventLoss = new Map(resolved.results.map(row => [`${row.participant_id}:${row.event_id}`, brier(row.probability_yes, row.resolved_outcome)]));
+  const minimumResolved = Math.max(1, Number(env.MIN_LISTING_RESOLVED || 10));
   const rows = [...byParticipant.values()].map((item, index) => {
     const averageBrier = item.losses.reduce((sum, value) => sum + value, 0) / item.losses.length;
     const comparableMean = [...item.events].map(eventId => participantEventLoss.get(`equal-mean:${eventId}`)).filter(Number.isFinite);
@@ -131,6 +215,8 @@ async function leaderboard(request, env, url) {
       vs_market: marketBrier ? ((marketBrier - averageBrier) / marketBrier) * 100 : null,
       resolved: item.losses.length,
       coverage: allResolvedCount ? (item.losses.length / allResolvedCount) * 100 : 0,
+      listing_status: item.losses.length >= minimumResolved ? "listed" : "provisional",
+      minimum_resolved: minimumResolved,
       color: PARTICIPANT_COLORS[index % PARTICIPANT_COLORS.length]
     };
   }).sort((a, b) => a.brier - b.brier).map((row, index) => ({ rank: index + 1, ...row }));
@@ -139,6 +225,7 @@ async function leaderboard(request, env, url) {
     leaderboard: rows,
     resolved_markets: allResolvedCount,
     provisional: allResolvedCount < 50,
+    minimum_resolved: minimumResolved,
     scoring: "binary_brier",
     updated_at: new Date().toISOString()
   }, 200, request, env);
@@ -357,12 +444,19 @@ async function upsertPrediction(env, row) {
     version = excluded.version,
     components_json = excluded.components_json,
     forecasted_at = excluded.forecasted_at`;
-  await env.DB.prepare(`
+  const result = await env.DB.prepare(`
     INSERT INTO predictions (event_id, participant_id, participant_name, participant_type, track, probability_yes, rationale, version, components_json, forecasted_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(event_id, participant_id) ${conflict}
   `).bind(row.event_id, row.participant_id, row.participant_name, row.participant_type, row.track || "model",
     Number(row.probability_yes), row.rationale || null, row.version || "v1", row.components_json || null, now).run();
+  if (Number(result.meta?.changes || 0) === 0) return;
+  await env.DB.prepare(`
+    INSERT INTO prediction_history
+      (event_id, participant_id, participant_name, participant_type, track, probability_yes, rationale, version, components_json, forecasted_at, received_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(row.event_id, row.participant_id, row.participant_name, row.participant_type, row.track || "model",
+    Number(row.probability_yes), row.rationale || null, row.version || "v1", row.components_json || null, now, now).run();
 }
 
 function normalizePolymarket(event, market) {

@@ -40,6 +40,28 @@ CREATE TABLE IF NOT EXISTS predictions (
 CREATE INDEX IF NOT EXISTS idx_events_status_volume ON events(status, volume_24h DESC);
 CREATE INDEX IF NOT EXISTS idx_predictions_participant ON predictions(participant_id, event_id);
 
+-- Immutable audit trail. `predictions` remains the latest canonical forecast used
+-- by the live UI, while every accepted or recomputed forecast is recorded here.
+CREATE TABLE IF NOT EXISTS prediction_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL REFERENCES events(event_id),
+  participant_id TEXT NOT NULL,
+  participant_name TEXT NOT NULL,
+  participant_type TEXT NOT NULL CHECK (participant_type IN ('forecaster','aggregator','market')),
+  track TEXT NOT NULL DEFAULT 'model' CHECK (track IN ('model','market')),
+  probability_yes REAL NOT NULL CHECK (probability_yes BETWEEN 0 AND 1),
+  rationale TEXT,
+  version TEXT NOT NULL DEFAULT 'v1',
+  components_json TEXT,
+  forecasted_at TEXT NOT NULL,
+  received_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_prediction_history_event_time
+  ON prediction_history(event_id, forecasted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_prediction_history_participant_time
+  ON prediction_history(participant_id, forecasted_at DESC);
+
 CREATE TABLE IF NOT EXISTS sync_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   job TEXT NOT NULL,
