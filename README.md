@@ -1,138 +1,846 @@
 # Aggregation Arena
 
-A live, auditable benchmark for forecast aggregation methods. Polymarket supplies real-time binary questions and resolutions; independent forecasters submit locked probabilities; the Worker computes ensemble forecasts and updates the leaderboard after resolution.
+![Aggregation Arena](public/og.png)
 
-## What is implemented
+一个支持手工概率录入、自动聚合、结果结算、实时排名和审计追踪的预测聚合 Benchmark 平台。
 
-- Live Polymarket ingestion from the public Gamma API
-- Frozen event definitions and first-seen market-price baselines
-- Prophet Arena-compatible HTTP forecast payloads
-- Hosted-agent connection guide built into the website
-- Authenticated forecast submission endpoint
-- Immutable prediction revision history plus a latest canonical forecast
-- Equal mean, median, trimmed mean, logit pool, performance-weighted, and market-aware aggregation
-- Binary Brier scoring, provisional listing thresholds, and live leaderboard API
-- Per-event probability panels for forecasters, aggregators, and the market baseline
-- Cloudflare D1 persistence and a five-minute scheduled sync
-- GitHub Pages UI with live-backend mode and an explicit market-only preview fallback
+当前版本不连接外部 LLM predictor，也不自动抓取预测市场数据。管理员在网页中创建二元事件并输入每个 Forecaster 的数字概率，系统会让所有聚合方法使用完全相同的输入，在事件结算后按 Binary Brier Score 自动更新 Leaderboard。
 
-## Architecture
+线上私有版本：
+
+<https://aggregation-arena-benchmark.iushanghai.chatgpt.site>
+
+## 目录
+
+- [已经实现的功能](#已经实现的功能)
+- [完整数据流程](#完整数据流程)
+- [聚合方法](#聚合方法)
+- [评分与排名](#评分与排名)
+- [技术架构](#技术架构)
+- [本地安装和运行](#本地安装和运行)
+- [如何测试](#如何测试)
+- [如何推送到自己的 GitHub](#如何推送到自己的-github)
+- [GitHub 与网站部署的区别](#github-与网站部署的区别)
+- [数据存储与重置](#数据存储与重置)
+- [API](#api)
+- [项目结构](#项目结构)
+- [当前限制](#当前限制)
+- [常见问题](#常见问题)
+
+## 已经实现的功能
+
+### 事件管理
+
+- 创建 Yes / No 二元预测事件。
+- 设置标题、说明、分类、赛季和截止时间。
+- 查看开放事件与历史已结算事件。
+- 将事件结算为 `Yes` 或 `No`。
+- 添加结算说明。
+- 作废事件。
+- 将事件重新开放。
+- 已结算事件进入评分样本，作废事件不参与排名。
+
+### Forecaster 管理
+
+- 创建模型、人类专家或 Crowd Baseline。
+- 设置名称、所属组织和展示颜色。
+- 在同一事件中为多个 Forecaster 批量输入概率。
+- 输入范围固定为 `0–1`。
+- 同一个 Forecaster 可以更新尚未结算事件的概率。
+
+### 聚合计算
+
+每次提交底层概率后，系统会自动重算以下六种方法：
+
+1. Equal Probability Mean
+2. Median Forecast
+3. Trimmed Mean
+4. Log-odds Pool
+5. Extremized Mean
+6. Performance Weighted
+
+所有方法在同一道题上使用完全相同的 Forecaster Panel。
+
+### 实时 Leaderboard
+
+- 按 Brier Index 从高到低排名。
+- 可切换 `Aggregators`、`Forecasters` 和 `All`。
+- 支持 All time、最近 30 天和最近 90 天窗口。
+- 支持按赛季筛选。
+- 支持按事件分类筛选。
+- 展示 Raw Brier。
+- 展示 Brier Index。
+- 展示 95% Bootstrap Confidence Interval。
+- 展示相对 Equal Mean 的 Brier 改善百分比。
+- 展示已结算样本数 `N`。
+- 展示 Coverage。
+- 展示最近事件表现。
+- 最少完成 5 个已结算事件后进入正式排名，否则标记为 provisional。
+- 客户端每 30 秒自动刷新。
+- 支持导出当前 Leaderboard CSV。
+
+### 可审计性
+
+- 当前预测保存在 `predictions`。
+- 每次录入或更新同时写入不可变 `prediction_history`。
+- 创建事件、提交预测、结算、作废和重新开放都会写入 `audit_log`。
+- 审计记录包含时间、操作者、操作类型和实体 ID。
+- 生产环境写操作要求登录身份。
+- 本地开发允许使用 `local-admin` 身份。
+
+### 界面
+
+- 白色研究工作台视觉风格。
+- ForecastBench 紫色与金色强调语义。
+- 桌面侧栏导航。
+- 手机端底部导航。
+- 响应式 Leaderboard、事件列表、方法说明和弹窗。
+- 支持键盘 Focus 状态和 Reduced Motion。
+
+## 完整数据流程
 
 ```text
-Polymarket -> Cloudflare Worker -> D1 events/predictions
-                         |-> external forecaster endpoint(s)
-                         |-> aggregation methods
-                         |-> resolution + Brier score
-GitHub Pages <- public markets + leaderboard APIs
+创建 Forecaster
+      ↓
+创建二元事件
+      ↓
+手工输入每个 Forecaster 的 0–1 概率
+      ↓
+自动生成六种 Aggregation Forecast
+      ↓
+事件保持 Open，可继续修改概率并保留 History
+      ↓
+手工结算 Yes / No
+      ↓
+计算每个 Forecaster 与 Aggregator 的 Brier Loss
+      ↓
+重算 Brier Index、置信区间、Coverage 和相对增益
+      ↓
+实时更新 Leaderboard 与 Audit Log
 ```
 
-No provider key belongs in `index.html` or `config.js`. All secrets are stored with Cloudflare.
+## 聚合方法
 
-## Deploy the API
+### 1. Equal Probability Mean
 
-Prerequisites: Node.js and a Cloudflare account.
+所有 Forecaster 概率的算术平均：
+
+```text
+p_agg = mean(p_1, p_2, ..., p_n)
+```
+
+这是其他方法在 Leaderboard 中计算相对增益时使用的基准。
+
+### 2. Median Forecast
+
+使用概率中位数，降低少数极端概率对结果的影响。
+
+### 3. Trimmed Mean
+
+当 Forecaster 数量足够时，去掉概率序列两端的值后求平均；样本较少时退化为普通平均。
+
+### 4. Log-odds Pool
+
+先将每个概率转换为 Log-odds，在 Log-odds 空间求平均，再转换回概率：
+
+```text
+logit(p) = log(p / (1 - p))
+p_agg = logistic(mean(logit(p_i)))
+```
+
+系统会对接近 `0` 或 `1` 的概率做数值截断，避免无限 Log-odds。
+
+### 5. Extremized Mean
+
+先计算 Equal Mean，再在 Log-odds 空间乘以 `1.2`：
+
+```text
+p_ext = logistic(1.2 × logit(mean(p_i)))
+```
+
+该方法会把聚合结果适度推离 `0.5`。
+
+### 6. Performance Weighted
+
+使用每个 Forecaster 在此前已结算事件上的历史 Brier 表现计算权重。
+
+为避免早期小样本产生极端权重，系统为每个 Forecaster 加入五个 Brier 为 `0.25` 的虚拟观测：
+
+```text
+shrunk_brier =
+  (historical_brier_sum + 5 × 0.25)
+  / (historical_event_count + 5)
+
+weight = 1 / max(0.04, shrunk_brier)
+```
+
+当前事件的真实结果不会进入当前事件的权重计算，权重只使用此前已经结算的数据。
+
+## 评分与排名
+
+### Binary Brier Score
+
+对于概率 `p` 和二元结果 `y ∈ {0, 1}`：
+
+```text
+Brier Loss = (p - y)²
+Raw Brier = mean((p - y)²)
+```
+
+Raw Brier 越低越好。
+
+### Brier Index
+
+平台将 Raw Brier 转换成更直观的高分优先指标：
+
+```text
+Brier Index = (1 - sqrt(Raw Brier)) × 100
+```
+
+- 完美预测对应 `100`。
+- 永远预测 `0.5` 对应 `50`。
+- Brier Index 越高越好。
+
+### 95% Confidence Interval
+
+平台对每个排名对象的事件级 Brier Loss 做 500 次确定性 Bootstrap，并将 Bootstrap Mean 转换为 Brier Index，报告 95% 区间。
+
+### 相对 Equal Mean 增益
+
+```text
+Gain vs Equal Mean =
+  (Brier_equal_mean - Brier_method)
+  / Brier_equal_mean × 100%
+```
+
+正值表示该方法的 Raw Brier 低于 Equal Mean。
+
+### Coverage
+
+Coverage 表示某个 Forecaster 或聚合方法在当前筛选样本中拥有有效预测的事件比例。
+
+### 重要研究口径说明
+
+当前版本使用普通 Binary Brier Score，不是 ForecastBench 官方复现中的 difficulty-adjusted Brier，也没有加入事件固定效应。README 和网站中的 “ForecastBench 风格” 仅指 Brier Index 的显示变换与高分优先表达，不代表官方 ForecastBench 排名复现。
+
+## 技术架构
+
+- Next.js 16
+- React 19
+- TypeScript
+- Vinext / Vite
+- Cloudflare Worker-compatible runtime
+- Cloudflare D1 / SQLite
+- Drizzle ORM
+- Tailwind CSS 基础工具与自定义 CSS
+- Node.js 内置 Test Runner
+- ESLint
+- Sites 私有生产部署
+
+生产数据与本地数据相互独立：
+
+- 本地开发使用 Wrangler 的本地 D1。
+- 生产网站使用 Sites 绑定的生产 D1。
+- Git 仓库不包含任何 D1 数据文件。
+
+## 本地安装和运行
+
+### 1. 前置条件
+
+需要安装：
+
+- Git
+- Node.js `22.13.0` 或更高版本
+- npm
+
+检查版本：
+
+```bash
+git --version
+node --version
+npm --version
+```
+
+推荐使用 Node.js 22 LTS。
+
+### 2. 进入项目目录
+
+```bash
+cd /path/to/aggregation-benchmark-platform
+```
+
+### 3. 安装依赖
 
 ```bash
 npm install
-npx wrangler login
-npx wrangler d1 create aggregation-arena-db
 ```
 
-Copy the returned `database_id` into `wrangler.jsonc`, replacing the all-zero placeholder ID, then run:
+依赖版本已经锁定在 `package-lock.json`。在 CI 或需要严格复现时可以使用：
 
 ```bash
-npm run db:migrate:remote
-npx wrangler secret put AGGREGATION_API_TOKEN
-npm run deploy
+npm ci
 ```
 
-The token protects write endpoints. Use a long random value and never commit it.
-
-After deployment, copy the Worker URL into `config.js`:
-
-```js
-window.ARENA_API_URL = "https://aggregation-arena-api.YOUR-SUBDOMAIN.workers.dev";
-```
-
-The GitHub Pages frontend will then switch automatically from market-only preview mode to the live prediction pipeline.
-
-## Connect a Prophet-style forecaster
-
-Add these Worker settings or secrets:
+### 4. 启动开发服务器
 
 ```bash
-npx wrangler secret put FORECAST_ENDPOINT
-npx wrangler secret put FORECAST_API_TOKEN
-npx wrangler secret put FORECASTER_ID
-npx wrangler secret put FORECASTER_NAME
-```
-
-Every five minutes, the Worker sends open events that the configured forecaster has not yet predicted:
-
-```json
-{
-  "event_ticker": "12345",
-  "market_ticker": "12345",
-  "title": "Will ...?",
-  "description": "...",
-  "category": "Politics",
-  "rules": "...",
-  "close_time": "2026-10-01T00:00:00Z",
-  "outcomes": ["Yes", "No"],
-  "resolved_outcome": null
-}
-```
-
-The forecaster may return the Prophet Arena format:
-
-```json
-{
-  "probabilities": [
-    { "market": "Yes", "probability": 0.68 },
-    { "market": "No", "probability": 0.32 }
-  ],
-  "rationale": "Optional explanation",
-  "model_version": "v1"
-}
-```
-
-To ingest additional forecasters directly:
-
-```bash
-curl -X POST "https://YOUR-WORKER/api/predictions" \
-  -H "Authorization: Bearer YOUR_AGGREGATION_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "event_id": "12345",
-    "participant_id": "my-forecaster",
-    "participant_name": "My Forecaster",
-    "probability_yes": 0.61,
-    "model_version": "v1"
-  }'
-```
-
-Each accepted base forecast triggers a recomputation of all aggregation methods for that event.
-
-## Public API
-
-- `GET /api/health` — ingestion and resolution status
-- `GET /api/markets` — active normalized markets plus ensemble probabilities
-- `GET /api/markets/:id` — event metadata and its locked probability panel
-- `GET /api/leaderboard` — resolved-market Brier rankings
-- `GET /api/forecast-contract` — machine-readable hosted-agent request/response contract
-
-Protected API:
-
-- `POST /api/predictions` — submit a base forecast
-- `POST /api/aggregate` — recompute one or all open events
-- `POST /api/sync` — request an immediate sync
-
-## Local checks
-
-```bash
-npm test
-npm run db:migrate:local
 npm run dev
 ```
 
-The leaderboard intentionally remains empty until tracked markets resolve. The page labels its built-in sample standings as preview data whenever no Worker URL is configured; it no longer randomly changes scores.
+终端会打印本地 URL，通常为：
+
+```text
+http://localhost:3000
+```
+
+首次访问 `/api/arena` 时，系统会：
+
+1. 建立本地 D1 表。
+2. 检查是否已有数据。
+3. 如果数据库为空，初始化 Demo Season、示例 Forecaster 和示例事件。
+
+### 5. 停止服务器
+
+在运行开发服务器的终端按：
+
+```text
+Control + C
+```
+
+## 如何测试
+
+建议分成四层测试：静态检查、自动化测试、手工 UI 测试和可选 API 测试。
+
+### 第一层：代码检查
+
+```bash
+npm run lint
+```
+
+预期结果：
+
+- ESLint 退出码为 `0`。
+- 没有 Error。
+
+### 第二层：完整自动化测试
+
+```bash
+npm test
+```
+
+该命令会先执行生产构建，然后运行测试。
+
+当前自动化测试覆盖：
+
+1. Cloudflare Worker 生产构建可以真实启动并返回 Aggregation Arena 页面。
+2. 始终预测 `0.5` 时，Brier Index 锚定为 `50`。
+3. 代码中存在并实现六种确定性聚合方法。
+
+预期结果：
+
+```text
+tests 3
+pass 3
+fail 0
+```
+
+### 第三层：单独验证生产构建
+
+```bash
+npm run build
+```
+
+预期路由：
+
+```text
+/             Dynamic page
+/api/arena    Dynamic API
+```
+
+`npm test` 已经包含一次构建，因此日常修改后通常运行 `npm run lint && npm test` 即可。
+
+### 第四层：手工 UI 闭环测试
+
+启动开发服务器后，在浏览器中完成以下流程：
+
+1. 打开 `Events`。
+2. 点击 `+ Add forecaster`，创建至少三个 Forecaster。
+3. 点击 `+ New event`，创建一个测试事件。
+4. 在事件行点击 `Input probabilities`。
+5. 为至少三个 Forecaster 输入不同的 `0–1` 概率。
+6. 提交后打开事件详情，确认出现六个 Aggregate Forecast。
+7. 点击 `Resolve`，选择 `Yes` 或 `No` 并提交。
+8. 返回 `Leaderboard`，确认：
+   - Resolved 数量增加。
+   - 所有 Aggregator 的 `N` 增加。
+   - Brier Index 和 Raw Brier 更新。
+   - 排名重新排序。
+9. 打开 `Audit log`，确认出现创建题目、提交预测和结算记录。
+10. 点击 `Export CSV`，确认当前排名可以导出。
+
+建议同时验证以下边界：
+
+- 概率小于 `0` 或大于 `1` 时应被拒绝。
+- 少于两个 Forecaster 时不能结算为正式聚合样本。
+- 已结算事件不能继续提交预测。
+- 切换 Season、Category、30d 和 90d 后排名样本应改变。
+- 手机宽度下应显示底部导航。
+
+### 可选：API 健康检查
+
+开发服务器运行时：
+
+```bash
+curl "http://localhost:3000/api/arena?track=aggregators&window=all&season=all&category=all"
+```
+
+预期返回包含以下字段的 JSON：
+
+```text
+generatedAt
+stats
+leaderboard
+events
+participants
+methods
+seasons
+categories
+activity
+methodology
+```
+
+本地环境允许写操作使用 `local-admin`。生产环境没有登录身份时，写请求会返回 `401`。
+
+## 如何推送到自己的 GitHub
+
+GitHub 在这里用于保存源码、提交历史和协作，不等于把网站运行在 GitHub Pages。
+
+下面提供 GitHub CLI 和网页两种方法。任选一种即可。
+
+### 方法 A：使用 GitHub CLI，推荐
+
+#### 1. 安装 GitHub CLI
+
+macOS：
+
+```bash
+brew install gh
+```
+
+验证：
+
+```bash
+gh --version
+```
+
+#### 2. 登录 GitHub
+
+```bash
+gh auth login
+```
+
+推荐选择：
+
+```text
+GitHub.com
+HTTPS
+Login with a web browser
+```
+
+完成后检查：
+
+```bash
+gh auth status
+```
+
+#### 3. 检查本地仓库
+
+在项目根目录执行：
+
+```bash
+git status -sb
+git branch --show-current
+git log -3 --oneline
+git remote -v
+```
+
+当前项目的默认分支应为 `main`。
+
+项目可能已经有一个名为 `sites` 的远程仓库，它用于现有生产部署。不要删除或覆盖它。GitHub 远程仓库应命名为 `origin`。
+
+#### 4. 创建私有 GitHub 仓库并推送
+
+```bash
+gh repo create aggregation-arena-benchmark \
+  --private \
+  --source=. \
+  --remote=origin \
+  --push
+```
+
+该命令会：
+
+1. 在当前登录的 GitHub 账号下创建私有仓库。
+2. 将本地仓库设置为源码来源。
+3. 添加名为 `origin` 的 GitHub Remote。
+4. 将当前 `main` 分支推送到 GitHub。
+
+如果希望公开源码，将 `--private` 改为 `--public`。在公开前请重新检查仓库中是否有不希望公开的研究材料或配置。
+
+#### 5. 验证推送
+
+```bash
+git remote -v
+git status -sb
+gh repo view --web
+```
+
+正常情况下会同时看到：
+
+```text
+origin  GitHub repository
+sites   Sites deployment repository
+```
+
+### 方法 B：通过 GitHub 网页创建仓库
+
+#### 1. 创建空仓库
+
+打开：
+
+<https://github.com/new>
+
+填写：
+
+- Repository name: `aggregation-arena-benchmark`
+- Visibility: `Private`
+
+不要勾选以下选项：
+
+- Add a README file
+- Add `.gitignore`
+- Choose a license
+
+本地项目已经有这些文件和 Git 历史。如果 GitHub 先生成一个提交，首次推送会出现历史冲突。
+
+#### 2. 添加 GitHub Remote
+
+HTTPS：
+
+```bash
+git remote add origin https://github.com/YOUR_USERNAME/aggregation-arena-benchmark.git
+```
+
+或者 SSH：
+
+```bash
+git remote add origin git@github.com:YOUR_USERNAME/aggregation-arena-benchmark.git
+```
+
+把 `YOUR_USERNAME` 替换成你的 GitHub 用户名。
+
+#### 3. 推送
+
+```bash
+git push -u origin main
+```
+
+#### 4. 验证
+
+```bash
+git remote -v
+git status -sb
+```
+
+然后刷新 GitHub 仓库页面。
+
+### 以后如何提交更新
+
+每次修改后：
+
+```bash
+git status
+git diff
+git add <本次修改的文件>
+git commit -m "Describe the change"
+git push origin main
+```
+
+不要在不清楚文件范围时机械使用 `git add -A`。先用 `git status` 和 `git diff` 确认没有把本地数据库、实验文件或无关资料一起提交。
+
+### 常用 GitHub 检查
+
+```bash
+# 当前分支
+git branch --show-current
+
+# 最近提交
+git log --oneline -5
+
+# 所有远程仓库
+git remote -v
+
+# 本地是否领先或落后 GitHub
+git status -sb
+
+# GitHub 登录状态
+gh auth status
+
+# 打开当前 GitHub 仓库
+gh repo view --web
+```
+
+## GitHub 与网站部署的区别
+
+### GitHub Repository
+
+负责：
+
+- 保存源码。
+- 保存 Git Commit 历史。
+- Issue、Pull Request 和代码审查。
+- GitHub Actions 自动化测试。
+
+### GitHub Pages
+
+只适合静态 HTML、CSS 和 JavaScript。
+
+本项目不能直接使用 GitHub Pages 完整运行，因为它依赖：
+
+- `/api/arena` 服务端 API。
+- Cloudflare Worker Runtime。
+- D1 数据库。
+- 生产环境登录身份 Header。
+
+把源码推到 GitHub 不会自动更新当前生产网站。
+
+### 当前生产部署
+
+当前线上版本由 Sites 承载，并使用 Cloudflare Worker 与 D1。
+
+源码修改后的标准流程是：
+
+```text
+修改代码
+→ npm run lint
+→ npm test
+→ Git Commit
+→ Push 到 GitHub
+→ 保存并部署新的 Sites Version
+```
+
+如果其他人 Fork 本仓库并希望部署自己的独立站点，需要创建自己的 Sites 项目与 D1 资源，不能假设拥有当前 `.openai/hosting.json` 中项目的部署权限。
+
+## 数据存储与重置
+
+### 本地数据
+
+Wrangler 本地 D1 数据保存在被 `.gitignore` 排除的 `.wrangler/` 目录中，不会上传到 GitHub。
+
+需要重置本地数据时，先停止开发服务器，再将本地状态目录移动到备份：
+
+```bash
+mv .wrangler ".wrangler.backup.$(date +%Y%m%d-%H%M%S)"
+npm run dev
+```
+
+重新访问网站后会建立新的本地数据库并再次初始化 Demo Season。
+
+### 生产数据
+
+生产 D1 不在 Git 仓库中。以下操作不会自动删除生产数据：
+
+- 删除本地 `.wrangler`。
+- 重新安装 `node_modules`。
+- 推送 GitHub。
+- 重新 Clone 仓库。
+
+修改数据库 Schema 后：
+
+```bash
+npm run db:generate
+```
+
+然后检查 `drizzle/` 中生成的 Migration，确认无误后再提交和部署。
+
+## API
+
+统一端点：
+
+```text
+GET  /api/arena
+POST /api/arena
+```
+
+### GET 查询参数
+
+| 参数 | 可选值 | 默认值 |
+|---|---|---|
+| `track` | `aggregators`, `forecasters`, `all` | `aggregators` |
+| `window` | `all`, `30d`, `90d` | `all` |
+| `season` | 赛季名称或 `all` | `all` |
+| `category` | 分类名称或 `all` | `all` |
+
+### POST Actions
+
+| Action | 用途 |
+|---|---|
+| `create_participant` | 创建或更新 Forecaster |
+| `create_event` | 创建二元事件 |
+| `submit_forecasts` | 批量提交手工概率并重算聚合 |
+| `resolve_event` | 结算 Yes / No |
+| `invalidate_event` | 作废事件 |
+| `reopen_event` | 重新开放事件 |
+
+所有 POST 请求使用 JSON Body：
+
+```json
+{
+  "action": "create_event",
+  "title": "Will the event happen?",
+  "description": "Resolution criteria",
+  "category": "General",
+  "season": "Season 1",
+  "closeTime": "2026-12-31T12:00:00.000Z"
+}
+```
+
+生产写请求必须带有 Sites 身份网关提供的 `oai-authenticated-user-email`。不要在公网部署中自行伪造或信任来自未受保护代理的该 Header。
+
+## 项目结构
+
+```text
+aggregation-benchmark-platform/
+├── app/
+│   ├── api/arena/route.ts    # GET Snapshot 与 POST Actions
+│   ├── arena-client.tsx      # Leaderboard、事件、方法和审计 UI
+│   ├── globals.css           # 白色主题和响应式设计
+│   ├── layout.tsx            # Metadata 与社交分享配置
+│   └── page.tsx              # 页面入口
+├── db/
+│   ├── index.ts              # D1 / Drizzle 连接
+│   └── schema.ts             # 数据表定义
+├── drizzle/                  # 数据库 Migration
+├── lib/
+│   └── arena.ts              # 聚合、评分、Bootstrap 和业务逻辑
+├── public/
+│   └── og.png                # GitHub README 与社交分享图
+├── tests/
+│   ├── rendered-html.test.mjs
+│   └── scoring.test.mjs
+├── .openai/
+│   └── hosting.json          # Sites 项目与逻辑 D1 Binding
+├── package.json
+└── README.md
+```
+
+### 核心数据表
+
+| 表 | 用途 |
+|---|---|
+| `participants` | Forecaster 元数据 |
+| `events` | 事件、状态和结算结果 |
+| `predictions` | 每个事件的最新预测版本 |
+| `prediction_history` | 不可变预测历史 |
+| `audit_log` | 操作审计记录 |
+
+## 当前限制
+
+- 只支持二元 Yes / No 事件。
+- 只支持手工概率输入。
+- 没有外部 LLM、预测市场或数据源连接器。
+- 没有自动事件结算。
+- 没有定时任务或自动抓取。
+- 没有多选结果、连续结果或数值预测评分。
+- 没有 difficulty-adjusted Brier 或事件固定效应。
+- Performance Weighted 只基于平台内部已结算历史。
+- 当前身份模型依赖 Sites 私有访问网关，不是完整的多角色权限系统。
+- 事件使用作废而不是永久删除，以保留审计轨迹。
+- 自动化测试覆盖核心构建与评分契约，但尚未覆盖所有表单交互和所有 API 错误分支。
+
+## 常见问题
+
+### `gh: command not found`
+
+macOS：
+
+```bash
+brew install gh
+```
+
+然后：
+
+```bash
+gh auth login
+```
+
+### `gh auth status` 显示未登录
+
+重新运行：
+
+```bash
+gh auth login
+```
+
+选择 GitHub.com，并使用浏览器完成授权。
+
+### `remote origin already exists`
+
+先检查：
+
+```bash
+git remote -v
+```
+
+如果 `origin` 已经指向正确仓库，不要重复添加，直接：
+
+```bash
+git push -u origin main
+```
+
+如果指向错误仓库，先确认目标地址，再修改：
+
+```bash
+git remote set-url origin https://github.com/YOUR_USERNAME/aggregation-arena-benchmark.git
+```
+
+### GitHub 仓库创建后第一次 Push 被拒绝
+
+通常是因为在 GitHub 网页创建仓库时同时生成了 README、License 或 `.gitignore`。最简单的处理方式是删除刚创建且没有重要内容的远程仓库，重新创建一个完全空的仓库，然后再次 Push。
+
+不要为了绕过冲突直接执行 `git push --force`，除非已经确认远程提交可以被覆盖。
+
+### 本地端口 3000 被占用
+
+停止占用端口的旧开发服务器，或根据开发服务器输出使用其他端口。不要同时让两个开发实例写入同一份本地 D1。
+
+### 页面一直显示 `Preparing benchmark`
+
+依次检查：
+
+1. 运行 `npm run dev` 的终端是否有错误。
+2. 浏览器 Network 中 `/api/arena` 是否返回 `200`。
+3. Node.js 是否满足 `>=22.13.0`。
+4. `.wrangler` 本地状态是否损坏。
+
+如需排除本地数据库问题，先按“数据存储与重置”章节备份 `.wrangler`，再重启开发服务器。
+
+### 修改代码后 GitHub 更新了，但生产网站没变化
+
+这是正常的。GitHub 保存源码，Sites 负责生产运行。需要额外保存并部署新的 Sites Version。
+
+## 推荐开发检查清单
+
+每次准备提交前：
+
+```text
+[ ] git status 和 git diff 只包含本次修改
+[ ] npm run lint 通过
+[ ] npm test 显示 3 pass / 0 fail
+[ ] 手工创建事件并提交概率成功
+[ ] 结算后 Leaderboard 正确更新
+[ ] Audit log 出现相应操作
+[ ] 没有提交 .wrangler、本地数据库或环境变量
+[ ] Commit 信息说明本次改动
+[ ] Push 到正确的 GitHub origin
+```
