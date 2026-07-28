@@ -160,12 +160,34 @@ export function ArenaClient({ userName }: { userName: string }) {
     setMutating(true);
     setError("");
     try {
-      const response = await fetch("/api/arena", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const send = (token: string) =>
+        fetch("/api/arena", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+
+      let token =
+        window.sessionStorage.getItem("aggregation-arena-admin-token") || "";
+      let response = await send(token);
+      if (response.status === 401) {
+        const enteredToken = window.prompt(
+          "请输入 Aggregation Arena 管理员 Token。Token 只保存在当前浏览器标签页。",
+          "",
+        );
+        if (!enteredToken) throw new Error("已取消管理员验证");
+        token = enteredToken.trim();
+        window.sessionStorage.setItem("aggregation-arena-admin-token", token);
+        response = await send(token);
+      }
+
       const result = (await response.json()) as { ok: boolean; message?: string };
+      if (response.status === 401) {
+        window.sessionStorage.removeItem("aggregation-arena-admin-token");
+      }
       if (!response.ok) throw new Error(result.message || "操作失败");
       setDialog(null);
       setToast(successMessage);
