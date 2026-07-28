@@ -65,6 +65,60 @@ type Method = {
   color: string;
 };
 
+type CurationSnapshot = {
+  config: {
+    configVersion: string;
+    targetPerCategory: number;
+    minimumTotalVolume: number;
+    minimumVolume24h: number;
+    minimumLiquidity: number;
+    minimumCloseHours: number;
+    maximumCloseDays: number;
+    minimumCategoryPercentile: number;
+  };
+  latestSync: null | {
+    status: string;
+    fetchedEvents: number;
+    fetchedMarkets: number;
+    eligibleMarkets: number;
+    startedAt: string;
+    completedAt: string | null;
+  };
+  latestSelection: null | {
+    id: string;
+    status: string;
+    candidateCount: number;
+    eligibleCount: number;
+    selectedCount: number;
+    categoryCounts: Record<string, number>;
+    completedAt: string | null;
+  };
+  categories: {
+    category: string;
+    candidates: number;
+    eligible: number;
+    selectedThisRun: number;
+    selectedLast7d: number;
+    target: number;
+  }[];
+  selectedMarkets: {
+    marketId: string;
+    eventId: string;
+    title: string;
+    category: string;
+    rank: number;
+    score: number;
+    yesPrice: number;
+    currentYesPrice: number;
+    volume24h: number;
+    totalVolume: number;
+    liquidity: number;
+    closeTime: string | null;
+    selectedAt: string;
+    sourceUrl: string;
+  }[];
+};
+
 type Snapshot = {
   generatedAt: string;
   stats: {
@@ -97,9 +151,10 @@ type Snapshot = {
     coverageRule: string;
     weightingRule: string;
   };
+  curation: CurationSnapshot;
 };
 
-type View = "leaderboard" | "events" | "methods" | "activity";
+type View = "leaderboard" | "curation" | "events" | "methods" | "activity";
 type Dialog =
   | { type: "create-event" }
   | { type: "create-participant" }
@@ -116,6 +171,8 @@ const ACTION_LABELS: Record<string, string> = {
   "event.invalidated": "作废题目",
   "forecast.batch_submitted": "提交一批预测",
   "participant.upserted": "更新 forecaster",
+  "curation.event_selected": "Polymarket 题目入选",
+  "curation.event_resolved": "Polymarket 自动结算",
 };
 
 export function ArenaClient({ userName }: { userName: string }) {
@@ -199,9 +256,10 @@ export function ArenaClient({ userName }: { userName: string }) {
         </div>
         <nav aria-label="Benchmark navigation">
           <NavButton active={view === "leaderboard"} label="Leaderboard" meta="实时榜单" icon="01" onClick={() => setView("leaderboard")} />
-          <NavButton active={view === "events"} label="Events" meta="题目与录入" icon="02" onClick={() => setView("events")} />
-          <NavButton active={view === "methods"} label="Methods" meta="聚合方法" icon="03" onClick={() => setView("methods")} />
-          <NavButton active={view === "activity"} label="Audit log" meta="审计记录" icon="04" onClick={() => setView("activity")} />
+          <NavButton active={view === "curation"} label="Curation" meta="动态选题" icon="02" onClick={() => setView("curation")} />
+          <NavButton active={view === "events"} label="Events" meta="题目与录入" icon="03" onClick={() => setView("events")} />
+          <NavButton active={view === "methods"} label="Methods" meta="聚合方法" icon="04" onClick={() => setView("methods")} />
+          <NavButton active={view === "activity"} label="Audit log" meta="审计记录" icon="05" onClick={() => setView("activity")} />
         </nav>
         <div className="sidebar-status">
           <span className="status-dot" />
@@ -256,6 +314,7 @@ export function ArenaClient({ userName }: { userName: string }) {
                 onDetail={(event) => setDialog({ type: "event", event })}
               />
             )}
+            {view === "curation" && <CurationView snapshot={snapshot} />}
             {view === "methods" && <MethodsView snapshot={snapshot} />}
             {view === "activity" && <ActivityView snapshot={snapshot} />}
           </>
@@ -379,6 +438,72 @@ function LeaderboardRowView({ row }: { row: LeaderboardRow }) {
       <td><div className="coverage-cell"><span><i style={{ width: `${Math.min(100, row.coverage)}%` }} /></span><b>{row.coverage.toFixed(0)}%</b></div></td>
       <td><MiniBars values={row.recent} color={row.color} /></td>
     </tr>
+  );
+}
+
+function CurationView({ snapshot }: { snapshot: Snapshot }) {
+  const curation = snapshot.curation;
+  const selected = curation.latestSelection?.selectedCount || 0;
+  return (
+    <div className="page-content enter">
+      <section className="page-heading">
+        <div>
+          <span className="eyebrow">POLYMARKET / AUTOMATED</span>
+          <h1>Balanced market curation</h1>
+          <p>每小时读取高成交量二元市场；通过固定质量门槛后，按七个类别每日均衡发布，不足时宁可留空。</p>
+        </div>
+        <div className="updated-stamp"><span /><div><small>Latest sync</small><b>{curation.latestSync?.completedAt ? formatTime(curation.latestSync.completedAt) : "Waiting"}</b></div></div>
+      </section>
+
+      <section className="metric-strip">
+        <Metric label="Scanned markets" value={curation.latestSync?.fetchedMarkets || 0} detail={`${curation.latestSync?.fetchedEvents || 0} source events`} />
+        <Metric label="Eligible now" value={curation.latestSync?.eligibleMarkets || 0} detail="passed all hard filters" />
+        <Metric label="Latest release" value={selected} detail={curation.latestSelection?.id || "next daily run"} />
+        <Metric label="Automation" value={curation.latestSync?.status === "completed" ? "LIVE" : "READY"} detail="hourly sync · daily release" highlight />
+      </section>
+
+      <section className="curation-rules">
+        <div><small>24H VOLUME</small><b>≥ {formatCompactMoney(curation.config.minimumVolume24h)}</b><span>Within-category top 30%</span></div>
+        <div><small>TOTAL VOLUME</small><b>≥ {formatCompactMoney(curation.config.minimumTotalVolume)}</b><span>Established markets only</span></div>
+        <div><small>LIQUIDITY</small><b>≥ {formatCompactMoney(curation.config.minimumLiquidity)}</b><span>Executable probability signal</span></div>
+        <div><small>CLOSE WINDOW</small><b>{curation.config.minimumCloseHours}h–{curation.config.maximumCloseDays}d</b><span>Enough time to forecast</span></div>
+      </section>
+
+      <section className="balance-board">
+        <div className="section-title"><div><span className="eyebrow">CATEGORY QUOTAS</span><h2>Seven-category balance</h2></div><span>{curation.config.targetPerCategory} per category / release</span></div>
+        <div className="balance-grid">
+          {curation.categories.map((item) => (
+            <article key={item.category}>
+              <header><b>{item.category}</b><span>{item.selectedThisRun}/{item.target}</span></header>
+              <i><em style={{ width: `${Math.min(100, (item.selectedThisRun / item.target) * 100)}%` }} /></i>
+              <footer><span>{item.eligible} eligible</span><span>{item.selectedLast7d} selected / 7d</span></footer>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="curation-release">
+        <div className="section-title"><div><span className="eyebrow">IMMUTABLE RELEASE</span><h2>{curation.latestSelection?.id || "Awaiting first release"}</h2></div><span>{selected} selected</span></div>
+        {curation.selectedMarkets.length ? (
+          <div className="curation-table-wrap">
+            <table className="curation-table">
+              <thead><tr><th>Category</th><th>Market</th><th>Score</th><th>YES at selection</th><th>24h volume</th><th>Liquidity</th><th>Closes</th></tr></thead>
+              <tbody>{curation.selectedMarkets.map((market) => (
+                <tr key={market.marketId}>
+                  <td><span className="category-label">{market.category}</span></td>
+                  <td><a href={market.sourceUrl} target="_blank" rel="noreferrer">{market.title}<small>View source ↗</small></a></td>
+                  <td className="mono-number">{market.score.toFixed(3)}</td>
+                  <td className="mono-number">{(market.yesPrice * 100).toFixed(1)}%</td>
+                  <td className="mono-number">{formatCompactMoney(market.volume24h)}</td>
+                  <td className="mono-number">{formatCompactMoney(market.liquidity)}</td>
+                  <td className="muted-number">{market.closeTime ? formatDate(market.closeTime) : "—"}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        ) : <div className="empty-block">部署定时任务后，首次同步会建立候选池；每日 00:10 UTC 发布固定批次。</div>}
+      </section>
+    </div>
   );
 }
 
@@ -582,7 +707,7 @@ function LoadingState() {
 }
 
 function viewLabel(view: View) {
-  return { leaderboard: "Leaderboard / 实时榜单", events: "Events / 题目管理", methods: "Methods / 方法说明", activity: "Audit log / 审计记录" }[view];
+  return { leaderboard: "Leaderboard / 实时榜单", curation: "Curation / 动态选题", events: "Events / 题目管理", methods: "Methods / 方法说明", activity: "Audit log / 审计记录" }[view];
 }
 
 function dialogTitle(dialog: NonNullable<Dialog>) {
@@ -611,6 +736,10 @@ function formatDate(value: string) {
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatCompactMoney(value: number) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 function signed(value: number) {

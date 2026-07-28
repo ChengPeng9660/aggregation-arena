@@ -1,6 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { runPolymarketScheduled } from "../lib/polymarket";
 
 interface Env {
   ASSETS: Fetcher;
@@ -41,6 +42,9 @@ const worker = {
     }
 
     return handler.fetch(request, env, ctx);
+  },
+  async scheduled(controller: { cron: string }, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(runPolymarketScheduled(env, controller));
   },
 };
 

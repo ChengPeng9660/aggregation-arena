@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "aggregation-arena",
   "main": "./worker/index.ts",
-  "compatibility_date": "2025-01-01",
+  "compatibility_date": "2026-05-22",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "assets": {
     "directory": "dist/client",
@@ -12,11 +12,15 @@
   "images": {
     "binding": "IMAGES"
   },
+  "triggers": {
+    "crons": ["0 * * * *", "10 0 * * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "aggregation-arena-db",
-      "database_id": "8bd33297-8ab4-4acd-af3f-22a64565bcf2"
+      "database_id": "8bd33297-8ab4-4acd-af3f-22a64565bcf2",
+      "migrations_dir": "./drizzle"
     }
   ]
 }

@@ -1,4 +1,5 @@
 import { getD1 } from "@/db";
+import { getCurationSnapshot } from "@/lib/polymarket";
 
 export type ArenaFilters = {
   track?: "aggregators" | "forecasters" | "all";
@@ -154,11 +155,12 @@ export async function ensureArenaReady() {
 export async function getArenaSnapshot(filters: ArenaFilters = {}) {
   await ensureArenaReady();
   const db = getD1();
-  const [eventRows, participantRows, predictionRows, auditRows] = await Promise.all([
+  const [eventRows, participantRows, predictionRows, auditRows, curation] = await Promise.all([
     db.prepare("SELECT * FROM events ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC").all(),
     db.prepare("SELECT * FROM participants WHERE status = 'active' ORDER BY created_at, name").all(),
     db.prepare("SELECT * FROM predictions ORDER BY event_id, CASE kind WHEN 'aggregate' THEN 1 ELSE 0 END, participant_name").all(),
     db.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT 18").all(),
+    getCurationSnapshot(db),
   ]);
 
   const predictionsByEvent = new Map<string, Record<string, unknown>[]>();
@@ -246,6 +248,7 @@ export async function getArenaSnapshot(filters: ArenaFilters = {}) {
       coverageRule: "participant forecasts / eligible resolved events",
       weightingRule: "performance weights use resolved history available before the open event is locked",
     },
+    curation,
   };
 }
 

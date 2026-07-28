@@ -2,13 +2,13 @@
 
 ![Aggregation Arena](public/og.png)
 
-一个支持手工概率录入、自动聚合、结果结算、实时排名和审计追踪的预测聚合 Benchmark 平台。
+一个支持 Polymarket 自动选题、手工概率录入、自动聚合、结果结算、实时排名和审计追踪的预测聚合 Benchmark 平台。
 
-当前版本不连接外部 LLM predictor，也不自动抓取预测市场数据。管理员在网页中创建二元事件并输入每个 Forecaster 的数字概率，系统会让所有聚合方法使用完全相同的输入，在事件结算后按 Binary Brier Score 自动更新 Leaderboard。
+系统每小时从 Polymarket Gamma API 同步活跃市场，先做成交量、流动性、截止窗口、概率区间和规则完整性筛选，再按七个固定类别均衡发布每日题集。管理员也可以手工创建二元事件并录入每个 Forecaster 的数字概率；所有聚合方法使用完全相同的输入，事件结算后按 Binary Brier Score 自动更新 Leaderboard。
 
-线上私有版本：
+Cloudflare Worker 版本：
 
-<https://aggregation-arena-benchmark.iushanghai.chatgpt.site>
+<https://aggregation-arena.luorx00.workers.dev>
 
 ## 目录
 
@@ -28,6 +28,28 @@
 - [常见问题](#常见问题)
 
 ## 已经实现的功能
+
+### Polymarket 自动选题
+
+- 每小时 `00` 分从 Gamma API 拉取按 24 小时成交量排序的活跃事件。
+- 只接收严格的 `Yes / No` 二元市场。
+- 最低总成交量 `$50,000`。
+- 最低 24 小时成交量 `$10,000`。
+- 最低流动性 `$10,000`。
+- 截止时间距离同步时刻必须在 `48 小时–90 天`。
+- Yes 概率必须位于 `0.05–0.95`，避免接近确定的题目。
+- 有开始时间时，市场至少存在 6 小时。
+- 题目说明与结算依据必须有足够文字。
+- 通过硬筛选后，还要位于所属类别的 24 小时成交量前 30%。
+- 固定为七类：Politics & Policy、Economics、Finance & Crypto、Business & Technology、Science & Health、Sports、Culture & World。
+- 每日 `00:10 UTC` 生成不可变批次，默认每类最多 3 题、总计最多 21 题。
+- 若某类没有足够高质量题目，保留空位，不用低质量题补齐。
+- 同一个 Polymarket event 每个批次最多选择一个 market。
+- 标题高度相似的市场自动去重。
+- 已经入选过的 market 永久不重复选择。
+- 入选时保存价格、成交量、流动性、选题分数、类别和批次 ID。
+- Curation 页面每 30 秒刷新，显示最近同步、筛选后数量、类别配额和最新题集。
+- 临近截止的已选题会检查 Polymarket 最终状态；明确结算后自动写回 Arena 事件。
 
 ### 事件管理
 
@@ -118,6 +140,28 @@
       ↓
 实时更新 Leaderboard 与 Audit Log
 ```
+
+自动选题的数据流：
+
+```text
+Polymarket Gamma API
+      ↓ 每小时同步
+硬筛选：二元 / 成交量 / 流动性 / 截止时间 / 价格 / 规则
+      ↓
+确定性七分类 + 类内 24h 成交量分位数
+      ↓ 每日 00:10 UTC
+每类最多 3 题 + event 去重 + 近重复去重 + 永久去重
+      ↓
+不可变 selection run，例如 poly-2026-07-29-v1
+      ↓
+写入 Arena events，进入统一预测和聚合流程
+      ↓
+Polymarket 明确结算后自动同步结果
+      ↓
+实时更新 Leaderboard
+```
+
+选题配置在 [`lib/curation-core.js`](lib/curation-core.js)，数据同步和定时任务在 [`lib/polymarket.ts`](lib/polymarket.ts)。修改门槛时应同时升级 `configVersion`，这样历史批次仍然可以解释。
 
 ## 聚合方法
 
@@ -235,12 +279,13 @@ Coverage 表示某个 Forecaster 或聚合方法在当前筛选样本中拥有�
 - Tailwind CSS 基础工具与自定义 CSS
 - Node.js 内置 Test Runner
 - ESLint
-- Sites 私有生产部署
+- Cloudflare Workers 定时任务
 
 生产数据与本地数据相互独立：
 
 - 本地开发使用 Wrangler 的本地 D1。
 - 生产网站使用 Sites 绑定的生产 D1。
+- `luorx00.workers.dev` 版本使用 `wrangler.jsonc` 中绑定的生产 D1。
 - Git 仓库不包含任何 D1 数据文件。
 
 ## 本地安装和运行
@@ -335,12 +380,15 @@ npm test
 1. Cloudflare Worker 生产构建可以真实启动并返回 Aggregation Arena 页面。
 2. 始终预测 `0.5` 时，Brier Index 锚定为 `50`。
 3. 代码中存在并实现六种确定性聚合方法。
+4. 低成交量和非二元市场会被硬筛选拒绝。
+5. 每个类别最多选择配置规定的题目数，单一热门类别不能占满题集。
+6. 同源市场会去重，缺少合格题时不会用弱题补齐。
 
 预期结果：
 
 ```text
-tests 3
-pass 3
+tests 6
+pass 6
 fail 0
 ```
 
@@ -377,6 +425,7 @@ npm run build
    - 排名重新排序。
 9. 打开 `Audit log`，确认出现创建题目、提交预测和结算记录。
 10. 点击 `Export CSV`，确认当前排名可以导出。
+11. 打开 `Curation`，确认能看到同步状态、七类配额和最新不可变批次。
 
 建议同时验证以下边界：
 
@@ -407,6 +456,7 @@ seasons
 categories
 activity
 methodology
+curation
 ```
 
 本地环境允许写操作使用 `local-admin`。生产环境没有登录身份时，写请求会返回 `401`。
@@ -616,7 +666,7 @@ gh repo view --web
 
 ### 当前生产部署
 
-当前线上版本由 Sites 承载，并使用 Cloudflare Worker 与 D1。
+公开线上版本由 Cloudflare Workers 承载，并使用 D1 和 Cron Triggers。`.openai/hosting.json` 对应的 Sites 项目可作为独立预览环境。
 
 源码修改后的标准流程是：
 
@@ -626,10 +676,24 @@ gh repo view --web
 → npm test
 → Git Commit
 → Push 到 GitHub
-→ 保存并部署新的 Sites Version
+→ 对生产 D1 应用 Migration
+→ 部署 Cloudflare Worker
 ```
 
-如果其他人 Fork 本仓库并希望部署自己的独立站点，需要创建自己的 Sites 项目与 D1 资源，不能假设拥有当前 `.openai/hosting.json` 中项目的部署权限。
+在已登录正确 Cloudflare 账号的环境中：
+
+```bash
+npx wrangler whoami
+npx wrangler d1 migrations apply aggregation-arena-db --remote
+npx wrangler deploy
+```
+
+部署会注册两个 UTC 定时任务：
+
+- `0 * * * *`：每小时同步候选市场并检查结算。
+- `10 0 * * *`：每日同步、检查结算并发布新题集。
+
+必须先检查 `wrangler whoami` 的账号和目标 D1 ID。不要把 `luorx00` 的配置部署到其他 Cloudflare 账号。
 
 ## 数据存储与重置
 
@@ -743,14 +807,18 @@ aggregation-benchmark-platform/
 | `predictions` | 每个事件的最新预测版本 |
 | `prediction_history` | 不可变预测历史 |
 | `audit_log` | 操作审计记录 |
+| `polymarket_candidates` | 候选市场、筛选结果和淘汰原因 |
+| `market_snapshots` | 合格市场的小时级价格和流动性快照 |
+| `curation_sync_runs` | 每次 Polymarket 同步的运行记录 |
+| `selection_runs` | 不可变的每日选题批次 |
+| `selection_items` | 批次内题目及入选时快照 |
 
 ## 当前限制
 
 - 只支持二元 Yes / No 事件。
-- 只支持手工概率输入。
-- 没有外部 LLM、预测市场或数据源连接器。
-- 没有自动事件结算。
-- 没有定时任务或自动抓取。
+- Forecast 概率目前仍由管理员手工输入；尚未接入外部 LLM predictor。
+- 自动结算只接受 Polymarket 已关闭且结果价格达到 `≤0.001` 或 `≥0.999` 的明确二元结果。
+- 固定分类器使用标签和关键词；低置信度的边界题仍可能需要后续人工审核。
 - 没有多选结果、连续结果或数值预测评分。
 - 没有 difficulty-adjusted Brier 或事件固定效应。
 - Performance Weighted 只基于平台内部已结算历史。

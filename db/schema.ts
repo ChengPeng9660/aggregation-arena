@@ -66,3 +66,88 @@ export const auditLog = sqliteTable("audit_log", {
   actor: text("actor").notNull().default("local-admin"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const polymarketCandidates = sqliteTable("polymarket_candidates", {
+  marketId: text("market_id").primaryKey(),
+  sourceEventId: text("source_event_id").notNull(),
+  eventSlug: text("event_slug").notNull().default(""),
+  marketSlug: text("market_slug").notNull().default(""),
+  seriesId: text("series_id").notNull().default(""),
+  title: text("title").notNull(),
+  description: text("description").notNull().default(""),
+  rules: text("rules").notNull().default(""),
+  category: text("category").notNull(),
+  categoryConfidence: real("category_confidence").notNull().default(0),
+  tagsJson: text("tags_json").notNull().default("[]"),
+  outcomesJson: text("outcomes_json").notNull().default("[]"),
+  closeTime: text("close_time"),
+  startTime: text("start_time"),
+  yesPrice: real("yes_price").notNull().default(0),
+  volume24h: real("volume_24h").notNull().default(0),
+  totalVolume: real("total_volume").notNull().default(0),
+  liquidity: real("liquidity").notNull().default(0),
+  volumePercentile: real("volume_percentile").notNull().default(0),
+  selectionScore: real("selection_score").notNull().default(0),
+  eligible: integer("eligible").notNull().default(0),
+  rejectionReasonsJson: text("rejection_reasons_json").notNull().default("[]"),
+  sourceUrl: text("source_url").notNull().default(""),
+  rawJson: text("raw_json").notNull().default("{}"),
+  firstSeenAt: text("first_seen_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  lastSeenAt: text("last_seen_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const marketSnapshots = sqliteTable("market_snapshots", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  marketId: text("market_id").notNull(),
+  capturedAt: text("captured_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  yesPrice: real("yes_price").notNull(),
+  volume24h: real("volume_24h").notNull(),
+  totalVolume: real("total_volume").notNull(),
+  liquidity: real("liquidity").notNull(),
+});
+
+export const curationSyncRuns = sqliteTable("curation_sync_runs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  status: text("status").notNull(),
+  fetchedEvents: integer("fetched_events").notNull().default(0),
+  fetchedMarkets: integer("fetched_markets").notNull().default(0),
+  eligibleMarkets: integer("eligible_markets").notNull().default(0),
+  detailJson: text("detail_json").notNull().default("{}"),
+  startedAt: text("started_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  completedAt: text("completed_at"),
+});
+
+export const selectionRuns = sqliteTable("selection_runs", {
+  id: text("id").primaryKey(),
+  configVersion: text("config_version").notNull(),
+  taxonomyVersion: text("taxonomy_version").notNull(),
+  status: text("status").notNull(),
+  candidateCount: integer("candidate_count").notNull().default(0),
+  eligibleCount: integer("eligible_count").notNull().default(0),
+  selectedCount: integer("selected_count").notNull().default(0),
+  categoryCountsJson: text("category_counts_json").notNull().default("{}"),
+  startedAt: text("started_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  completedAt: text("completed_at"),
+});
+
+export const selectionItems = sqliteTable(
+  "selection_items",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    runId: text("run_id").notNull(),
+    marketId: text("market_id").notNull(),
+    eventId: text("event_id").notNull(),
+    category: text("category").notNull(),
+    rank: integer("rank").notNull(),
+    selectionScore: real("selection_score").notNull(),
+    priceAtSelection: real("price_at_selection").notNull(),
+    volume24h: real("volume_24h").notNull(),
+    totalVolume: real("total_volume").notNull(),
+    liquidity: real("liquidity").notNull(),
+    selectedAt: text("selected_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("selection_items_market_unique").on(table.marketId),
+    uniqueIndex("selection_items_run_market_unique").on(table.runId, table.marketId),
+  ],
+);
