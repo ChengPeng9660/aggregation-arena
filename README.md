@@ -10,6 +10,10 @@
 
 <https://aggregation-arena-benchmark.iushanghai.chatgpt.site>
 
+GitHub 自动部署的公开 Cloudflare 版本：
+
+<https://aggregation-arena.chengpeng9660.workers.dev>
+
 ## 目录
 
 - [已经实现的功能](#已经实现的功能)
@@ -21,6 +25,7 @@
 - [如何测试](#如何测试)
 - [如何推送到自己的 GitHub](#如何推送到自己的-github)
 - [GitHub 与网站部署的区别](#github-与网站部署的区别)
+- [GitHub 自动部署到 Cloudflare](#github-自动部署到-cloudflare)
 - [数据存储与重置](#数据存储与重置)
 - [API](#api)
 - [项目结构](#项目结构)
@@ -612,24 +617,59 @@ gh repo view --web
 - D1 数据库。
 - 生产环境登录身份 Header。
 
-把源码推到 GitHub 不会自动更新当前生产网站。
+仓库中的 `.github/workflows/deploy-cloudflare.yml` 会在 `main` 更新后运行验证、D1 Migration 和 Worker 部署。GitHub Pages 仍然没有参与这个流程。
 
 ### 当前生产部署
 
-当前线上版本由 Sites 承载，并使用 Cloudflare Worker 与 D1。
+项目保留两套互相独立的部署：
 
-源码修改后的标准流程是：
+- 原 Sites 版本及其原 D1，作为现有站点与回退版本。
+- GitHub 自动部署的 Cloudflare Worker 版本及其独立 D1。
+
+两套 D1 不会自动同步。新的 Cloudflare D1 第一次收到请求时会初始化 Demo Season。
+
+## GitHub 自动部署到 Cloudflare
+
+自动部署流程：
 
 ```text
-修改代码
+GitHub main
+→ npm ci
 → npm run lint
 → npm test
-→ Git Commit
-→ Push 到 GitHub
-→ 保存并部署新的 Sites Version
+→ 应用 D1 migrations
+→ 部署 Cloudflare Worker
+→ 更新公开 workers.dev 网站
 ```
 
-如果其他人 Fork 本仓库并希望部署自己的独立站点，需要创建自己的 Sites 项目与 D1 资源，不能假设拥有当前 `.openai/hosting.json` 中项目的部署权限。
+触发条件：
+
+- PR 合并到 `main`。
+- 直接 Push 到 `main`。
+- 在 GitHub Actions 页面手动运行 `Deploy to Cloudflare`。
+
+仓库需要以下 GitHub Actions Secrets：
+
+| Secret | 用途 |
+|---|---|
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账户 ID |
+| `CLOUDFLARE_API_TOKEN` | 允许编辑 Workers 与 D1 的 API Token |
+
+Cloudflare 资源写在 `wrangler.deploy.jsonc` 中。单独命名是为了避免生产 D1 配置干扰 Vinext 的本地 D1。API Token 和管理员 Token 均不得提交到 Git。
+
+Cloudflare 公网站点的读取接口不要求登录。创建题目、录入概率和结算等写操作要求管理员 Token；网页在第一次写操作时提示输入，并仅将 Token 放在当前标签页的 `sessionStorage` 中。关闭标签页后需要重新输入。
+
+手动验证或紧急部署：
+
+```bash
+npm ci
+npm run lint
+npm test
+npm run db:migrate:remote
+npm run deploy:cloudflare
+```
+
+如果其他人 Fork 本仓库，需要创建自己的 D1、修改 `wrangler.deploy.jsonc` 中的数据库 ID，并在自己的 GitHub 仓库配置上述 Secrets。
 
 ## 数据存储与重置
 
@@ -705,7 +745,12 @@ POST /api/arena
 }
 ```
 
-生产写请求必须带有 Sites 身份网关提供的 `oai-authenticated-user-email`。不要在公网部署中自行伪造或信任来自未受保护代理的该 Header。
+生产写请求必须满足下列条件之一：
+
+- Sites 身份网关提供可信的 `oai-authenticated-user-email`。
+- Cloudflare Worker 收到 `Authorization: Bearer <ADMIN_TOKEN>`，且 Token 与 Worker Secret 一致。
+
+直接 Cloudflare 部署会忽略客户端自行添加的 `oai-authenticated-user-email`，避免伪造 Sites 身份 Header。不要把 `ADMIN_TOKEN` 放入 Git、URL、截图或浏览器长期存储。
 
 ## 项目结构
 
@@ -730,6 +775,9 @@ aggregation-benchmark-platform/
 │   └── scoring.test.mjs
 ├── .openai/
 │   └── hosting.json          # Sites 项目与逻辑 D1 Binding
+├── .github/workflows/
+│   └── deploy-cloudflare.yml # main 自动验证与部署
+├── wrangler.deploy.jsonc     # Cloudflare Worker、D1 与静态资源配置
 ├── package.json
 └── README.md
 ```
@@ -754,7 +802,7 @@ aggregation-benchmark-platform/
 - 没有多选结果、连续结果或数值预测评分。
 - 没有 difficulty-adjusted Brier 或事件固定效应。
 - Performance Weighted 只基于平台内部已结算历史。
-- 当前身份模型依赖 Sites 私有访问网关，不是完整的多角色权限系统。
+- 当前身份模型支持 Sites 私有访问网关或单一 Cloudflare 管理员 Token，不是完整的多角色权限系统。
 - 事件使用作废而不是永久删除，以保留审计轨迹。
 - 自动化测试覆盖核心构建与评分契约，但尚未覆盖所有表单交互和所有 API 错误分支。
 

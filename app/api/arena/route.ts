@@ -7,6 +7,7 @@ import {
   resolveEvent,
   submitForecasts,
 } from "@/lib/arena";
+import { env } from "cloudflare:workers";
 
 export const dynamic = "force-dynamic";
 
@@ -92,10 +93,43 @@ function writeActor(request: Request) {
   const url = new URL(request.url);
   const email = request.headers.get("oai-authenticated-user-email");
   const isLocal = url.hostname === "localhost" || url.hostname === "127.0.0.1";
-  if (!email && !isLocal) {
-    throw new ArenaError(401, "请先登录后再修改 benchmark 数据");
+  const runtimeEnv = env as unknown as {
+    ADMIN_TOKEN?: string;
+    DEPLOYMENT_TARGET?: string;
+  };
+  const isDirectCloudflare = runtimeEnv.DEPLOYMENT_TARGET === "cloudflare";
+
+  if (email && !isDirectCloudflare) return email;
+  if (isLocal) return "local-admin";
+
+  const configuredToken = runtimeEnv.ADMIN_TOKEN;
+  const authorization = request.headers.get("authorization");
+  const suppliedToken = authorization?.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length)
+    : "";
+
+  if (
+    configuredToken &&
+    suppliedToken &&
+    constantTimeEqual(suppliedToken, configuredToken)
+  ) {
+    return "cloudflare-admin";
   }
-  return email || "local-admin";
+
+  throw new ArenaError(
+    401,
+    "需要管理员 Token 才能修改 benchmark 数据",
+  );
+}
+
+function constantTimeEqual(left: string, right: string) {
+  const length = Math.max(left.length, right.length);
+  let mismatch = left.length ^ right.length;
+  for (let index = 0; index < length; index += 1) {
+    mismatch |=
+      (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
+  }
+  return mismatch === 0;
 }
 
 function routeError(error: unknown) {

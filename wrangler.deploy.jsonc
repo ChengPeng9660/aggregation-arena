@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "aggregation-arena",
+  "main": "./dist/server/index.js",
+  "account_id": "877057fd4edb5cf6bbd3d03953302770",
+  "compatibility_date": "2026-07-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "no_bundle": true,
+  "keep_vars": true,
+  "vars": {
+    "DEPLOYMENT_TARGET": "cloudflare"
+  },
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./dist/client"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aggregation-arena-production",
+      "database_id": "8351e8d1-5d92-4afd-b3b8-2f22c84b24b5",
+      "migrations_dir": "./drizzle"
+    }
+  ],
+  "images": {
+    "binding": "IMAGES"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "rules": [
+    {
+      "type": "ESModule",
+      "globs": ["**/*.js", "**/*.mjs"]
+    }
+  ]
+}
