@@ -430,7 +430,7 @@ tbody tr.top-row { background: linear-gradient(90deg, rgba(138,97,255,.05), tran
 .event-context { padding-bottom: 19px; border-bottom: 1px solid var(--line); }
 .event-context > span { color: var(--gold); font: 8px var(--font-geist-mono), monospace; letter-spacing: .08em; text-transform: uppercase; }
 .event-context h3 { margin: 9px 0 0; font-size: 15px; line-height: 1.35; }
-.event-context p { margin: 9px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.event-context p { margin: 9px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; white-space: pre-line; }
 .forecast-form, .resolve-form { display: grid; gap: 17px; }
 .probability-grid { display: grid; }
 .probability-grid label { display: grid; grid-template-columns: 6px minmax(0, 1fr) 105px 40px; gap: 12px; align-items: center; min-height: 58px; border-bottom: 1px solid var(--line); }

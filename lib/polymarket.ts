@@ -211,9 +211,15 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
 
   const statements = selected.flatMap((candidate) => {
     const eventId = `poly-${candidate.marketId}`;
+    const sourceMetadata = [
+      "Source: Polymarket",
+      candidate.sourceUrl ? `Market URL: ${candidate.sourceUrl}` : "",
+      `Selection run: ${runId}`,
+      `Price at selection: ${(candidate.yesPrice * 100).toFixed(1)}%`,
+    ].filter(Boolean).join("\n");
     const description = [
       candidate.description,
-      `Source: Polymarket. Selection run: ${runId}. Price at selection: ${(candidate.yesPrice * 100).toFixed(1)}%.`,
+      sourceMetadata,
     ].filter(Boolean).join("\n\n");
     return [
       db.prepare(`
