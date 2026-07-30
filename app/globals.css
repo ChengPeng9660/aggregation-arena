@@ -243,8 +243,6 @@ tbody tr.top-row { background: linear-gradient(90deg, rgba(138,97,255,.05), tran
 .coverage-cell > span { width: 42px; height: 3px; overflow: hidden; border-radius: 99px; background: var(--line); }
 .coverage-cell > span i { display: block; height: 100%; border-radius: inherit; background: var(--purple); }
 .coverage-cell b { width: 27px; color: var(--muted); font: 8px var(--font-geist-mono), monospace; }
-.mini-bars { height: 25px; display: inline-flex; align-items: flex-end; gap: 2px; }
-.mini-bars i { width: 3px; min-height: 3px; border-radius: 2px 2px 0 0; opacity: .72; }
 .empty-cell { padding: 48px; color: var(--quiet); text-align: center !important; }
 
 .open-queue, .queue-board, .resolved-board { margin-top: 36px; }

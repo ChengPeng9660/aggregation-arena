@@ -53,7 +53,6 @@ type LeaderboardRow = {
   coverage: number;
   gainVsMean: number | null;
   status: "listed" | "provisional";
-  recent: number[];
   version: string;
 };
 
@@ -453,10 +452,10 @@ function LeaderboardView({
         </div>
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Rank</th><th>Method / Forecaster</th><th>Brier Index</th><th>95% CI</th><th>Raw Brier</th><th>vs Equal Mean</th><th>N</th><th>Coverage</th><th>Recent</th></tr></thead>
+            <thead><tr><th>Rank</th><th>Method / Forecaster</th><th>Brier Index</th><th>95% CI</th><th>Raw Brier</th><th>vs Equal Mean</th><th>N</th><th>Coverage</th></tr></thead>
             <tbody>
               {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} />) : (
-                <tr><td colSpan={9} className="empty-cell">当前筛选下还没有已结算成绩。</td></tr>
+                <tr><td colSpan={8} className="empty-cell">当前筛选下还没有已结算成绩。</td></tr>
               )}
             </tbody>
           </table>
@@ -489,7 +488,6 @@ function LeaderboardRowView({ row }: { row: LeaderboardRow }) {
       <td>{row.gainVsMean === null ? <span className="muted-number">—</span> : <span className={row.gainVsMean >= 0 ? "positive" : "negative"}>{signed(row.gainVsMean)}%</span>}</td>
       <td className="mono-number">{row.resolved}</td>
       <td><div className="coverage-cell"><span><i style={{ width: `${Math.min(100, row.coverage)}%` }} /></span><b>{row.coverage.toFixed(0)}%</b></div></td>
-      <td><MiniBars values={row.recent} color={row.color} /></td>
     </tr>
   );
 }
@@ -753,12 +751,6 @@ function ActivityView({ snapshot }: { snapshot: Snapshot }) {
 
 function Metric({ label, value, detail, highlight = false }: { label: string; value: string | number; detail: string; highlight?: boolean }) {
   return <div className={highlight ? "metric highlight" : "metric"}><small>{label}</small><strong>{value}</strong><span>{detail}</span></div>;
-}
-
-function MiniBars({ values, color }: { values: number[]; color: string }) {
-  const min = Math.min(...values, 35);
-  const max = Math.max(...values, 75);
-  return <span className="mini-bars" aria-label="Recent Brier Index">{values.map((value, index) => <i key={`${value}-${index}`} style={{ height: `${20 + ((value - min) / Math.max(1, max - min)) * 70}%`, background: color }} />)}</span>;
 }
 
 function DialogShell({ title, kicker, onClose, children }: { title: string; kicker: string; onClose: () => void; children: React.ReactNode }) {

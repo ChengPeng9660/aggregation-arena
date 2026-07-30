@@ -456,7 +456,6 @@ async function buildLeaderboard(
       const meanBrier = baseline.length ? mean(baseline) : null;
       const method = methodMeta.get(id);
       const participant = participantMeta.get(id);
-      const recent = losses.slice(-8).map((loss) => brierIndex(loss));
       return {
         id,
         name: String(method?.name || group[0].participant_name),
@@ -473,7 +472,6 @@ async function buildLeaderboard(
         gainVsMean:
           meanBrier !== null && meanBrier > 0 ? ((meanBrier - averageBrier) / meanBrier) * 100 : null,
         status: losses.length >= 5 ? "listed" : "provisional",
-        recent,
         version: String(group[group.length - 1].version || "v1"),
       };
     })
