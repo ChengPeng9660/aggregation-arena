@@ -151,3 +151,46 @@ export const selectionItems = sqliteTable(
     uniqueIndex("selection_items_run_market_unique").on(table.runId, table.marketId),
   ],
 );
+
+export const researchContexts = sqliteTable(
+  "research_contexts",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id").notNull(),
+    selectionRunId: text("selection_run_id").notNull(),
+    provider: text("provider").notNull(),
+    searchQuery: text("search_query").notNull(),
+    searchPromptVersion: text("search_prompt_version").notNull(),
+    sourcesJson: text("sources_json").notNull(),
+    marketSnapshotJson: text("market_snapshot_json").notNull(),
+    sourceCount: integer("source_count").notNull().default(0),
+    status: text("status").notNull().default("ready"),
+    error: text("error"),
+    asOfTime: text("as_of_time").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [uniqueIndex("research_context_event_version_unique").on(table.eventId, table.searchPromptVersion)],
+);
+
+export const modelForecastRuns = sqliteTable(
+  "model_forecast_runs",
+  {
+    id: text("id").primaryKey(),
+    contextId: text("context_id").notNull(),
+    eventId: text("event_id").notNull(),
+    participantId: text("participant_id").notNull(),
+    modelId: text("model_id").notNull(),
+    promptVersion: text("prompt_version").notNull(),
+    status: text("status").notNull(),
+    yesProbability: real("yes_probability"),
+    noProbability: real("no_probability"),
+    rationale: text("rationale"),
+    citedSourcesJson: text("cited_sources_json").notNull().default("[]"),
+    rawResponse: text("raw_response"),
+    latencyMs: integer("latency_ms"),
+    error: text("error"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    completedAt: text("completed_at"),
+  },
+  (table) => [uniqueIndex("model_forecast_context_participant_unique").on(table.contextId, table.participantId)],
+);

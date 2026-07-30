@@ -7,6 +7,8 @@ import {
   resolveEvent,
   submitForecasts,
 } from "@/lib/arena";
+import { getForecastPipelineSnapshot, runForecastBatch } from "@/lib/forecasting";
+import { env } from "cloudflare:workers";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +27,11 @@ export async function GET(request: Request) {
       season: url.searchParams.get("season") || "all",
       category: url.searchParams.get("category") || "all",
     });
-    return Response.json(snapshot, { headers: { "Cache-Control": "no-store" } });
+    const forecastPipeline = await getForecastPipelineSnapshot(
+      undefined,
+      env as unknown as { AI?: unknown; TAVILY_API_KEY?: string },
+    );
+    return Response.json({ ...snapshot, forecastPipeline }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return routeError(error);
   }
@@ -78,6 +84,8 @@ export async function POST(request: Request) {
         },
         actor,
       );
+    } else if (action === "run_forecast_batch") {
+      result = await runForecastBatch(env as unknown as Parameters<typeof runForecastBatch>[0], 1);
     } else {
       throw new ArenaError(400, "未知操作");
     }

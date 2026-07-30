@@ -12,6 +12,10 @@
   "images": {
     "binding": "IMAGES"
   },
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
   "triggers": {
     "crons": ["0 * * * *", "10 0 * * *"]
   },

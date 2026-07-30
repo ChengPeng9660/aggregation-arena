@@ -2,10 +2,15 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { runPolymarketScheduled } from "../lib/polymarket";
+import { runForecastBatch } from "../lib/forecasting";
 
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  AI: {
+    run(model: string, input: Record<string, unknown>): Promise<unknown>;
+  };
+  TAVILY_API_KEY?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -44,7 +49,10 @@ const worker = {
     return handler.fetch(request, env, ctx);
   },
   async scheduled(controller: { cron: string }, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(runPolymarketScheduled(env, controller));
+    ctx.waitUntil((async () => {
+      await runPolymarketScheduled(env, controller);
+      await runForecastBatch(env, 3);
+    })());
   },
 };
 

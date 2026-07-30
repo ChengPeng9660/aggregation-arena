@@ -2,7 +2,7 @@
 
 ![Aggregation Arena](public/og.png)
 
-一个支持 Polymarket 自动选题、手工概率录入、自动聚合、结果结算、实时排名和审计追踪的预测聚合 Benchmark 平台。
+一个支持 Polymarket 自动选题、共享信息检索、LLM 自动预测、手工概率录入、自动聚合、结果结算、实时排名和审计追踪的预测聚合 Benchmark 平台。
 
 系统每小时从 Polymarket Gamma API 同步活跃市场，先做成交量、流动性、截止窗口、概率区间和规则完整性筛选，再按七个固定类别均衡发布每日题集。管理员也可以手工创建二元事件并录入每个 Forecaster 的数字概率；所有聚合方法使用完全相同的输入，事件结算后按 Binary Brier Score 自动更新 Leaderboard。
 
@@ -14,6 +14,7 @@ Cloudflare Worker 版本：
 
 - [已经实现的功能](#已经实现的功能)
 - [完整数据流程](#完整数据流程)
+- [LLM 自动预测流水线](#llm-自动预测流水线)
 - [聚合方法](#聚合方法)
 - [评分与排名](#评分与排名)
 - [技术架构](#技术架构)
@@ -69,6 +70,20 @@ Cloudflare Worker 版本：
 - 在同一事件中为多个 Forecaster 批量输入概率。
 - 输入范围固定为 `0–1`。
 - 同一个 Forecaster 可以更新尚未结算事件的概率。
+
+### LLM 自动预测
+
+- 使用 Tavily Basic Search 为每道入选题目检索最多 10 个近期来源。
+- 一道题只检索一次；来源、检索时间和 Polymarket 入选时价格冻结到 `research_contexts`。
+- 所有当前和未来模型复用完全相同的 Context，避免检索差异污染模型比较。
+- 首个模型为 Cloudflare Workers AI 的 `@cf/meta/llama-3.2-3b-instruct`。
+- Prompt 仿照 Prophet Arena：明确题目、结算规则、截止时间、共享来源和市场快照。
+- 模型必须输出 Yes / No 概率、最多三句话的理由和所引用的 Source Rank。
+- 系统解析 JSON、归一化二元概率、限制概率在 `0.01–0.99`；格式错误时自动重试一次。
+- 每次运行完整保存模型、Prompt 版本、原始响应、延迟、引用来源和失败原因。
+- 完成后的模型概率进入现有 `predictions`、不可变 `prediction_history`、Aggregation 和 Leaderboard。
+- Forecasts 页面显示流水线配置、待处理数量、预测结果、理由和冻结证据。
+- 每小时同步 Polymarket 后最多补跑 3 道未预测题目；也可以由管理员手工触发下一题。
 
 ### 聚合计算
 
@@ -160,6 +175,62 @@ Polymarket 明确结算后自动同步结果
       ↓
 实时更新 Leaderboard
 ```
+
+## LLM 自动预测流水线
+
+```text
+Daily balanced Polymarket release
+      ↓
+Tavily Basic Search（每道题一次，最多 10 个来源）
+      ↓
+冻结 Research Context
+  ├─ Sources + rank + URL + summary
+  ├─ Search query + as-of time
+  └─ Polymarket price / volume / liquidity snapshot
+      ↓
+同一份 Context 分发给所有模型
+      ↓
+Cloudflare Llama 3.2 3B（首个免费模型）
+      ↓
+严格 JSON 解析 + 概率归一化 + 一次格式重试
+      ↓
+Prediction History → Aggregators → Brier Leaderboard
+```
+
+这个实现保留了 Prophet Arena 最重要的实验控制：同一事件的模型必须看到同样的信息来源与市场快照。后续增加模型时，只需在模型注册表中增加 Runner，并使用已有的 `context_id`，不能重新搜索。
+
+### 免费额度估算
+
+- Tavily 免费账户每月 1,000 API Credits；Basic Search 每次 1 Credit。
+- 默认每日最多 21 题，每题搜索一次，30 天约使用 `21 × 30 = 630 Credits`。
+- Cloudflare Workers AI 有每日免费 Neurons 配额；实际消耗取决于 Prompt 来源长度和输出长度。
+- 为减少消耗，当前每小时最多处理 3 题、每个来源摘要最多 1,800 字符、模型最多输出 700 tokens。
+
+### 配置 API 密钥
+
+先在 <https://app.tavily.com> 免费注册并复制 `tvly-...` API Key。不要把 Key 写入 `wrangler.jsonc`、README、Git commit 或前端代码。
+
+在正确的 Cloudflare 账户登录后执行：
+
+```bash
+npx wrangler login
+npx wrangler whoami
+npx wrangler secret put TAVILY_API_KEY
+```
+
+最后一条命令会提示粘贴 Key。项目已经在 `wrangler.jsonc` 中声明 Workers AI binding：
+
+```json
+"ai": {
+  "binding": "AI"
+}
+```
+
+部署后打开网站的 `Forecasts` 页面。`Pipeline` 显示 `READY` 后，可等待每小时 Cron，或登录后点击 `Run next event`。
+
+### 本地测试限制
+
+Cloudflare Workers AI 不能在纯本地环境执行模型推理。本地测试覆盖 Query、Source 去重、Prompt、JSON 解析和概率校验；真实搜索与模型端到端测试需要使用 Cloudflare 远程运行环境，并设置 Tavily Secret。
 
 选题配置在 [`lib/curation-core.js`](lib/curation-core.js)，数据同步和定时任务在 [`lib/polymarket.ts`](lib/polymarket.ts)。修改门槛时应同时升级 `configVersion`，这样历史批次仍然可以解释。
 

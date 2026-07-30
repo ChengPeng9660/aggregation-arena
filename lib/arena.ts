@@ -519,6 +519,49 @@ async function syncAggregates(eventId: string) {
   return rowsToWrite.map(([id, probability]) => ({ id, probability }));
 }
 
+export async function recordAutomatedForecast(payload: {
+  eventId: string;
+  participantId: string;
+  participantName: string;
+  probability: number;
+  rationale: string;
+  version: string;
+  components: Record<string, unknown>;
+}) {
+  await ensureArenaReady();
+  const db = getD1();
+  const event = await db.prepare("SELECT status FROM events WHERE id=?").bind(payload.eventId)
+    .first<{ status: string }>();
+  if (!event) throw new ArenaError(404, "题目不存在");
+  if (event.status !== "open") throw new ArenaError(409, "题目已锁定，不能写入自动预测");
+  await upsertPrediction(
+    payload.eventId,
+    {
+      participantId: payload.participantId,
+      participantName: payload.participantName,
+      probability: payload.probability,
+      rationale: payload.rationale,
+    },
+    "forecaster",
+    payload.version,
+    JSON.stringify(payload.components),
+  );
+  const aggregates = await syncAggregates(payload.eventId);
+  await writeAudit(
+    "forecast.automated_completed",
+    "event",
+    payload.eventId,
+    {
+      participantId: payload.participantId,
+      probability: payload.probability,
+      contextId: payload.components.contextId,
+      aggregateCount: aggregates.length,
+    },
+    "forecast-cron",
+  );
+  return { eventId: payload.eventId, probability: payload.probability, aggregates };
+}
+
 async function getPerformanceWeights(participantIds: string[]) {
   const db = getD1();
   const weights: Record<string, number> = {};

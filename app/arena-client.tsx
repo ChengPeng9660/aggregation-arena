@@ -119,6 +119,48 @@ type CurationSnapshot = {
   }[];
 };
 
+type ForecastSource = {
+  rank: number;
+  title: string;
+  url: string;
+  content: string;
+  publishedDate: string | null;
+  score: number | null;
+};
+
+type ForecastPipelineSnapshot = {
+  model: {
+    participantId: string;
+    participantName: string;
+    organization: string;
+    modelId: string;
+    promptVersion: string;
+    color: string;
+  };
+  configured: { aiBinding: boolean; searchSecret: boolean };
+  stats: { contextsReady: number; completed: number; failed: number; pending: number };
+  runs: {
+    id: string;
+    eventId: string;
+    title: string;
+    category: string;
+    contextId: string;
+    modelId: string;
+    status: "running" | "completed" | "failed";
+    yesProbability: number | null;
+    noProbability: number | null;
+    rationale: string | null;
+    citedSourceRanks: number[];
+    sources: ForecastSource[];
+    sourceCount: number;
+    provider: string;
+    latencyMs: number | null;
+    error: string | null;
+    asOfTime: string;
+    completedAt: string | null;
+  }[];
+};
+
 type Snapshot = {
   generatedAt: string;
   stats: {
@@ -152,9 +194,10 @@ type Snapshot = {
     weightingRule: string;
   };
   curation: CurationSnapshot;
+  forecastPipeline: ForecastPipelineSnapshot;
 };
 
-type View = "leaderboard" | "curation" | "events" | "methods" | "activity";
+type View = "leaderboard" | "curation" | "forecasts" | "events" | "methods" | "activity";
 type Dialog =
   | { type: "create-event" }
   | { type: "create-participant" }
@@ -170,6 +213,8 @@ const ACTION_LABELS: Record<string, string> = {
   "event.reopened": "重新开放题目",
   "event.invalidated": "作废题目",
   "forecast.batch_submitted": "提交一批预测",
+  "forecast.automated_completed": "自动模型预测完成",
+  "forecast.pipeline_failed": "自动预测流水线失败",
   "participant.upserted": "更新 forecaster",
   "curation.event_selected": "Polymarket 题目入选",
   "curation.event_resolved": "Polymarket 自动结算",
@@ -257,9 +302,10 @@ export function ArenaClient({ userName }: { userName: string }) {
         <nav aria-label="Benchmark navigation">
           <NavButton active={view === "leaderboard"} label="Leaderboard" meta="实时榜单" icon="01" onClick={() => setView("leaderboard")} />
           <NavButton active={view === "curation"} label="Curation" meta="动态选题" icon="02" onClick={() => setView("curation")} />
-          <NavButton active={view === "events"} label="Events" meta="题目与录入" icon="03" onClick={() => setView("events")} />
-          <NavButton active={view === "methods"} label="Methods" meta="聚合方法" icon="04" onClick={() => setView("methods")} />
-          <NavButton active={view === "activity"} label="Audit log" meta="审计记录" icon="05" onClick={() => setView("activity")} />
+          <NavButton active={view === "forecasts"} label="Forecasts" meta="模型流水线" icon="03" onClick={() => setView("forecasts")} />
+          <NavButton active={view === "events"} label="Events" meta="题目与录入" icon="04" onClick={() => setView("events")} />
+          <NavButton active={view === "methods"} label="Methods" meta="聚合方法" icon="05" onClick={() => setView("methods")} />
+          <NavButton active={view === "activity"} label="Audit log" meta="审计记录" icon="06" onClick={() => setView("activity")} />
         </nav>
         <div className="sidebar-status">
           <span className="status-dot" />
@@ -315,6 +361,13 @@ export function ArenaClient({ userName }: { userName: string }) {
               />
             )}
             {view === "curation" && <CurationView snapshot={snapshot} />}
+            {view === "forecasts" && (
+              <ForecastsView
+                snapshot={snapshot}
+                busy={mutating}
+                onRun={() => post({ action: "run_forecast_batch" }, "已运行一个预测任务")}
+              />
+            )}
             {view === "methods" && <MethodsView snapshot={snapshot} />}
             {view === "activity" && <ActivityView snapshot={snapshot} />}
           </>
@@ -558,6 +611,99 @@ function EventsView({
   );
 }
 
+function ForecastsView({
+  snapshot,
+  busy,
+  onRun,
+}: {
+  snapshot: Snapshot;
+  busy: boolean;
+  onRun: () => void;
+}) {
+  const pipeline = snapshot.forecastPipeline;
+  const ready = pipeline.configured.aiBinding && pipeline.configured.searchSecret;
+  return (
+    <div className="page-content enter">
+      <section className="page-heading compact-heading">
+        <div>
+          <span className="eyebrow">PROPHET-STYLE / SHARED CONTEXT</span>
+          <h1>LLM forecast pipeline</h1>
+          <p>每道题只检索一次并冻结来源、市场价格和时间戳；所有模型读取完全相同的 context，再独立给出 Yes / No 概率。</p>
+        </div>
+        <button className="primary-button" disabled={busy || !ready || !pipeline.stats.pending} onClick={onRun}>
+          {busy ? "Running…" : "Run next event"}
+        </button>
+      </section>
+
+      {!ready && (
+        <section className="pipeline-alert">
+          <b>还差一项部署配置</b>
+          <span>
+            {pipeline.configured.aiBinding ? "Workers AI 已连接；请设置 TAVILY_API_KEY。" : "请连接 Workers AI binding。"}
+          </span>
+          <code>npx wrangler secret put TAVILY_API_KEY</code>
+        </section>
+      )}
+
+      <section className="metric-strip">
+        <Metric label="Frozen contexts" value={pipeline.stats.contextsReady} detail="one search per event" />
+        <Metric label="Completed" value={pipeline.stats.completed} detail={pipeline.model.participantName} />
+        <Metric label="Pending" value={pipeline.stats.pending} detail="open selected events" />
+        <Metric label="Pipeline" value={ready ? "READY" : "SETUP"} detail="3 events / hourly run" highlight />
+      </section>
+
+      <section className="pipeline-flow" aria-label="Forecast pipeline">
+        <div><span>01</span><b>Selected event</b><small>balanced Polymarket slate</small></div>
+        <i>→</i>
+        <div><span>02</span><b>Tavily Search</b><small>up to 10 ranked sources</small></div>
+        <i>→</i>
+        <div><span>03</span><b>Frozen context</b><small>same evidence for every model</small></div>
+        <i>→</i>
+        <div className="model-step"><span>04</span><b>{pipeline.model.participantName}</b><small>Workers AI · strict JSON validation</small></div>
+        <i>→</i>
+        <div><span>05</span><b>Arena score</b><small>prediction history + Brier</small></div>
+      </section>
+
+      <section className="forecast-runs">
+        <div className="section-title">
+          <div><span className="eyebrow">REPRODUCIBLE RUNS</span><h2>Recent model forecasts</h2></div>
+          <span>{pipeline.model.promptVersion}</span>
+        </div>
+        {pipeline.runs.length ? pipeline.runs.map((run) => (
+          <article key={run.id} className={`forecast-run ${run.status}`}>
+            <div className="run-status"><i /><span>{run.status}</span></div>
+            <div className="run-question">
+              <span>{run.category} · {run.sourceCount} shared sources</span>
+              <h3>{run.title}</h3>
+              {run.rationale && <p>{run.rationale}</p>}
+              {run.error && <p className="run-error">{run.error}</p>}
+              <details>
+                <summary>Inspect frozen evidence</summary>
+                <div className="source-list">
+                  {run.sources.map((source) => (
+                    <a key={`${run.contextId}-${source.rank}`} href={source.url} target="_blank" rel="noreferrer">
+                      <span>{String(source.rank).padStart(2, "0")}</span>
+                      <div><b>{source.title}</b><small>{source.content}</small></div>
+                    </a>
+                  ))}
+                </div>
+              </details>
+            </div>
+            <div className="run-output">
+              <small>YES PROBABILITY</small>
+              <strong>{run.yesProbability === null ? "—" : `${(run.yesProbability * 100).toFixed(1)}%`}</strong>
+              <span>{run.completedAt ? formatDateTime(run.completedAt) : "in progress"}</span>
+              <code>{run.latencyMs === null ? "" : `${(run.latencyMs / 1000).toFixed(1)}s`}</code>
+            </div>
+          </article>
+        )) : (
+          <div className="empty-block">设置 Tavily 密钥后，定时任务会为最新题集建立第一批共享研究 context。</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function MethodsView({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="page-content enter">
@@ -707,7 +853,7 @@ function LoadingState() {
 }
 
 function viewLabel(view: View) {
-  return { leaderboard: "Leaderboard / 实时榜单", curation: "Curation / 动态选题", events: "Events / 题目管理", methods: "Methods / 方法说明", activity: "Audit log / 审计记录" }[view];
+  return { leaderboard: "Leaderboard / 实时榜单", curation: "Curation / 动态选题", forecasts: "Forecasts / 模型流水线", events: "Events / 题目管理", methods: "Methods / 方法说明", activity: "Audit log / 审计记录" }[view];
 }
 
 function dialogTitle(dialog: NonNullable<Dialog>) {
