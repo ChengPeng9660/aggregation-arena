@@ -673,17 +673,30 @@ function ForecastsView({
               <h3>{run.title}</h3>
               {run.rationale && <p>{run.rationale}</p>}
               {run.error && <p className="run-error">{run.error}</p>}
-              <details>
-                <summary>Inspect frozen evidence</summary>
+              {run.sources.length > 0 && (
+                <section className="source-section" aria-label={`Information sources for ${run.title}`}>
+                  <header>
+                    <b>Information sources</b>
+                    <span>{run.sources.length} frozen · {run.provider}</span>
+                  </header>
                 <div className="source-list">
                   {run.sources.map((source) => (
                     <a key={`${run.contextId}-${source.rank}`} href={source.url} target="_blank" rel="noreferrer">
                       <span>{String(source.rank).padStart(2, "0")}</span>
-                      <div><b>{source.title}</b><small>{source.content}</small></div>
+                      <div>
+                        <b>{source.title}</b>
+                        <small>
+                          {sourceHost(source.url)}
+                          {source.publishedDate ? ` · ${formatSourceDate(source.publishedDate)}` : ""}
+                          {run.citedSourceRanks.includes(source.rank) ? " · cited by model" : ""}
+                        </small>
+                        <p>{source.content}</p>
+                      </div>
                     </a>
                   ))}
                 </div>
-              </details>
+                </section>
+              )}
             </div>
             <div className="run-output">
               <small>YES PROBABILITY</small>
@@ -872,6 +885,21 @@ function formatDate(value: string) {
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatSourceDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+}
+
+function sourceHost(value: string) {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "");
+  } catch {
+    return value;
+  }
 }
 
 function formatCompactMoney(value: number) {

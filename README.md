@@ -74,6 +74,7 @@ Cloudflare Worker 版本：
 ### LLM 自动预测
 
 - 使用 Tavily Basic Search 为每道入选题目检索最多 10 个近期来源。
+- 在 Forecast Pipeline 中直接展示全部冻结来源、域名、发布日期、引用状态和原文链接。
 - 一道题只检索一次；新闻来源、检索时间，以及 Polymarket 入选时和预测前的价格、成交量、流动性双快照冻结到 `research_contexts`。
 - 所有当前和未来模型复用完全相同的 Context，避免检索差异污染模型比较。
 - 首个模型为 Cloudflare Workers AI 的 `@cf/meta/llama-3.2-3b-instruct`。

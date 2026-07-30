@@ -354,16 +354,19 @@ tbody tr.top-row { background: linear-gradient(90deg, rgba(138,97,255,.05), tran
 .run-question h3 { margin: 8px 0 0; font-size: 12px; line-height: 1.45; }
 .run-question p { margin: 9px 0 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
 .run-question .run-error { color: var(--red); }
-.run-question details { margin-top: 11px; }
-.run-question summary { width: max-content; color: var(--purple); cursor: pointer; font: 8px var(--font-geist-mono), monospace; }
-.source-list { display: grid; gap: 0; margin-top: 10px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.source-section { margin-top: 16px; }
+.source-section > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 7px; border-bottom: 1px solid var(--line); }
+.source-section > header b { font-size: 9px; }
+.source-section > header span { color: var(--quiet); font: 7px var(--font-geist-mono), monospace; text-transform: uppercase; }
+.source-list { display: grid; gap: 0; }
 .source-list a { display: grid; grid-template-columns: 26px 1fr; gap: 9px; padding: 10px; color: var(--ink); text-decoration: none; background: var(--surface); }
 .source-list a + a { border-top: 1px solid var(--line); }
 .source-list a:hover { background: var(--purple-soft); }
 .source-list a > span { color: var(--purple); font: 8px var(--font-geist-mono), monospace; }
-.source-list b, .source-list small { display: block; }
+.source-list b, .source-list small, .source-list p { display: block; }
 .source-list b { font-size: 9px; }
-.source-list small { max-height: 28px; margin-top: 4px; overflow: hidden; color: var(--quiet); font-size: 8px; line-height: 1.45; }
+.source-list small { margin-top: 4px; color: var(--gold); font: 7px var(--font-geist-mono), monospace; }
+.run-question .source-list p { display: -webkit-box; margin-top: 5px; overflow: hidden; color: var(--quiet); font-size: 8px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .run-output { text-align: right; }
 .run-output small, .run-output strong, .run-output span, .run-output code { display: block; }
 .run-output small { color: var(--quiet); font: 7px var(--font-geist-mono), monospace; letter-spacing: .08em; }
