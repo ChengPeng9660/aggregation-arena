@@ -93,3 +93,22 @@ test("parsePredictionResponse rejects invalid output", () => {
     /invalid probabilities/,
   );
 });
+
+test("parsePredictionResponse accepts Prophet-style arrays and percentage strings", () => {
+  const arrayPrediction = parsePredictionResponse(JSON.stringify({
+    rationale: "Evidence is mixed.",
+    probabilities: [
+      { market: "Yes", probability: "64%" },
+      { market: "No", probability: "36%" },
+    ],
+  }));
+  assert.equal(arrayPrediction.yesProbability, 0.64);
+  assert.equal(arrayPrediction.noProbability, 0.36);
+
+  const yesOnly = parsePredictionResponse(JSON.stringify({
+    rationale: "A single binary probability was supplied.",
+    yes_probability: 0.57,
+  }));
+  assert.equal(yesOnly.yesProbability, 0.57);
+  assert.equal(yesOnly.noProbability, 0.43);
+});

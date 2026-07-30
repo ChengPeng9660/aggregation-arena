@@ -259,25 +259,12 @@ async function getOrCreateContext(env: ForecastEnv, event: ForecastEvent) {
   if (existing) return contextFromRow(existing, event);
 
   const searchQuery = buildSearchQuery(event);
-  const response = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.TAVILY_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      query: searchQuery,
-      topic: "news",
-      search_depth: "basic",
-      max_results: 10,
-      include_answer: false,
-      include_raw_content: false,
-      include_images: false,
-    }),
-  });
-  if (!response.ok) throw new Error(`Tavily search failed with HTTP ${response.status}`);
-  const payload = await response.json() as { results?: unknown[] };
-  const sources = normalizeSources(payload.results, 10) as ResearchSource[];
+  const newsResults = await searchTavily(env.TAVILY_API_KEY, searchQuery, "news");
+  let sources = normalizeSources(newsResults, 10) as ResearchSource[];
+  if (sources.length < 3) {
+    const generalResults = await searchTavily(env.TAVILY_API_KEY, searchQuery, "general");
+    sources = normalizeSources([...newsResults, ...generalResults], 10) as ResearchSource[];
+  }
   if (sources.length < 3) throw new Error(`Tavily returned only ${sources.length} usable sources`);
   const asOfTime = new Date().toISOString();
   const id = `ctx-${crypto.randomUUID()}`;
@@ -316,6 +303,28 @@ async function getOrCreateContext(env: ForecastEnv, event: ForecastEvent) {
     asOfTime,
   ).run();
   return { id, event, sources, marketSnapshot, asOfTime };
+}
+
+async function searchTavily(apiKey: string, query: string, topic: "news" | "general") {
+  const response = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query,
+      topic,
+      search_depth: "basic",
+      max_results: 10,
+      include_answer: false,
+      include_raw_content: false,
+      include_images: false,
+    }),
+  });
+  if (!response.ok) throw new Error(`Tavily ${topic} search failed with HTTP ${response.status}`);
+  const payload = await response.json() as { results?: unknown[] };
+  return Array.isArray(payload.results) ? payload.results : [];
 }
 
 export async function getForecastPipelineSnapshot(
