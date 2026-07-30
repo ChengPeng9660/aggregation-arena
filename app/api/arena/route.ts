@@ -8,6 +8,7 @@ import {
   submitForecasts,
 } from "@/lib/arena";
 import { getForecastPipelineSnapshot, runForecastBatch } from "@/lib/forecasting";
+import { selectDailyBalancedSlate } from "@/lib/polymarket";
 import { env } from "cloudflare:workers";
 
 export const dynamic = "force-dynamic";
@@ -39,9 +40,11 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const actor = writeActor(request);
     const payload = (await request.json()) as Record<string, unknown>;
     const action = String(payload.action || "");
+    const actor = action === "run_daily_forecast_batch"
+      ? pipelineActor(request)
+      : writeActor(request);
     let result: unknown;
 
     if (action === "create_participant") {
@@ -86,6 +89,11 @@ export async function POST(request: Request) {
       );
     } else if (action === "run_forecast_batch") {
       result = await runForecastBatch(env as unknown as Parameters<typeof runForecastBatch>[0], 1);
+    } else if (action === "run_daily_forecast_batch") {
+      const runtime = env as unknown as Parameters<typeof runForecastBatch>[0];
+      const selection = await selectDailyBalancedSlate(runtime.DB);
+      const forecast = await runForecastBatch(runtime, 3);
+      result = { selection, forecast };
     } else {
       throw new ArenaError(400, "未知操作");
     }
@@ -94,6 +102,16 @@ export async function POST(request: Request) {
   } catch (error) {
     return routeError(error);
   }
+}
+
+function pipelineActor(request: Request) {
+  const configured = (env as unknown as { PIPELINE_ADMIN_TOKEN?: string }).PIPELINE_ADMIN_TOKEN;
+  const authorization = request.headers.get("authorization") || "";
+  const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+  if (!configured || !supplied || supplied !== configured) {
+    throw new ArenaError(401, "无权手工运行生产预测流水线");
+  }
+  return "pipeline-admin";
 }
 
 function writeActor(request: Request) {

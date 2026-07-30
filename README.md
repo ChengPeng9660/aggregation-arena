@@ -228,6 +228,10 @@ npx wrangler secret put TAVILY_API_KEY
 
 部署后打开网站的 `Forecasts` 页面。`Pipeline` 显示 `READY` 后，可等待每小时 Cron，或登录后点击 `Run next event`。
 
+生产环境若需要立即发布当日题集并生成首批 3 条预测，可由维护者使用仅存于
+Cloudflare Secret 的 `PIPELINE_ADMIN_TOKEN` 调用 `run_daily_forecast_batch`。
+该操作会复用当天不可变 selection run，多次调用不会重复发布题目。
+
 ### 本地测试限制
 
 Cloudflare Workers AI 不能在纯本地环境执行模型推理。本地测试覆盖 Query、Source 去重、Prompt、JSON 解析和概率校验；真实搜索与模型端到端测试需要使用 Cloudflare 远程运行环境，并设置 Tavily Secret。
