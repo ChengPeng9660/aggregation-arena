@@ -185,9 +185,9 @@ async function forecastEvent(env: ForecastEnv, event: ForecastEvent) {
 
   const prompt = buildProphetPredictionPrompt(context);
   const requestStarted = Date.now();
+  let raw: unknown;
   try {
     let parsed;
-    let raw: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       raw = await env.AI!.run(FORECAST_MODEL.modelId, {
         messages: [
@@ -239,10 +239,11 @@ async function forecastEvent(env: ForecastEnv, event: ForecastEvent) {
     return { eventId: event.id, contextId: context.id, status: "completed", probability: parsed.yesProbability };
   } catch (error) {
     await env.DB.prepare(`
-      UPDATE model_forecast_runs SET status='failed', error=?, latency_ms=?, completed_at=?
+      UPDATE model_forecast_runs SET status='failed', error=?, raw_response=?, latency_ms=?, completed_at=?
       WHERE context_id=? AND participant_id=?
     `).bind(
       errorMessage(error).slice(0, 1500),
+      serializeRawResponse(raw),
       Date.now() - requestStarted,
       new Date().toISOString(),
       context.id,
@@ -261,11 +262,11 @@ async function getOrCreateContext(env: ForecastEnv, event: ForecastEvent) {
   const searchQuery = buildSearchQuery(event);
   const newsResults = await searchTavily(env.TAVILY_API_KEY, searchQuery, "news");
   let sources = normalizeSources(newsResults, 10) as ResearchSource[];
-  if (sources.length < 3) {
+  if (sources.length < 2) {
     const generalResults = await searchTavily(env.TAVILY_API_KEY, searchQuery, "general");
     sources = normalizeSources([...newsResults, ...generalResults], 10) as ResearchSource[];
   }
-  if (sources.length < 3) throw new Error(`Tavily returned only ${sources.length} usable sources`);
+  if (sources.length < 2) throw new Error(`Tavily returned only ${sources.length} usable sources`);
   const asOfTime = new Date().toISOString();
   const id = `ctx-${crypto.randomUUID()}`;
   const marketSnapshot = {
@@ -456,4 +457,14 @@ function safeJson(value: string, fallback: unknown) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function serializeRawResponse(raw: unknown) {
+  if (raw === undefined) return null;
+  const text = typeof raw === "string"
+    ? raw
+    : typeof (raw as { response?: unknown })?.response === "string"
+      ? String((raw as { response: string }).response)
+      : JSON.stringify(raw);
+  return text.slice(0, 12000);
 }

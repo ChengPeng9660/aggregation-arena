@@ -111,4 +111,10 @@ test("parsePredictionResponse accepts Prophet-style arrays and percentage string
   }));
   assert.equal(yesOnly.yesProbability, 0.57);
   assert.equal(yesOnly.noProbability, 0.43);
+
+  const annotated = parsePredictionResponse(JSON.stringify({
+    rationale: "The value includes a human-readable annotation.",
+    probabilities: { Yes: "0.61 (61%)", No: "0.39 (39%)" },
+  }));
+  assert.equal(annotated.yesProbability, 0.61);
 });
