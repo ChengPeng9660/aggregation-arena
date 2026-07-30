@@ -8,7 +8,7 @@
 
 Cloudflare Worker 版本：
 
-<https://aggregation-arena.luorx00.workers.dev>
+<https://aggregation-arena.chengpeng9660.workers.dev>
 
 ## 目录
 
@@ -355,8 +355,8 @@ Coverage 表示某个 Forecaster 或聚合方法在当前筛选样本中拥有�
 生产数据与本地数据相互独立：
 
 - 本地开发使用 Wrangler 的本地 D1。
-- 生产网站使用 Sites 绑定的生产 D1。
-- `luorx00.workers.dev` 版本使用 `wrangler.jsonc` 中绑定的生产 D1。
+- 生产网站使用 `wrangler.jsonc` 绑定的 ChengPeng 账户 D1。
+- `aggregation-arena.chengpeng9660.workers.dev` 使用 `aggregation-arena-production`。
 - Git 仓库不包含任何 D1 数据文件。
 
 ## 本地安装和运行
@@ -755,7 +755,7 @@ gh repo view --web
 
 ```bash
 npx wrangler whoami
-npx wrangler d1 migrations apply aggregation-arena-db --remote
+npx wrangler d1 migrations apply aggregation-arena-production --remote
 npx wrangler deploy
 ```
 
@@ -764,7 +764,7 @@ npx wrangler deploy
 - `0 * * * *`：每小时同步候选市场并检查结算。
 - `10 0 * * *`：每日同步、检查结算并发布新题集。
 
-必须先检查 `wrangler whoami` 的账号和目标 D1 ID。不要把 `luorx00` 的配置部署到其他 Cloudflare 账号。
+必须先检查 `wrangler whoami` 的账号和目标 D1 ID。当前生产目标是 ChengPeng 账户与 `aggregation-arena-production`。
 
 ## 数据存储与重置
 
