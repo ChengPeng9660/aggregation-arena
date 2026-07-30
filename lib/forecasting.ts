@@ -195,8 +195,8 @@ async function forecastEvent(env: ForecastEnv, event: ForecastEvent) {
           { role: "user", content: attempt ? `${prompt}\n\nYour prior response was invalid. Return the required JSON object only.` : prompt },
         ],
         max_tokens: 700,
-        temperature: 0,
-        seed: 42,
+        temperature: 0.1,
+        seed: deterministicSeed(event.id),
       });
       try {
         parsed = parsePredictionResponse(raw);
@@ -206,6 +206,42 @@ async function forecastEvent(env: ForecastEnv, event: ForecastEvent) {
       }
     }
     if (!parsed) throw new Error("Model response could not be parsed");
+    const initialPrediction = parsed;
+    const reviewRaw = await env.AI!.run(FORECAST_MODEL.modelId, {
+      messages: [
+        {
+          role: "system",
+          content: "Audit a binary forecast for semantic consistency. Return valid JSON only.",
+        },
+        {
+          role: "user",
+          content: `The exact YES outcome is:
+${event.title}
+
+Candidate forecast:
+${JSON.stringify({
+  rationale: initialPrediction.rationale,
+  probabilities: {
+    Yes: initialPrediction.yesProbability,
+    No: initialPrediction.noProbability,
+  },
+  citedSourceRanks: initialPrediction.citedSourceRanks,
+})}
+
+Check that the numeric Yes probability refers to the exact YES outcome above and agrees with any numeric claims in the rationale. Correct an inversion or contradiction if present. Do not change a forecast merely to make it different from other questions. Return JSON only:
+{"rationale":"no more than 3 sentences","probabilities":{"Yes":0.5,"No":0.5},"citedSourceRanks":[1]}`,
+        },
+      ],
+      max_tokens: 450,
+      temperature: 0,
+      seed: deterministicSeed(`${event.id}-review`),
+    });
+    try {
+      parsed = parsePredictionResponse(reviewRaw);
+      raw = { initial: raw, review: reviewRaw };
+    } catch {
+      parsed = initialPrediction;
+    }
     const completedAt = new Date().toISOString();
     const latencyMs = Date.now() - requestStarted;
     await env.DB.prepare(`
@@ -467,4 +503,13 @@ function serializeRawResponse(raw: unknown) {
       ? String((raw as { response: string }).response)
       : JSON.stringify(raw);
   return text.slice(0, 12000);
+}
+
+function deterministicSeed(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (Math.abs(hash) % 2_000_000_000) + 1;
 }
