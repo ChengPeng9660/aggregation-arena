@@ -128,3 +128,17 @@ test("parsePredictionResponse accepts Prophet-style arrays and percentage string
   assert.equal(cloudflareObject.yesProbability, 0.55);
   assert.deepEqual(cloudflareObject.citedSourceRanks, [1, 3]);
 });
+
+test("parsePredictionResponse safely recovers explicit probabilities from malformed 3B JSON", () => {
+  const unescapedQuote = parsePredictionResponse(
+    '{"rationale":"Traffic is unlikely to normalize, with a 62% chance of "No" and 38% chance of "Yes". citedSourceRanks":[1,3]}',
+  );
+  assert.equal(unescapedQuote.yesProbability, 0.38);
+  assert.equal(unescapedQuote.noProbability, 0.62);
+
+  const missingPropertyQuote = parsePredictionResponse(
+    '{"rationale":"Closure risk is elevated.",probabilities":{"Yes":0.62,"No":0.38},"citedSourceRanks":[1,2]}',
+  );
+  assert.equal(missingPropertyQuote.yesProbability, 0.62);
+  assert.deepEqual(missingPropertyQuote.citedSourceRanks, [1, 2]);
+});
