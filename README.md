@@ -108,10 +108,8 @@ Cloudflare Worker 版本：
 - 展示 Raw Brier。
 - 展示 Brier Index。
 - 展示 95% Bootstrap Confidence Interval。
-- 展示相对 Equal Mean 的 Brier 改善百分比。
 - 展示已结算样本数 `N`。
 - 展示 Coverage。
-- 展示最近事件表现。
 - 最少完成 5 个已结算事件后进入正式排名，否则标记为 provisional。
 - 客户端每 30 秒自动刷新。
 - 支持导出当前 Leaderboard CSV。
@@ -151,7 +149,7 @@ Cloudflare Worker 版本：
       ↓
 计算每个 Forecaster 与 Aggregator 的 Brier Loss
       ↓
-重算 Brier Index、置信区间、Coverage 和相对增益
+重算 Brier Index、置信区间和 Coverage
       ↓
 实时更新 Leaderboard 与 Audit Log
 ```
@@ -248,7 +246,7 @@ Cloudflare Workers AI 不能在纯本地环境执行模型推理。本地测试�
 p_agg = mean(p_1, p_2, ..., p_n)
 ```
 
-这是其他方法在 Leaderboard 中计算相对增益时使用的基准。
+这是最直接的概率聚合基线。
 
 ### 2. Median Forecast
 
@@ -323,16 +321,6 @@ Brier Index = (1 - sqrt(Raw Brier)) × 100
 ### 95% Confidence Interval
 
 平台对每个排名对象的事件级 Brier Loss 做 500 次确定性 Bootstrap，并将 Bootstrap Mean 转换为 Brier Index，报告 95% 区间。
-
-### 相对 Equal Mean 增益
-
-```text
-Gain vs Equal Mean =
-  (Brier_equal_mean - Brier_method)
-  / Brier_equal_mean × 100%
-```
-
-正值表示该方法的 Raw Brier 低于 Equal Mean。
 
 ### Coverage
 

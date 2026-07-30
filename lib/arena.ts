@@ -429,12 +429,6 @@ async function buildLeaderboard(
     if (track === "forecasters") return row.kind === "forecaster";
     return true;
   });
-  const baselineLoss = new Map<string, number>();
-  for (const row of rows.results) {
-    if (row.participant_id === "agg-equal-mean" && eligible.has(String(row.event_id))) {
-      baselineLoss.set(String(row.event_id), brier(Number(row.probability), Number(row.resolution)));
-    }
-  }
   const groups = new Map<string, Record<string, unknown>[]>();
   for (const row of filtered) {
     const id = String(row.participant_id);
@@ -450,10 +444,6 @@ async function buildLeaderboard(
       const losses = group.map((row) => brier(Number(row.probability), Number(row.resolution)));
       const averageBrier = mean(losses);
       const ci = bootstrapMeanCI(losses, id);
-      const baseline = group
-        .map((row) => baselineLoss.get(String(row.event_id)))
-        .filter((value): value is number => Number.isFinite(value));
-      const meanBrier = baseline.length ? mean(baseline) : null;
       const method = methodMeta.get(id);
       const participant = participantMeta.get(id);
       return {
@@ -469,8 +459,6 @@ async function buildLeaderboard(
         ciHigh: brierIndex(ci.low),
         resolved: losses.length,
         coverage: (losses.length / eligible.size) * 100,
-        gainVsMean:
-          meanBrier !== null && meanBrier > 0 ? ((meanBrier - averageBrier) / meanBrier) * 100 : null,
         status: losses.length >= 5 ? "listed" : "provisional",
         version: String(group[group.length - 1].version || "v1"),
       };

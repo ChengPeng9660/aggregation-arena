@@ -51,7 +51,6 @@ type LeaderboardRow = {
   ciHigh: number;
   resolved: number;
   coverage: number;
-  gainVsMean: number | null;
   status: "listed" | "provisional";
   version: string;
 };
@@ -452,10 +451,10 @@ function LeaderboardView({
         </div>
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Rank</th><th>Method / Forecaster</th><th>Brier Index</th><th>95% CI</th><th>Raw Brier</th><th>vs Equal Mean</th><th>N</th><th>Coverage</th></tr></thead>
+            <thead><tr><th>Rank</th><th>Method / Forecaster</th><th>Brier Index</th><th>95% CI</th><th>Raw Brier</th><th>N</th><th>Coverage</th></tr></thead>
             <tbody>
               {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} />) : (
-                <tr><td colSpan={8} className="empty-cell">当前筛选下还没有已结算成绩。</td></tr>
+                <tr><td colSpan={7} className="empty-cell">当前筛选下还没有已结算成绩。</td></tr>
               )}
             </tbody>
           </table>
@@ -485,7 +484,6 @@ function LeaderboardRowView({ row }: { row: LeaderboardRow }) {
       <td><strong className="index-value">{row.brierIndex.toFixed(1)}</strong></td>
       <td className="muted-number">{row.ciLow.toFixed(1)}–{row.ciHigh.toFixed(1)}</td>
       <td className="mono-number">{row.brier.toFixed(3)}</td>
-      <td>{row.gainVsMean === null ? <span className="muted-number">—</span> : <span className={row.gainVsMean >= 0 ? "positive" : "negative"}>{signed(row.gainVsMean)}%</span>}</td>
       <td className="mono-number">{row.resolved}</td>
       <td><div className="coverage-cell"><span><i style={{ width: `${Math.min(100, row.coverage)}%` }} /></span><b>{row.coverage.toFixed(0)}%</b></div></td>
     </tr>
@@ -880,10 +878,6 @@ function formatCompactMoney(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
-function signed(value: number) {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
-}
-
 function initials(value: string) {
   return value.split(/\s+/).map((item) => item[0]).join("").slice(0, 2).toUpperCase();
 }
@@ -891,8 +885,8 @@ function initials(value: string) {
 function exportLeaderboard(snapshot: Snapshot | null) {
   if (!snapshot?.leaderboard.length) return;
   const rows = [
-    ["rank", "name", "type", "brier_index", "ci_low", "ci_high", "raw_brier", "gain_vs_mean_pct", "resolved", "coverage_pct"],
-    ...snapshot.leaderboard.map((row) => [row.rank, row.name, row.kind, row.brierIndex.toFixed(3), row.ciLow.toFixed(3), row.ciHigh.toFixed(3), row.brier.toFixed(6), row.gainVsMean?.toFixed(3) ?? "", row.resolved, row.coverage.toFixed(2)]),
+    ["rank", "name", "type", "brier_index", "ci_low", "ci_high", "raw_brier", "resolved", "coverage_pct"],
+    ...snapshot.leaderboard.map((row) => [row.rank, row.name, row.kind, row.brierIndex.toFixed(3), row.ciLow.toFixed(3), row.ciHigh.toFixed(3), row.brier.toFixed(6), row.resolved, row.coverage.toFixed(2)]),
   ];
   const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
   const link = document.createElement("a");

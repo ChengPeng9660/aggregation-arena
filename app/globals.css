@@ -237,8 +237,6 @@ tbody tr.top-row { background: linear-gradient(90deg, rgba(138,97,255,.05), tran
 .index-value { color: var(--ink); font-size: 14px; }
 .mono-number, .muted-number { color: var(--muted); font-family: var(--font-geist-mono), monospace; }
 .muted-number { color: var(--quiet); }
-.positive { color: var(--green); font-weight: 700; }
-.negative { color: var(--red); font-weight: 700; }
 .coverage-cell { display: inline-flex; align-items: center; gap: 7px; }
 .coverage-cell > span { width: 42px; height: 3px; overflow: hidden; border-radius: 99px; background: var(--line); }
 .coverage-cell > span i { display: block; height: 100%; border-radius: inherit; background: var(--purple); }
