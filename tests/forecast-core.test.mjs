@@ -117,4 +117,14 @@ test("parsePredictionResponse accepts Prophet-style arrays and percentage string
     probabilities: { Yes: "0.61 (61%)", No: "0.39 (39%)" },
   }));
   assert.equal(annotated.yesProbability, 0.61);
+
+  const cloudflareObject = parsePredictionResponse({
+    response: {
+      rationale: "Cloudflare returned structured output as an object.",
+      probabilities: { Yes: 0.55, No: 0.45 },
+      citedSourceRanks: [1, 3],
+    },
+  });
+  assert.equal(cloudflareObject.yesProbability, 0.55);
+  assert.deepEqual(cloudflareObject.citedSourceRanks, [1, 3]);
 });
