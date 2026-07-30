@@ -24,10 +24,17 @@ type ForecastEvent = {
   closeTime: string | null;
   rules: string;
   selectionRunId: string;
-  yesPrice: number;
-  volume24h: number;
-  totalVolume: number;
-  liquidity: number;
+  sourceUrl: string;
+  selectedAt: string;
+  latestObservedAt: string;
+  yesPriceAtSelection: number;
+  selectionVolume24h: number;
+  selectionTotalVolume: number;
+  selectionLiquidity: number;
+  latestYesPrice: number;
+  latestVolume24h: number;
+  latestTotalVolume: number;
+  latestLiquidity: number;
 };
 
 type ResearchSource = {
@@ -117,7 +124,10 @@ export async function runForecastBatch(env: ForecastEnv, limit = 3) {
 
   const rows = await env.DB.prepare(`
     SELECT e.id, e.title, e.description, e.category, e.close_time,
-      pc.rules, si.run_id, si.price_at_selection, si.volume_24h, si.total_volume, si.liquidity
+      pc.rules, pc.source_url, pc.last_seen_at, pc.yes_price AS latest_yes_price,
+      pc.volume_24h AS latest_volume_24h, pc.total_volume AS latest_total_volume,
+      pc.liquidity AS latest_liquidity, si.run_id, si.selected_at,
+      si.price_at_selection, si.volume_24h, si.total_volume, si.liquidity
     FROM events e
     JOIN selection_items si ON si.event_id=e.id
     JOIN polymarket_candidates pc ON pc.market_id=si.market_id
@@ -272,10 +282,22 @@ async function getOrCreateContext(env: ForecastEnv, event: ForecastEvent) {
   const asOfTime = new Date().toISOString();
   const id = `ctx-${crypto.randomUUID()}`;
   const marketSnapshot = {
-    yesPrice: event.yesPrice,
-    volume24h: event.volume24h,
-    totalVolume: event.totalVolume,
-    liquidity: event.liquidity,
+    source: "Polymarket",
+    sourceUrl: event.sourceUrl,
+    atSelection: {
+      observedAt: event.selectedAt,
+      yesPrice: event.yesPriceAtSelection,
+      volume24h: event.selectionVolume24h,
+      totalVolume: event.selectionTotalVolume,
+      liquidity: event.selectionLiquidity,
+    },
+    atForecast: {
+      observedAt: event.latestObservedAt,
+      yesPrice: event.latestYesPrice,
+      volume24h: event.latestVolume24h,
+      totalVolume: event.latestTotalVolume,
+      liquidity: event.latestLiquidity,
+    },
   };
   await env.DB.prepare(`
     INSERT INTO research_contexts (
@@ -351,6 +373,7 @@ export async function getForecastPipelineSnapshot(
       sources: safeJson(String(row.sources_json || "[]"), []),
       sourceCount: Number(row.source_count || 0),
       provider: row.provider,
+      marketSnapshot: safeJson(String(row.market_snapshot_json || "{}"), {}),
       latencyMs: row.latency_ms === null ? null : Number(row.latency_ms),
       error: row.error,
       asOfTime: row.as_of_time,
@@ -368,10 +391,17 @@ function rowToForecastEvent(row: Record<string, unknown>): ForecastEvent {
     closeTime: row.close_time ? String(row.close_time) : null,
     rules: String(row.rules || ""),
     selectionRunId: String(row.run_id),
-    yesPrice: Number(row.price_at_selection || 0.5),
-    volume24h: Number(row.volume_24h || 0),
-    totalVolume: Number(row.total_volume || 0),
-    liquidity: Number(row.liquidity || 0),
+    sourceUrl: String(row.source_url || ""),
+    selectedAt: String(row.selected_at || ""),
+    latestObservedAt: String(row.last_seen_at || new Date().toISOString()),
+    yesPriceAtSelection: Number(row.price_at_selection ?? 0.5),
+    selectionVolume24h: Number(row.volume_24h || 0),
+    selectionTotalVolume: Number(row.total_volume || 0),
+    selectionLiquidity: Number(row.liquidity || 0),
+    latestYesPrice: Number(row.latest_yes_price ?? row.price_at_selection ?? 0.5),
+    latestVolume24h: Number(row.latest_volume_24h ?? row.volume_24h ?? 0),
+    latestTotalVolume: Number(row.latest_total_volume ?? row.total_volume ?? 0),
+    latestLiquidity: Number(row.latest_liquidity ?? row.liquidity ?? 0),
   };
 }
 
@@ -381,11 +411,28 @@ function contextFromRow(row: Record<string, unknown>, event: ForecastEvent) {
     event,
     sources: safeJson(String(row.sources_json || "[]"), []) as ResearchSource[],
     marketSnapshot: safeJson(String(row.market_snapshot_json || "{}"), {
-      yesPrice: event.yesPrice,
-      volume24h: event.volume24h,
-      totalVolume: event.totalVolume,
-      liquidity: event.liquidity,
-    }) as { yesPrice: number; volume24h: number; totalVolume: number; liquidity: number },
+      source: "Polymarket",
+      sourceUrl: event.sourceUrl,
+      atSelection: {
+        observedAt: event.selectedAt,
+        yesPrice: event.yesPriceAtSelection,
+        volume24h: event.selectionVolume24h,
+        totalVolume: event.selectionTotalVolume,
+        liquidity: event.selectionLiquidity,
+      },
+      atForecast: {
+        observedAt: event.latestObservedAt,
+        yesPrice: event.latestYesPrice,
+        volume24h: event.latestVolume24h,
+        totalVolume: event.latestTotalVolume,
+        liquidity: event.latestLiquidity,
+      },
+    }) as {
+      source: string;
+      sourceUrl: string;
+      atSelection: { observedAt: string; yesPrice: number; volume24h: number; totalVolume: number; liquidity: number };
+      atForecast: { observedAt: string; yesPrice: number; volume24h: number; totalVolume: number; liquidity: number };
+    },
     asOfTime: String(row.as_of_time),
   };
 }
