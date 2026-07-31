@@ -75,6 +75,7 @@ export async function POST(request: Request) {
         {
           eventId: String(payload.eventId || ""),
           resolution: String(payload.resolution ?? ""),
+          resolvedOutcome: String(payload.resolvedOutcome ?? ""),
           note: String(payload.note || ""),
         },
         actor,

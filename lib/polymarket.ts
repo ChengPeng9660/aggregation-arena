@@ -16,6 +16,22 @@ type Candidate = ReturnType<typeof normalizePolymarketMarket> & {
   categoryRank?: number;
 };
 
+type EventOutcome = {
+  key: string;
+  label: string;
+  marketId: string | null;
+  sourceUrl: string;
+  price: number;
+  volume24h: number;
+  totalVolume: number;
+  liquidity: number;
+};
+
+type EventCandidate = Candidate & {
+  eventType: "binary" | "categorical";
+  eventOutcomes: EventOutcome[];
+};
+
 const GAMMA_API = "https://gamma-api.polymarket.com";
 const MAX_EVENT_PAGES = 4;
 const EVENT_PAGE_SIZE = 100;
@@ -32,7 +48,9 @@ const CURATION_SCHEMA = [
     volume_percentile REAL NOT NULL DEFAULT 0, selection_score REAL NOT NULL DEFAULT 0,
     eligible INTEGER NOT NULL DEFAULT 0, rejection_reasons_json TEXT NOT NULL DEFAULT '[]',
     source_url TEXT NOT NULL DEFAULT '', raw_json TEXT NOT NULL DEFAULT '{}',
-    first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    event_title TEXT NOT NULL DEFAULT '', event_neg_risk INTEGER NOT NULL DEFAULT 0,
+    event_neg_risk_augmented INTEGER NOT NULL DEFAULT 0
   )`,
   `CREATE TABLE IF NOT EXISTS market_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT, market_id TEXT NOT NULL,
@@ -59,6 +77,14 @@ const CURATION_SCHEMA = [
     volume_24h REAL NOT NULL, total_volume REAL NOT NULL, liquidity REAL NOT NULL,
     selected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(market_id), UNIQUE(run_id, market_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS event_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, outcome_key TEXT NOT NULL,
+    label TEXT NOT NULL, market_id TEXT, source_url TEXT NOT NULL DEFAULT '',
+    price_at_selection REAL NOT NULL DEFAULT 0, volume_24h REAL NOT NULL DEFAULT 0,
+    total_volume REAL NOT NULL DEFAULT 0, liquidity REAL NOT NULL DEFAULT 0,
+    display_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(event_id, outcome_key)
   )`,
   "CREATE INDEX IF NOT EXISTS idx_candidates_eligible_category ON polymarket_candidates(eligible, category, selection_score DESC)",
   "CREATE INDEX IF NOT EXISTS idx_candidates_seen ON polymarket_candidates(last_seen_at DESC)",
@@ -114,7 +140,8 @@ export async function syncPolymarketCandidates(db: D1Database = getD1(), now = n
           category, category_confidence, tags_json, outcomes_json, close_time, start_time, yes_price,
           volume_24h, total_volume, liquidity, volume_percentile, selection_score, eligible,
           rejection_reasons_json, source_url, raw_json, first_seen_at, last_seen_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          , event_title, event_neg_risk, event_neg_risk_augmented
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(market_id) DO UPDATE SET
           source_event_id=excluded.source_event_id, event_slug=excluded.event_slug, market_slug=excluded.market_slug,
           series_id=excluded.series_id, title=excluded.title, description=excluded.description, rules=excluded.rules,
@@ -124,7 +151,9 @@ export async function syncPolymarketCandidates(db: D1Database = getD1(), now = n
           liquidity=excluded.liquidity, volume_percentile=excluded.volume_percentile,
           selection_score=excluded.selection_score, eligible=excluded.eligible,
           rejection_reasons_json=excluded.rejection_reasons_json, source_url=excluded.source_url,
-          raw_json=excluded.raw_json, last_seen_at=excluded.last_seen_at
+          raw_json=excluded.raw_json, last_seen_at=excluded.last_seen_at,
+          event_title=excluded.event_title, event_neg_risk=excluded.event_neg_risk,
+          event_neg_risk_augmented=excluded.event_neg_risk_augmented
       `).bind(
         candidate.marketId, candidate.sourceEventId, candidate.eventSlug, candidate.marketSlug,
         candidate.seriesId, candidate.title, candidate.description, candidate.rules, candidate.category,
@@ -133,6 +162,7 @@ export async function syncPolymarketCandidates(db: D1Database = getD1(), now = n
         candidate.totalVolume, candidate.liquidity, candidate.volume24Percentile || 0,
         candidate.selectionScore, candidate.eligible ? 1 : 0, JSON.stringify(candidate.reasons),
         candidate.sourceUrl, JSON.stringify(candidate.raw), startedAt, startedAt,
+        candidate.eventTitle, candidate.eventNegRisk ? 1 : 0, candidate.eventNegRiskAugmented ? 1 : 0,
       );
       const snapshot = db.prepare(`
         INSERT INTO market_snapshots (market_id, captured_at, yes_price, volume_24h, total_volume, liquidity)
@@ -168,15 +198,18 @@ export async function syncPolymarketCandidates(db: D1Database = getD1(), now = n
 export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = new Date()) {
   await ensureCurationReady(db);
   const date = now.toISOString().slice(0, 10);
-  const runId = `poly-${date}-v1`;
+  const runId = `poly-${date}-v2`;
   const existing = await db.prepare("SELECT * FROM selection_runs WHERE id=?").bind(runId).first<Record<string, unknown>>();
   if (existing?.status === "completed") return { runId, selected: Number(existing.selected_count), reused: true };
 
   const rows = await db.prepare(`
-    SELECT c.*, CASE WHEN si.market_id IS NULL THEN 0 ELSE 1 END AS already_selected
+    SELECT c.*, CASE WHEN EXISTS (
+      SELECT 1 FROM selection_items si
+      JOIN polymarket_candidates prior ON prior.market_id=si.market_id
+      WHERE prior.source_event_id=c.source_event_id
+    ) THEN 1 ELSE 0 END AS already_selected
     FROM polymarket_candidates c
-    LEFT JOIN selection_items si ON si.market_id=c.market_id
-    WHERE c.eligible=1 AND datetime(c.close_time) > datetime(?)
+    WHERE datetime(c.close_time) > datetime(?)
     ORDER BY c.category, c.selection_score DESC
   `).bind(new Date(now.getTime() + CURATION_CONFIG.minimumCloseHours * 3_600_000).toISOString()).all<Record<string, unknown>>();
   const recent = await db.prepare(`
@@ -184,11 +217,12 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
     WHERE datetime(selected_at) >= datetime(?, '-7 days') GROUP BY category
   `).bind(now.toISOString()).all<{ category: string; count: number }>();
   const recentCounts = Object.fromEntries(recent.results.map((row) => [row.category, Number(row.count)]));
-  const candidates = rows.results.map(rowToCandidate);
+  const marketCandidates = rows.results.map(rowToCandidate);
+  const candidates = buildEventCandidates(marketCandidates);
   const selected = selectBalancedCandidates(candidates, {
     targetPerCategory: CURATION_CONFIG.targetPerCategory,
     recentCategoryCounts: recentCounts,
-  }) as Candidate[];
+  }) as EventCandidate[];
   const categoryCounts = Object.fromEntries(CANONICAL_CATEGORIES.map((category) => [
     category,
     selected.filter((candidate) => candidate.category === category).length,
@@ -210,12 +244,15 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
   ).run();
 
   const statements = selected.flatMap((candidate) => {
-    const eventId = `poly-${candidate.marketId}`;
+    const eventId = `poly-event-${candidate.sourceEventId}`;
+    const eventUrl = candidate.eventSlug
+      ? `https://polymarket.com/event/${candidate.eventSlug}`
+      : candidate.sourceUrl;
     const sourceMetadata = [
       "Source: Polymarket",
-      candidate.sourceUrl ? `Market URL: ${candidate.sourceUrl}` : "",
+      eventUrl ? `Event URL: ${eventUrl}` : "",
       `Selection run: ${runId}`,
-      `Price at selection: ${(candidate.yesPrice * 100).toFixed(1)}%`,
+      `Outcomes: ${candidate.eventOutcomes.length}`,
     ].filter(Boolean).join("\n");
     const description = [
       candidate.description,
@@ -224,9 +261,15 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
     return [
       db.prepare(`
         INSERT OR IGNORE INTO events (
-          id, title, description, category, season, close_time, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 'Polymarket Live', ?, 'open', ?, ?)
-      `).bind(eventId, candidate.title, description, candidate.category, candidate.closeTime, completedAt, completedAt),
+          id, title, description, category, season, close_time, status, event_type,
+          source_event_id, outcomes_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'Polymarket Live', ?, 'open', ?, ?, ?, ?, ?)
+      `).bind(
+        eventId, candidate.eventTitle || candidate.title, description, candidate.category,
+        candidate.closeTime, candidate.eventType, candidate.sourceEventId,
+        JSON.stringify(candidate.eventOutcomes.map((outcome) => outcome.key)),
+        completedAt, completedAt,
+      ),
       db.prepare(`
         INSERT OR IGNORE INTO selection_items (
           run_id, market_id, event_id, category, rank, selection_score, price_at_selection,
@@ -240,7 +283,23 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
       db.prepare(`
         INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
         VALUES ('curation.event_selected', 'event', ?, ?, 'polymarket-cron', ?)
-      `).bind(eventId, JSON.stringify({ runId, marketId: candidate.marketId, category: candidate.category }), completedAt),
+      `).bind(eventId, JSON.stringify({
+        runId,
+        sourceEventId: candidate.sourceEventId,
+        representativeMarketId: candidate.marketId,
+        outcomeCount: candidate.eventOutcomes.length,
+        category: candidate.category,
+      }), completedAt),
+      ...candidate.eventOutcomes.map((outcome, index) => db.prepare(`
+        INSERT OR IGNORE INTO event_outcomes (
+          event_id, outcome_key, label, market_id, source_url, price_at_selection,
+          volume_24h, total_volume, liquidity, display_order, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        eventId, outcome.key, outcome.label, outcome.marketId, outcome.sourceUrl,
+        outcome.price, outcome.volume24h, outcome.totalVolume, outcome.liquidity,
+        index, completedAt,
+      )),
     ];
   });
   await runBatches(db, statements);
@@ -250,13 +309,53 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
 export async function resolveSelectedPolymarketMarkets(db: D1Database = getD1()) {
   await ensureCurationReady(db);
   const rows = await db.prepare(`
-    SELECT si.market_id, si.event_id FROM selection_items si
+    SELECT si.market_id, si.event_id, e.event_type, e.source_event_id FROM selection_items si
     JOIN events e ON e.id=si.event_id
     WHERE e.status='open' AND datetime(e.close_time) <= datetime('now', '+12 hours')
     ORDER BY e.close_time LIMIT 25
-  `).all<{ market_id: string; event_id: string }>();
+  `).all<{ market_id: string; event_id: string; event_type: string; source_event_id: string | null }>();
   let resolved = 0;
   for (const row of rows.results) {
+    if (row.event_type === "categorical" && row.source_event_id) {
+      const response = await fetch(`${GAMMA_API}/events/${encodeURIComponent(row.source_event_id)}`, {
+        headers: { accept: "application/json", "user-agent": "AggregationArena/1.0" },
+      });
+      if (!response.ok) continue;
+      const sourceEvent = await response.json() as Record<string, unknown>;
+      const sourceMarkets = Array.isArray(sourceEvent.markets) ? sourceEvent.markets as Record<string, unknown>[] : [];
+      const outcomeRows = await db.prepare(
+        "SELECT outcome_key, market_id FROM event_outcomes WHERE event_id=? ORDER BY display_order",
+      ).bind(row.event_id).all<{ outcome_key: string; market_id: string }>();
+      const winner = outcomeRows.results.find((outcome) => {
+        const market = sourceMarkets.find((item) => String(item.id) === String(outcome.market_id));
+        if (!market || market.closed !== true) return false;
+        const prices = parseJsonList(market.outcomePrices).map(Number);
+        const labels = parseJsonList(market.outcomes).map((value) => String(value).toLowerCase());
+        const yesIndex = labels.indexOf("yes");
+        return prices[yesIndex >= 0 ? yesIndex : 0] >= 0.999;
+      });
+      if (!winner) continue;
+      const resolvedAt = new Date().toISOString();
+      await db.batch([
+        db.prepare(`
+          UPDATE events SET status='resolved', resolution=NULL, resolved_outcome=?,
+            resolution_note=?, resolved_at=?, updated_at=? WHERE id=? AND status='open'
+        `).bind(
+          winner.outcome_key,
+          `Automatically resolved from Polymarket event ${row.source_event_id}.`,
+          resolvedAt, resolvedAt, row.event_id,
+        ),
+        db.prepare(`
+          INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
+          VALUES ('curation.event_resolved', 'event', ?, ?, 'polymarket-cron', ?)
+        `).bind(row.event_id, JSON.stringify({
+          sourceEventId: row.source_event_id,
+          resolvedOutcome: winner.outcome_key,
+        }), resolvedAt),
+      ]);
+      resolved += 1;
+      continue;
+    }
     const response = await fetch(`${GAMMA_API}/markets/${encodeURIComponent(row.market_id)}`, {
       headers: { accept: "application/json", "user-agent": "AggregationArena/1.0" },
     });
@@ -271,9 +370,9 @@ export async function resolveSelectedPolymarketMarkets(db: D1Database = getD1())
     const now = new Date().toISOString();
     await db.batch([
       db.prepare(`
-        UPDATE events SET status='resolved', resolution=?, resolution_note=?,
+        UPDATE events SET status='resolved', resolution=?, resolved_outcome=?, resolution_note=?,
           resolved_at=?, updated_at=? WHERE id=? AND status='open'
-      `).bind(outcome, `Automatically resolved from Polymarket market ${row.market_id}.`, now, now, row.event_id),
+      `).bind(outcome, outcome ? "yes" : "no", `Automatically resolved from Polymarket market ${row.market_id}.`, now, now, row.event_id),
       db.prepare(`
         INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
         VALUES ('curation.event_resolved', 'event', ?, ?, 'polymarket-cron', ?)
@@ -288,9 +387,10 @@ export async function runPolymarketScheduled(
   env: { DB: D1Database },
   controller: { cron: string },
 ) {
-  const sync = await syncPolymarketCandidates(env.DB);
+  const daily = controller.cron === "10 0 * * *";
+  const sync = daily ? null : await syncPolymarketCandidates(env.DB);
   const resolution = await resolveSelectedPolymarketMarkets(env.DB);
-  const selection = controller.cron === "10 0 * * *"
+  const selection = daily
     ? await selectDailyBalancedSlate(env.DB)
     : null;
   return { sync, resolution, selection };
@@ -373,6 +473,9 @@ export async function getCurationSnapshot(db: D1Database = getD1()) {
 function rowToCandidate(row: Record<string, unknown>): Candidate {
   return {
     marketId: String(row.market_id), sourceEventId: String(row.source_event_id),
+    eventTitle: String(row.event_title || row.title),
+    eventNegRisk: Number(row.event_neg_risk) === 1,
+    eventNegRiskAugmented: Number(row.event_neg_risk_augmented) === 1,
     eventSlug: String(row.event_slug), marketSlug: String(row.market_slug), seriesId: String(row.series_id),
     title: String(row.title), description: String(row.description), rules: String(row.rules),
     category: String(row.category), categoryConfidence: Number(row.category_confidence),
@@ -387,6 +490,64 @@ function rowToCandidate(row: Record<string, unknown>): Candidate {
     selectionScore: Number(row.selection_score), volume24Percentile: Number(row.volume_percentile),
     alreadySelected: Number(row.already_selected) === 1,
   };
+}
+
+function buildEventCandidates(candidates: Candidate[]): EventCandidate[] {
+  const groups = new Map<string, Candidate[]>();
+  for (const candidate of candidates) {
+    const group = groups.get(candidate.sourceEventId) ?? [];
+    group.push(candidate);
+    groups.set(candidate.sourceEventId, group);
+  }
+  const events: EventCandidate[] = [];
+  for (const group of groups.values()) {
+    const ranked = [...group].sort((a, b) => b.selectionScore - a.selectionScore || b.volume24h - a.volume24h);
+    const representative = ranked.find((candidate) => candidate.eligible);
+    if (!representative) continue;
+    const namedMarkets = ranked.filter((candidate) => isActiveNamedMarket(candidate));
+    const isCategorical = representative.eventNegRisk && namedMarkets.length > 1;
+    if (!isCategorical && namedMarkets.length > 1) continue;
+    const eventOutcomes: EventOutcome[] = isCategorical
+      ? namedMarkets.map((candidate) => ({
+          key: candidate.marketId,
+          label: candidate.title,
+          marketId: candidate.marketId,
+          sourceUrl: candidate.sourceUrl,
+          price: candidate.yesPrice,
+          volume24h: candidate.volume24h,
+          totalVolume: candidate.totalVolume,
+          liquidity: candidate.liquidity,
+        }))
+      : [
+          {
+            key: "yes", label: "Yes", marketId: representative.marketId,
+            sourceUrl: representative.sourceUrl, price: representative.yesPrice,
+            volume24h: representative.volume24h, totalVolume: representative.totalVolume,
+            liquidity: representative.liquidity,
+          },
+          {
+            key: "no", label: "No", marketId: representative.marketId,
+            sourceUrl: representative.sourceUrl, price: 1 - representative.yesPrice,
+            volume24h: representative.volume24h, totalVolume: representative.totalVolume,
+            liquidity: representative.liquidity,
+          },
+        ];
+    events.push({
+      ...representative,
+      title: representative.eventTitle || representative.title,
+      eventType: isCategorical ? "categorical" : "binary",
+      eventOutcomes,
+    });
+  }
+  return events;
+}
+
+function isActiveNamedMarket(candidate: Candidate) {
+  const rawMarket = (candidate.raw as { market?: Record<string, unknown> } | undefined)?.market;
+  if (rawMarket?.active === false || rawMarket?.closed === true || rawMarket?.acceptingOrders === false) return false;
+  const title = candidate.title.trim();
+  if (!title) return false;
+  return !/\b(?:company|person|candidate|team)\s+[a-z]\b/i.test(title);
 }
 
 async function runBatches(db: D1Database, statements: D1PreparedStatement[]) {

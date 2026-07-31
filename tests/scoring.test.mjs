@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { prophetEventBrier } from "../lib/event-core.js";
 
-test("Brier Index keeps the ForecastBench anchor at 50 for an always-0.5 forecast", () => {
-  const brier = (0.5 - 1) ** 2;
-  const index = (1 - Math.sqrt(brier)) * 100;
-  assert.equal(index, 50);
+test("Prophet event Brier averages squared error across all event outcomes", () => {
+  const score = prophetEventBrier({ a: 0.6, b: 0.3, c: 0.1 }, "a", ["a", "b", "c"]);
+  assert.ok(Math.abs(score - (0.16 + 0.09 + 0.01) / 3) < 1e-12);
 });
 
 test("the benchmark implements six deterministic aggregation methods", async () => {

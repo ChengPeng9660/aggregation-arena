@@ -4,7 +4,7 @@
 
 一个支持 Polymarket 自动选题、共享信息检索、LLM 自动预测、手工概率录入、自动聚合、结果结算、实时排名和审计追踪的预测聚合 Benchmark 平台。
 
-系统每小时从 Polymarket Gamma API 同步活跃市场，先做成交量、流动性、截止窗口、概率区间和规则完整性筛选，再按七个固定类别均衡发布每日题集。管理员也可以手工创建二元事件并录入每个 Forecaster 的数字概率；所有聚合方法使用完全相同的输入，事件结算后按 Binary Brier Score 自动更新 Leaderboard。
+系统每小时从 Polymarket Gamma API 同步活跃市场，先做成交量、流动性、截止窗口、概率区间和规则完整性筛选，再按七个固定类别均衡发布每日题集。与 Prophet Arena 一样，Polymarket 的互斥 `negRisk` Event 会保留全部具名 Market 作为 outcomes；模型对同一 Event 输出完整概率分布，结算后以 Event Brier Score 实时更新 Leaderboard。旧的 Yes / No 题目继续兼容。
 
 Cloudflare Worker 版本：
 
@@ -33,7 +33,7 @@ Cloudflare Worker 版本：
 ### Polymarket 自动选题
 
 - 每小时 `00` 分从 Gamma API 拉取按 24 小时成交量排序的活跃事件。
-- 只接收严格的 `Yes / No` 二元市场。
+- 候选 Market 仍先通过严格的 `Yes / No` 质量筛选；入选时按 `source_event_id` 合并为 Event。
 - 最低总成交量 `$50,000`。
 - 最低 24 小时成交量 `$10,000`。
 - 最低流动性 `$10,000`。
@@ -45,7 +45,8 @@ Cloudflare Worker 版本：
 - 固定为七类：Politics & Policy、Economics、Finance & Crypto、Business & Technology、Science & Health、Sports、Culture & World。
 - 每日 `00:10 UTC` 生成不可变批次，默认每类最多 3 题、总计最多 21 题。
 - 若某类没有足够高质量题目，保留空位，不用低质量题补齐。
-- 同一个 Polymarket event 每个批次最多选择一个 market。
+- 一个 Polymarket Event 每个批次最多入选一次；若它是 `negRisk` 互斥 Event，则保留全部活跃、具名 outcomes，而不是只保留代表 Market。
+- 自动忽略 `Company A`、`Person X` 等尚未具名的 augmented negRisk 占位 Market。
 - 标题高度相似的市场自动去重。
 - 已经入选过的 market 永久不重复选择。
 - 入选时保存价格、成交量、流动性、选题分数、类别和批次 ID。
@@ -79,10 +80,10 @@ Cloudflare Worker 版本：
 - 所有当前和未来模型复用完全相同的 Context，避免检索差异污染模型比较。
 - 首个模型为 Cloudflare Workers AI 的 `@cf/meta/llama-3.2-3b-instruct`。
 - Prompt 仿照 Prophet Arena：明确题目、结算规则、截止时间、共享来源和市场快照。
-- 模型必须输出 Yes / No 概率、最多三句话的理由和所引用的 Source Rank。
-- 系统解析 JSON、归一化二元概率、限制概率在 `0.01–0.99`；格式错误时自动重试一次。
+- 模型必须为 Event 的每个 outcome key 输出概率、最多三句话的理由和所引用的 Source Rank。
+- 系统解析 Prophet 风格的 outcome 数组并归一化到概率 simplex；缺少任何 outcome 时自动重试一次。
 - 每次运行完整保存模型、Prompt 版本、原始响应、延迟、引用来源和失败原因。
-- 完成后的模型概率进入现有 `predictions`、不可变 `prediction_history`、Aggregation 和 Leaderboard。
+- 二元预测写入 `predictions`；多 outcome 预测写入 `prediction_outcomes` 和不可变 `prediction_outcome_history`，随后进入 Aggregation 和 Leaderboard。
 - Forecasts 页面显示流水线配置、待处理数量、预测结果、理由和冻结证据。
 - 每小时同步 Polymarket 后最多补跑 3 道未预测题目；也可以由管理员手工触发下一题。
 
@@ -101,13 +102,12 @@ Cloudflare Worker 版本：
 
 ### 实时 Leaderboard
 
-- 按 Brier Index 从高到低排名。
+- 按 Event Brier Score 从低到高排名。
 - 可切换 `Aggregators`、`Forecasters` 和 `All`。
 - 支持 All time、最近 30 天和最近 90 天窗口。
 - 支持按赛季筛选。
 - 支持按事件分类筛选。
-- 展示 Raw Brier。
-- 展示 Brier Index。
+- 展示平均 Event Brier 和 95% Bootstrap CI。
 - 展示 95% Bootstrap Confidence Interval。
 - 展示已结算样本数 `N`。
 - 展示 Coverage。
@@ -138,7 +138,7 @@ Cloudflare Worker 版本：
 ```text
 创建 Forecaster
       ↓
-创建二元事件
+创建事件（手工界面当前为二元）
       ↓
 手工输入每个 Forecaster 的 0–1 概率
       ↓
@@ -150,7 +150,7 @@ Cloudflare Worker 版本：
       ↓
 计算每个 Forecaster 与 Aggregator 的 Brier Loss
       ↓
-重算 Brier Index、置信区间和 Coverage
+重算 Event Brier、置信区间和 Coverage
       ↓
 实时更新 Leaderboard 与 Audit Log
 ```
@@ -296,32 +296,20 @@ weight = 1 / max(0.04, shrunk_brier)
 
 ## 评分与排名
 
-### Binary Brier Score
+### Prophet Event Brier Score
 
-对于概率 `p` 和二元结果 `y ∈ {0, 1}`：
-
-```text
-Brier Loss = (p - y)²
-Raw Brier = mean((p - y)²)
-```
-
-Raw Brier 越低越好。
-
-### Brier Index
-
-平台将 Raw Brier 转换成更直观的高分优先指标：
+一个 Event 有 `K` 个互斥且穷尽的 outcomes。模型提交概率向量 `p₁…pₖ`，实际结果使用 one-hot 向量 `y₁…yₖ`：
 
 ```text
-Brier Index = (1 - sqrt(Raw Brier)) × 100
+Event Brier = (1 / K) × Σₖ (pₖ - yₖ)²
+Leaderboard Score = mean(Event Brier over resolved events)
 ```
 
-- 完美预测对应 `100`。
-- 永远预测 `0.5` 对应 `50`。
-- Brier Index 越高越好。
+Event Brier 越低越好。二元题是 `K=2` 的特例；平台不再显示 Brier Index。
 
 ### 95% Confidence Interval
 
-平台对每个排名对象的事件级 Brier Loss 做 500 次确定性 Bootstrap，并将 Bootstrap Mean 转换为 Brier Index，报告 95% 区间。
+平台对每个排名对象的 Event Brier 做 500 次确定性 Bootstrap，直接报告平均 Event Brier 的 95% 区间。
 
 ### Coverage
 
@@ -329,7 +317,7 @@ Coverage 表示某个 Forecaster 或聚合方法在当前筛选样本中拥有�
 
 ### 重要研究口径说明
 
-当前版本使用普通 Binary Brier Score，不是 ForecastBench 官方复现中的 difficulty-adjusted Brier，也没有加入事件固定效应。README 和网站中的 “ForecastBench 风格” 仅指 Brier Index 的显示变换与高分优先表达，不代表官方 ForecastBench 排名复现。
+当前版本采用 Prophet Arena 风格的事件级多 outcome Brier，不是 ForecastBench 官方复现中的 difficulty-adjusted Brier，也没有加入事件固定效应。
 
 ## 技术架构
 
@@ -442,7 +430,7 @@ npm test
 当前自动化测试覆盖：
 
 1. Cloudflare Worker 生产构建可以真实启动并返回 Aggregation Arena 页面。
-2. 始终预测 `0.5` 时，Brier Index 锚定为 `50`。
+2. 三 outcome Event 的 Prophet Event Brier 公式和概率 simplex 归一化正确。
 3. 代码中存在并实现六种确定性聚合方法。
 4. 低成交量和非二元市场会被硬筛选拒绝。
 5. 每个类别最多选择配置规定的题目数，单一热门类别不能占满题集。
@@ -485,7 +473,7 @@ npm run build
 8. 返回 `Leaderboard`，确认：
    - Resolved 数量增加。
    - 所有 Aggregator 的 `N` 增加。
-   - Brier Index 和 Raw Brier 更新。
+   - Event Brier 和 95% CI 更新。
    - 排名重新排序。
 9. 打开 `Audit log`，确认出现创建题目、提交预测和结算记录。
 10. 点击 `Export CSV`，确认当前排名可以导出。
@@ -868,8 +856,11 @@ aggregation-benchmark-platform/
 |---|---|
 | `participants` | Forecaster 元数据 |
 | `events` | 事件、状态和结算结果 |
+| `event_outcomes` | Event 的稳定 outcome key、名称、Market 和入选快照 |
 | `predictions` | 每个事件的最新预测版本 |
 | `prediction_history` | 不可变预测历史 |
+| `prediction_outcomes` | 多 outcome Event 的当前概率向量 |
+| `prediction_outcome_history` | 多 outcome 概率向量的不可变历史 |
 | `audit_log` | 操作审计记录 |
 | `polymarket_candidates` | 候选市场、筛选结果和淘汰原因 |
 | `market_snapshots` | 合格市场的小时级价格和流动性快照 |
@@ -879,11 +870,11 @@ aggregation-benchmark-platform/
 
 ## 当前限制
 
-- 只支持二元 Yes / No 事件。
-- Forecast 概率目前仍由管理员手工输入；尚未接入外部 LLM predictor。
-- 自动结算只接受 Polymarket 已关闭且结果价格达到 `≤0.001` 或 `≥0.999` 的明确二元结果。
+- 手工创建和手工概率录入界面目前仍以 Yes / No 为主；Polymarket 自动流水线支持多 outcome Event。
+- 当前自动 Predictor 只有 Cloudflare Workers AI 的 Llama 3.2 3B；加入第二个模型后六种 aggregation 才会在新 Event 上产生结果。
+- 自动结算要求 Polymarket 已关闭，并且 Event 中恰有一个 outcome Market 的 Yes 价格达到 `≥0.999`。
 - 固定分类器使用标签和关键词；低置信度的边界题仍可能需要后续人工审核。
-- 没有多选结果、连续结果或数值预测评分。
+- 不支持连续结果或数值预测评分；多 outcome 必须互斥且穷尽。
 - 没有 difficulty-adjusted Brier 或事件固定效应。
 - Performance Weighted 只基于平台内部已结算历史。
 - 当前身份模型依赖 Sites 私有访问网关，不是完整的多角色权限系统。

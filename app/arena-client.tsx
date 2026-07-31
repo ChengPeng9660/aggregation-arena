@@ -7,6 +7,7 @@ type Prediction = {
   name: string;
   kind: "forecaster" | "aggregate";
   probability: number;
+  probabilities?: Record<string, number>;
   version: string;
   components: string[];
   updatedAt: string;
@@ -20,7 +21,11 @@ type ArenaEvent = {
   season: string;
   closeTime: string | null;
   status: "open" | "resolved" | "invalid";
+  eventType: "binary" | "categorical";
+  sourceEventId: string | null;
+  outcomes: { key: string; label: string; priceAtSelection?: number }[];
   resolution: number | null;
+  resolvedOutcome: string | null;
   resolutionNote: string | null;
   createdAt: string;
   updatedAt: string;
@@ -46,7 +51,6 @@ type LeaderboardRow = {
   kind: "forecaster" | "aggregate";
   color: string;
   brier: number;
-  brierIndex: number;
   ciLow: number;
   ciHigh: number;
   resolved: number;
@@ -147,6 +151,7 @@ type ForecastPipelineSnapshot = {
     status: "running" | "completed" | "failed";
     yesProbability: number | null;
     noProbability: number | null;
+    probabilities: Record<string, number>;
     rationale: string | null;
     citedSourceRanks: number[];
     sources: ForecastSource[];
@@ -166,7 +171,7 @@ type Snapshot = {
     resolvedEvents: number;
     activeForecasters: number;
     totalForecasts: number;
-    leaderIndex: number | null;
+    leaderBrier: number | null;
     leaderName: string | null;
   };
   leaderboard: LeaderboardRow[];
@@ -377,7 +382,12 @@ export function ArenaClient({ userName }: { userName: string }) {
           {dialog.type === "create-event" && <CreateEventForm snapshot={snapshot} busy={mutating} onSubmit={(payload) => post({ action: "create_event", ...payload }, "题目已创建")} />}
           {dialog.type === "create-participant" && <CreateParticipantForm busy={mutating} onSubmit={(payload) => post({ action: "create_participant", ...payload }, "Forecaster 已保存")} />}
           {dialog.type === "forecasts" && snapshot && <ForecastForm event={dialog.event} participants={snapshot.participants} busy={mutating} onSubmit={(forecasts) => post({ action: "submit_forecasts", eventId: dialog.event.id, forecasts }, "概率已录入，aggregation 已重算")} />}
-          {dialog.type === "resolve" && <ResolveForm event={dialog.event} busy={mutating} onSubmit={(resolution, note) => post({ action: "resolve_event", eventId: dialog.event.id, resolution, note }, "题目已结算，榜单已更新")} />}
+          {dialog.type === "resolve" && <ResolveForm event={dialog.event} busy={mutating} onSubmit={(resolvedOutcome, note) => post({
+            action: "resolve_event", eventId: dialog.event.id,
+            resolvedOutcome,
+            resolution: resolvedOutcome === "yes" ? 1 : resolvedOutcome === "no" ? 0 : "",
+            note,
+          }, "题目已结算，榜单已更新")} />}
           {dialog.type === "event" && <EventDetail event={dialog.event} onInput={() => setDialog({ type: "forecasts", event: dialog.event })} onResolve={() => setDialog({ type: "resolve", event: dialog.event })} />}
         </DialogShell>
       )}
@@ -428,7 +438,7 @@ function LeaderboardView({
         <Metric label="Open events" value={snapshot.stats.openEvents} detail="等待录入或结算" />
         <Metric label="Resolved" value={snapshot.stats.resolvedEvents} detail="进入当前排名" />
         <Metric label="Forecasters" value={snapshot.stats.activeForecasters} detail={`${snapshot.stats.totalForecasts} locked forecasts`} />
-        <Metric label="Leader index" value={snapshot.stats.leaderIndex === null ? "—" : snapshot.stats.leaderIndex.toFixed(1)} detail={snapshot.stats.leaderName || "等待结算"} highlight />
+        <Metric label="Leader Brier" value={snapshot.stats.leaderBrier === null ? "—" : snapshot.stats.leaderBrier.toFixed(4)} detail={snapshot.stats.leaderName || "等待结算"} highlight />
       </section>
 
       <section className="filters">
@@ -446,15 +456,15 @@ function LeaderboardView({
 
       <section className="leaderboard-panel">
         <div className="table-caption">
-          <div><b>Official standings</b><span>Higher Brier Index is better · minimum {snapshot.methodology.minimumResolved} resolved events</span></div>
+          <div><b>Official standings</b><span>Lower Event Brier is better · minimum {snapshot.methodology.minimumResolved} resolved events</span></div>
           <span className="metric-definition">{snapshot.methodology.displayMetric}</span>
         </div>
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Rank</th><th>Method / Forecaster</th><th>Brier Index</th><th>95% CI</th><th>Raw Brier</th><th>N</th><th>Coverage</th></tr></thead>
+            <thead><tr><th>Rank</th><th>Method / Forecaster</th><th>Event Brier</th><th>95% CI</th><th>N</th><th>Coverage</th></tr></thead>
             <tbody>
               {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} />) : (
-                <tr><td colSpan={7} className="empty-cell">当前筛选下还没有已结算成绩。</td></tr>
+                <tr><td colSpan={6} className="empty-cell">当前筛选下还没有已结算成绩。</td></tr>
               )}
             </tbody>
           </table>
@@ -481,9 +491,8 @@ function LeaderboardRowView({ row }: { row: LeaderboardRow }) {
     <tr className={row.rank <= 3 ? "top-row" : ""}>
       <td><span className={`rank rank-${row.rank}`}>{String(row.rank).padStart(2, "0")}</span></td>
       <td><div className="method-cell"><i style={{ background: row.color }} /><div><b>{row.name}</b><small>{row.organization} · {row.version}</small></div>{row.status === "provisional" && <em>PROV</em>}</div></td>
-      <td><strong className="index-value">{row.brierIndex.toFixed(1)}</strong></td>
-      <td className="muted-number">{row.ciLow.toFixed(1)}–{row.ciHigh.toFixed(1)}</td>
-      <td className="mono-number">{row.brier.toFixed(3)}</td>
+      <td><strong className="index-value">{row.brier.toFixed(4)}</strong></td>
+      <td className="muted-number">{row.ciLow.toFixed(4)}–{row.ciHigh.toFixed(4)}</td>
       <td className="mono-number">{row.resolved}</td>
       <td><div className="coverage-cell"><span><i style={{ width: `${Math.min(100, row.coverage)}%` }} /></span><b>{row.coverage.toFixed(0)}%</b></div></td>
     </tr>
@@ -499,7 +508,7 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
         <div>
           <span className="eyebrow">POLYMARKET / AUTOMATED</span>
           <h1>Balanced market curation</h1>
-          <p>每小时读取高成交量二元市场；通过固定质量门槛后，按七个类别每日均衡发布，不足时宁可留空。</p>
+          <p>每小时读取高成交量 Polymarket Events；互斥市场保留完整 outcome 集合，再按七个类别每日均衡发布。</p>
         </div>
         <div className="updated-stamp"><span /><div><small>Latest sync</small><b>{curation.latestSync?.completedAt ? formatTime(curation.latestSync.completedAt) : "Waiting"}</b></div></div>
       </section>
@@ -699,8 +708,12 @@ function ForecastsView({
               )}
             </div>
             <div className="run-output">
-              <small>YES PROBABILITY</small>
-              <strong>{run.yesProbability === null ? "—" : `${(run.yesProbability * 100).toFixed(1)}%`}</strong>
+              <small>OUTCOME DISTRIBUTION</small>
+              {Object.keys(run.probabilities).length
+                ? Object.entries(run.probabilities).map(([key, probability]) => (
+                    <strong key={key}>{key}: {(probability * 100).toFixed(1)}%</strong>
+                  ))
+                : <strong>{run.yesProbability === null ? "—" : `Yes: ${(run.yesProbability * 100).toFixed(1)}%`}</strong>}
               <span>{run.completedAt ? formatDateTime(run.completedAt) : "in progress"}</span>
               <code>{run.latencyMs === null ? "" : `${(run.latencyMs / 1000).toFixed(1)}s`}</code>
             </div>
@@ -730,13 +743,13 @@ function MethodsView({ snapshot }: { snapshot: Snapshot }) {
       <section className="methodology-band">
         <div><span>01</span><h3>Same inputs</h3><p>每个方法收到完全相同的手工概率。</p></div>
         <div><span>02</span><h3>Immutable snapshot</h3><p>每次修改写入 history，结算后锁定。</p></div>
-        <div><span>03</span><h3>Outcome scoring</h3><p>{snapshot.methodology.primaryMetric}，并转换为可读的 Brier Index。</p></div>
+        <div><span>03</span><h3>Outcome scoring</h3><p>{snapshot.methodology.primaryMetric}，直接按 Event 报告，越低越好。</p></div>
         <div><span>04</span><h3>Live ranking</h3><p>结算完成后榜单立即重排并更新置信区间。</p></div>
       </section>
       <section className="formula-panel">
-        <div><span className="eyebrow">PRIMARY SCORE</span><h2>Brier Index</h2></div>
-        <code>BI = (1 − √ mean[(p − y)²]) × 100</code>
-        <p>100 表示完美预测，50 对应始终预测 0.5，数值越高越好。Raw Brier 同时保留，便于复核。</p>
+        <div><span className="eyebrow">PRIMARY SCORE</span><h2>Prophet Event Brier</h2></div>
+        <code>Event Brier = (1 / K) × Σ(pₖ − yₖ)²</code>
+        <p>每个 Event 先在全部 K 个互斥 outcomes 上求平均，再跨 Event 求均值；数值越低越好。</p>
       </section>
     </div>
   );
@@ -828,14 +841,18 @@ function ForecastForm({ event, participants, busy, onSubmit }: { event: ArenaEve
   </form>;
 }
 
-function ResolveForm({ event, busy, onSubmit }: { event: ArenaEvent; busy: boolean; onSubmit: (resolution: number, note: string) => void }) {
-  const [resolution, setResolution] = useState<number | null>(null);
+function ResolveForm({ event, busy, onSubmit }: { event: ArenaEvent; busy: boolean; onSubmit: (resolvedOutcome: string, note: string) => void }) {
+  const [resolvedOutcome, setResolvedOutcome] = useState<string | null>(null);
   const [note, setNote] = useState("");
-  return <form className="resolve-form" onSubmit={(formEvent) => { formEvent.preventDefault(); if (resolution !== null) onSubmit(resolution, note); }}>
+  return <form className="resolve-form" onSubmit={(formEvent) => { formEvent.preventDefault(); if (resolvedOutcome !== null) onSubmit(resolvedOutcome, note); }}>
     <div className="event-context"><span>{event.forecasterCount} locked forecasts</span><h3>{event.title}</h3><p>结算后题目和概率会锁定，并立即进入榜单。</p></div>
-    <div className="outcome-picker"><button type="button" className={resolution === 1 ? "selected yes" : ""} onClick={() => setResolution(1)}><b>YES</b><span>Event occurred</span></button><button type="button" className={resolution === 0 ? "selected no" : ""} onClick={() => setResolution(0)}><b>NO</b><span>Event did not occur</span></button></div>
+    <div className="outcome-picker">{event.outcomes.map((outcome) => (
+      <button type="button" key={outcome.key} className={resolvedOutcome === outcome.key ? "selected yes" : ""} onClick={() => setResolvedOutcome(outcome.key)}>
+        <b>{outcome.label}</b><span>{outcome.key}</span>
+      </button>
+    ))}</div>
     <label>Resolution note<textarea value={note} onChange={(inputEvent) => setNote(inputEvent.target.value)} placeholder="Outcome source or verification note" /></label>
-    <button className="primary-button" disabled={busy || resolution === null}>{busy ? "Resolving…" : "Resolve & update leaderboard"}</button>
+    <button className="primary-button" disabled={busy || resolvedOutcome === null}>{busy ? "Resolving…" : "Resolve & update leaderboard"}</button>
   </form>;
 }
 
@@ -843,11 +860,16 @@ function EventDetail({ event, onInput, onResolve }: { event: ArenaEvent; onInput
   const sorted = [...event.predictions].sort((a, b) => a.kind.localeCompare(b.kind) || b.probability - a.probability);
   return <div className="event-detail">
     <div className="event-context"><span>{event.category} / {event.season}</span><h3>{event.title}</h3><p>{event.description || "No additional description."}</p></div>
-    <div className="event-meta"><div><small>Status</small><b>{event.status}</b></div><div><small>Forecasters</small><b>{event.forecasterCount}</b></div><div><small>Deadline</small><b>{event.closeTime ? formatDate(event.closeTime) : "Open"}</b></div><div><small>Outcome</small><b>{event.resolution === null ? "—" : event.resolution ? "YES" : "NO"}</b></div></div>
+    <div className="event-meta"><div><small>Status</small><b>{event.status}</b></div><div><small>Forecasters</small><b>{event.forecasterCount}</b></div><div><small>Deadline</small><b>{event.closeTime ? formatDate(event.closeTime) : "Open"}</b></div><div><small>Outcome</small><b>{event.resolvedOutcome ? event.outcomes.find((outcome) => outcome.key === event.resolvedOutcome)?.label || event.resolvedOutcome : "—"}</b></div></div>
     <div className="prediction-panel">
-      {sorted.map((prediction) => <div key={prediction.id}><span className={prediction.kind === "aggregate" ? "aggregate-tag" : "forecaster-tag"}>{prediction.kind}</span><b>{prediction.name}</b><i><em style={{ width: `${prediction.probability * 100}%` }} /></i><strong>{(prediction.probability * 100).toFixed(1)}%</strong></div>)}
+      {sorted.flatMap((prediction) => {
+        const values = prediction.probabilities && Object.keys(prediction.probabilities).length
+          ? Object.entries(prediction.probabilities)
+          : [["yes", prediction.probability] as [string, number]];
+        return values.map(([key, probability], index) => <div key={`${prediction.id}-${key}`}><span className={prediction.kind === "aggregate" ? "aggregate-tag" : "forecaster-tag"}>{index ? key : prediction.kind}</span><b>{index ? event.outcomes.find((outcome) => outcome.key === key)?.label || key : prediction.name}</b><i><em style={{ width: `${probability * 100}%` }} /></i><strong>{(probability * 100).toFixed(1)}%</strong></div>);
+      })}
     </div>
-    {event.status === "open" && <div className="dialog-actions"><button className="ghost-button" onClick={onInput}>Input probabilities</button><button className="primary-button" onClick={onResolve} disabled={event.forecasterCount < 2}>Resolve event</button></div>}
+    {event.status === "open" && <div className="dialog-actions">{event.eventType === "binary" && <button className="ghost-button" onClick={onInput}>Input probabilities</button>}<button className="primary-button" onClick={onResolve} disabled={event.forecasterCount < 2}>Resolve event</button></div>}
   </div>;
 }
 
@@ -913,8 +935,8 @@ function initials(value: string) {
 function exportLeaderboard(snapshot: Snapshot | null) {
   if (!snapshot?.leaderboard.length) return;
   const rows = [
-    ["rank", "name", "type", "brier_index", "ci_low", "ci_high", "raw_brier", "resolved", "coverage_pct"],
-    ...snapshot.leaderboard.map((row) => [row.rank, row.name, row.kind, row.brierIndex.toFixed(3), row.ciLow.toFixed(3), row.ciHigh.toFixed(3), row.brier.toFixed(6), row.resolved, row.coverage.toFixed(2)]),
+    ["rank", "name", "type", "event_brier", "ci_low", "ci_high", "resolved_events", "coverage_pct"],
+    ...snapshot.leaderboard.map((row) => [row.rank, row.name, row.kind, row.brier.toFixed(6), row.ciLow.toFixed(6), row.ciHigh.toFixed(6), row.resolved, row.coverage.toFixed(2)]),
   ];
   const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
   const link = document.createElement("a");

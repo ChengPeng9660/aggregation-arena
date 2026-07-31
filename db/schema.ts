@@ -24,6 +24,10 @@ export const events = sqliteTable("events", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   resolvedAt: text("resolved_at"),
+  eventType: text("event_type").notNull().default("binary"),
+  sourceEventId: text("source_event_id"),
+  outcomesJson: text("outcomes_json").notNull().default('["Yes","No"]'),
+  resolvedOutcome: text("resolved_outcome"),
 });
 
 export const predictions = sqliteTable(
@@ -94,6 +98,9 @@ export const polymarketCandidates = sqliteTable("polymarket_candidates", {
   rawJson: text("raw_json").notNull().default("{}"),
   firstSeenAt: text("first_seen_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   lastSeenAt: text("last_seen_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  eventTitle: text("event_title").notNull().default(""),
+  eventNegRisk: integer("event_neg_risk").notNull().default(0),
+  eventNegRiskAugmented: integer("event_neg_risk_augmented").notNull().default(0),
 });
 
 export const marketSnapshots = sqliteTable("market_snapshots", {
@@ -191,6 +198,59 @@ export const modelForecastRuns = sqliteTable(
     error: text("error"),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     completedAt: text("completed_at"),
+    probabilitiesJson: text("probabilities_json"),
   },
   (table) => [uniqueIndex("model_forecast_context_participant_unique").on(table.contextId, table.participantId)],
 );
+
+export const eventOutcomes = sqliteTable(
+  "event_outcomes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    eventId: text("event_id").notNull(),
+    outcomeKey: text("outcome_key").notNull(),
+    label: text("label").notNull(),
+    marketId: text("market_id"),
+    sourceUrl: text("source_url").notNull().default(""),
+    priceAtSelection: real("price_at_selection").notNull().default(0),
+    volume24h: real("volume_24h").notNull().default(0),
+    totalVolume: real("total_volume").notNull().default(0),
+    liquidity: real("liquidity").notNull().default(0),
+    displayOrder: integer("display_order").notNull().default(0),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [uniqueIndex("event_outcomes_event_key_unique").on(table.eventId, table.outcomeKey)],
+);
+
+export const predictionOutcomes = sqliteTable(
+  "prediction_outcomes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    eventId: text("event_id").notNull(),
+    participantId: text("participant_id").notNull(),
+    participantName: text("participant_name").notNull(),
+    kind: text("kind").notNull(),
+    outcomeKey: text("outcome_key").notNull(),
+    probability: real("probability").notNull(),
+    rationale: text("rationale"),
+    version: text("version").notNull().default("v1"),
+    componentsJson: text("components_json"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [uniqueIndex("prediction_outcomes_current_unique").on(table.eventId, table.participantId, table.outcomeKey)],
+);
+
+export const predictionOutcomeHistory = sqliteTable("prediction_outcome_history", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  eventId: text("event_id").notNull(),
+  participantId: text("participant_id").notNull(),
+  participantName: text("participant_name").notNull(),
+  kind: text("kind").notNull(),
+  outcomeKey: text("outcome_key").notNull(),
+  probability: real("probability").notNull(),
+  rationale: text("rationale"),
+  version: text("version").notNull().default("v1"),
+  componentsJson: text("components_json"),
+  recordedAt: text("recorded_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});

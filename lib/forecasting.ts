@@ -1,12 +1,12 @@
 import { getD1 } from "@/db";
-import { recordAutomatedForecast } from "@/lib/arena";
+import { recordAutomatedEventForecast, recordAutomatedForecast } from "@/lib/arena";
 import {
   FORECAST_MODEL,
   buildProphetPredictionPrompt,
   buildSearchQuery,
   normalizeSources,
-  parsePredictionResponse,
 } from "@/lib/forecast-core.js";
+import { parseEventPredictionResponse } from "@/lib/event-core.js";
 
 type ForecastEnv = {
   DB: D1Database;
@@ -35,6 +35,8 @@ type ForecastEvent = {
   latestVolume24h: number;
   latestTotalVolume: number;
   latestLiquidity: number;
+  eventType: "binary" | "categorical";
+  outcomes: { key: string; label: string; marketId?: string; sourceUrl?: string; priceAtSelection?: number }[];
 };
 
 type ResearchSource = {
@@ -73,6 +75,7 @@ const FORECAST_SCHEMA = [
     status TEXT NOT NULL,
     yes_probability REAL,
     no_probability REAL,
+    probabilities_json TEXT,
     rationale TEXT,
     cited_sources_json TEXT NOT NULL DEFAULT '[]',
     raw_response TEXT,
@@ -123,11 +126,15 @@ export async function runForecastBatch(env: ForecastEnv, limit = 3) {
   }
 
   const rows = await env.DB.prepare(`
-    SELECT e.id, e.title, e.description, e.category, e.close_time,
+    SELECT e.id, e.title, e.description, e.category, e.close_time, e.event_type,
       pc.rules, pc.source_url, pc.last_seen_at, pc.yes_price AS latest_yes_price,
       pc.volume_24h AS latest_volume_24h, pc.total_volume AS latest_total_volume,
       pc.liquidity AS latest_liquidity, si.run_id, si.selected_at,
-      si.price_at_selection, si.volume_24h, si.total_volume, si.liquidity
+      si.price_at_selection, si.volume_24h, si.total_volume, si.liquidity,
+      (SELECT json_group_array(json_object(
+        'key', eo.outcome_key, 'label', eo.label, 'marketId', eo.market_id,
+        'sourceUrl', eo.source_url, 'priceAtSelection', eo.price_at_selection
+      )) FROM event_outcomes eo WHERE eo.event_id=e.id ORDER BY eo.display_order) AS event_outcomes_json
     FROM events e
     JOIN selection_items si ON si.event_id=e.id
     JOIN polymarket_candidates pc ON pc.market_id=si.market_id
@@ -199,7 +206,7 @@ async function forecastEvent(env: ForecastEnv, event: ForecastEvent) {
         seed: deterministicSeed(event.id),
       });
       try {
-        parsed = parsePredictionResponse(raw);
+        parsed = parseEventPredictionResponse(raw, event.outcomes);
         break;
       } catch (parseError) {
         if (attempt === 1) throw parseError;
@@ -211,25 +218,22 @@ async function forecastEvent(env: ForecastEnv, event: ForecastEvent) {
       messages: [
         {
           role: "system",
-          content: "Audit a binary forecast for semantic consistency. Return valid JSON only.",
+          content: "Audit a mutually-exclusive event forecast for semantic consistency. Return valid JSON only.",
         },
         {
           role: "user",
-          content: `The exact YES outcome is:
+          content: `The exact event and allowed outcomes are:
 ${event.title}
+${event.outcomes.map((outcome) => `- ${outcome.label} [key=${outcome.key}]`).join("\n")}
 
 Candidate forecast:
 ${JSON.stringify({
   rationale: initialPrediction.rationale,
-  probabilities: {
-    Yes: initialPrediction.yesProbability,
-    No: initialPrediction.noProbability,
-  },
+  probabilities: initialPrediction.probabilities,
   citedSourceRanks: initialPrediction.citedSourceRanks,
 })}
 
-Check that the numeric Yes probability refers to the exact YES outcome above and agrees with any numeric claims in the rationale. Correct an inversion or contradiction if present. Do not change a forecast merely to make it different from other questions. Return JSON only:
-{"rationale":"no more than 3 sentences","probabilities":{"Yes":0.5,"No":0.5},"citedSourceRanks":[1]}`,
+Check that each probability refers to the exact outcome key above and agrees with any numeric claims in the rationale. Correct an inversion or contradiction if present. Cover every outcome and return the same JSON schema as the original request.`,
         },
       ],
       max_tokens: 450,
@@ -237,7 +241,7 @@ Check that the numeric Yes probability refers to the exact YES outcome above and
       seed: deterministicSeed(`${event.id}-review`),
     });
     try {
-      parsed = parsePredictionResponse(reviewRaw);
+      parsed = parseEventPredictionResponse(reviewRaw, event.outcomes);
       raw = { initial: raw, review: reviewRaw };
     } catch {
       parsed = initialPrediction;
@@ -246,11 +250,12 @@ Check that the numeric Yes probability refers to the exact YES outcome above and
     const latencyMs = Date.now() - requestStarted;
     await env.DB.prepare(`
       UPDATE model_forecast_runs SET status='completed', yes_probability=?, no_probability=?,
-        rationale=?, cited_sources_json=?, raw_response=?, latency_ms=?, completed_at=?,
+        probabilities_json=?, rationale=?, cited_sources_json=?, raw_response=?, latency_ms=?, completed_at=?,
         error=NULL WHERE context_id=? AND participant_id=?
     `).bind(
-      parsed.yesProbability,
-      parsed.noProbability,
+      parsed.probabilities.yes ?? null,
+      parsed.probabilities.no ?? null,
+      JSON.stringify(parsed.probabilities),
       parsed.rationale,
       JSON.stringify(parsed.citedSourceRanks),
       parsed.rawText.slice(0, 12000),
@@ -259,20 +264,33 @@ Check that the numeric Yes probability refers to the exact YES outcome above and
       context.id,
       FORECAST_MODEL.participantId,
     ).run();
-    await recordAutomatedForecast({
-      eventId: event.id,
-      participantId: FORECAST_MODEL.participantId,
-      participantName: FORECAST_MODEL.participantName,
-      probability: parsed.yesProbability,
-      rationale: parsed.rationale,
-      version: FORECAST_MODEL.promptVersion,
-      components: {
-        contextId: context.id,
-        modelId: FORECAST_MODEL.modelId,
-        citedSourceRanks: parsed.citedSourceRanks,
-      },
-    });
-    return { eventId: event.id, contextId: context.id, status: "completed", probability: parsed.yesProbability };
+    const components = {
+      contextId: context.id,
+      modelId: FORECAST_MODEL.modelId,
+      citedSourceRanks: parsed.citedSourceRanks,
+    };
+    if (event.eventType === "categorical") {
+      await recordAutomatedEventForecast({
+        eventId: event.id,
+        participantId: FORECAST_MODEL.participantId,
+        participantName: FORECAST_MODEL.participantName,
+        probabilities: parsed.probabilities,
+        rationale: parsed.rationale,
+        version: FORECAST_MODEL.promptVersion,
+        components,
+      });
+    } else {
+      await recordAutomatedForecast({
+        eventId: event.id,
+        participantId: FORECAST_MODEL.participantId,
+        participantName: FORECAST_MODEL.participantName,
+        probability: parsed.probabilities.yes,
+        rationale: parsed.rationale,
+        version: FORECAST_MODEL.promptVersion,
+        components,
+      });
+    }
+    return { eventId: event.id, contextId: context.id, status: "completed", probabilities: parsed.probabilities };
   } catch (error) {
     await env.DB.prepare(`
       UPDATE model_forecast_runs SET status='failed', error=?, raw_response=?, latency_ms=?, completed_at=?
@@ -295,6 +313,7 @@ async function getOrCreateContext(env: ForecastEnv, event: ForecastEvent) {
   `).bind(event.id).first<Record<string, unknown>>();
   if (existing) return contextFromRow(existing, event);
 
+  if (!env.TAVILY_API_KEY) throw new Error("TAVILY_API_KEY is not configured");
   const searchQuery = buildSearchQuery(event);
   const newsResults = await searchTavily(env.TAVILY_API_KEY, searchQuery, "news");
   let sources = normalizeSources(newsResults, 10) as ResearchSource[];
@@ -308,6 +327,7 @@ async function getOrCreateContext(env: ForecastEnv, event: ForecastEvent) {
   const marketSnapshot = {
     source: "Polymarket",
     sourceUrl: event.sourceUrl,
+    outcomes: event.outcomes,
     atSelection: {
       observedAt: event.selectedAt,
       yesPrice: event.yesPriceAtSelection,
@@ -414,6 +434,7 @@ export async function getForecastPipelineSnapshot(
       status: row.status,
       yesProbability: row.yes_probability === null ? null : Number(row.yes_probability),
       noProbability: row.no_probability === null ? null : Number(row.no_probability),
+      probabilities: safeJson(String(row.probabilities_json || "{}"), {}),
       rationale: row.rationale,
       citedSourceRanks: safeJson(String(row.cited_sources_json || "[]"), []),
       sources: safeJson(String(row.sources_json || "[]"), []),
@@ -429,6 +450,10 @@ export async function getForecastPipelineSnapshot(
 }
 
 function rowToForecastEvent(row: Record<string, unknown>): ForecastEvent {
+  const storedOutcomes = safeJson(String(row.event_outcomes_json || "[]"), []) as ForecastEvent["outcomes"];
+  const outcomes = storedOutcomes.length
+    ? storedOutcomes
+    : [{ key: "yes", label: "Yes" }, { key: "no", label: "No" }];
   return {
     id: String(row.id),
     title: String(row.title),
@@ -448,6 +473,8 @@ function rowToForecastEvent(row: Record<string, unknown>): ForecastEvent {
     latestVolume24h: Number(row.latest_volume_24h ?? row.volume_24h ?? 0),
     latestTotalVolume: Number(row.latest_total_volume ?? row.total_volume ?? 0),
     latestLiquidity: Number(row.latest_liquidity ?? row.liquidity ?? 0),
+    eventType: String(row.event_type || "binary") === "categorical" ? "categorical" : "binary",
+    outcomes,
   };
 }
 

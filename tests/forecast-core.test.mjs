@@ -73,7 +73,7 @@ test("prediction prompt freezes identical sources and includes the market snapsh
   assert.match(prompt, /Latest frozen snapshot before forecasting/);
   assert.match(prompt, /Yes price: 62.00%/);
   assert.match(prompt, /24h trading volume: \$120000/);
-  assert.match(prompt, /"Yes":0.62,"No":0.38/);
+  assert.match(prompt, /"market":"yes","probability":0.0/);
 });
 
 test("parsePredictionResponse accepts fenced JSON and normalizes binary probabilities", () => {
