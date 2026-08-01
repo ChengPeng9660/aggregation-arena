@@ -206,15 +206,10 @@ async function forecastEvent(env: ForecastEnv, event: ForecastEvent, model: Fore
   try {
     let parsed;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      raw = await env.AI!.run(model.modelId, {
-        messages: [
+      raw = await env.AI!.run(model.modelId, inferenceInput(model, [
           { role: "system", content: "Return valid JSON only. Calibrate probabilities carefully." },
           { role: "user", content: attempt ? `${prompt}\n\nYour prior response was invalid. Return the required JSON object only.` : prompt },
-        ],
-        max_tokens: 700,
-        temperature: 0.1,
-        seed: deterministicSeed(`${event.id}-${model.participantId}`),
-      });
+        ], 700, 0.1, deterministicSeed(`${event.id}-${model.participantId}`)));
       try {
         parsed = parseEventPredictionResponse(raw, event.outcomes);
         break;
@@ -224,8 +219,7 @@ async function forecastEvent(env: ForecastEnv, event: ForecastEvent, model: Fore
     }
     if (!parsed) throw new Error("Model response could not be parsed");
     const initialPrediction = parsed;
-    const reviewRaw = await env.AI!.run(model.modelId, {
-      messages: [
+    const reviewRaw = await env.AI!.run(model.modelId, inferenceInput(model, [
         {
           role: "system",
           content: "Audit a mutually-exclusive event forecast for semantic consistency. Return valid JSON only.",
@@ -245,11 +239,7 @@ ${JSON.stringify({
 
 Check that each probability refers to the exact outcome key above and agrees with any numeric claims in the rationale. Correct an inversion or contradiction if present. Cover every outcome and return the same JSON schema as the original request.`,
         },
-      ],
-      max_tokens: 450,
-      temperature: 0,
-      seed: deterministicSeed(`${event.id}-${model.participantId}-review`),
-    });
+      ], 450, 0, deterministicSeed(`${event.id}-${model.participantId}-review`)));
     try {
       parsed = parseEventPredictionResponse(reviewRaw, event.outcomes);
       raw = { initial: raw, review: reviewRaw };
@@ -557,4 +547,25 @@ function deterministicSeed(value: string) {
     hash = Math.imul(hash, 16777619);
   }
   return (Math.abs(hash) % 2_000_000_000) + 1;
+}
+
+function inferenceInput(
+  model: ForecastModel,
+  messages: { role: string; content: string }[],
+  maxTokens: number,
+  temperature: number,
+  seed: number,
+) {
+  if (model.inferenceMode === "json-no-thinking") {
+    return {
+      messages,
+      max_completion_tokens: maxTokens,
+      temperature,
+      seed,
+      reasoning_effort: "low",
+      chat_template_kwargs: { enable_thinking: false },
+      response_format: { type: "json_object" },
+    };
+  }
+  return { messages, max_tokens: maxTokens, temperature, seed };
 }

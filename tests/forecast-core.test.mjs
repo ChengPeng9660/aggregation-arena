@@ -17,6 +17,7 @@ test("forecast registry contains two independent model families on the shared pr
     ["@cf/meta/llama-3.2-3b-instruct", "@cf/google/gemma-4-26b-a4b-it"],
   );
   assert.ok(FORECAST_MODELS.every((model) => model.promptVersion === "prophet-shared-context-v1"));
+  assert.equal(FORECAST_MODELS[1].inferenceMode, "json-no-thinking");
 });
 
 const event = {
