@@ -1041,22 +1041,22 @@ function dialogKicker(dialog: NonNullable<Dialog>) {
 }
 
 function formatTime(value: string) {
-  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return new Date(value).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 }
 
 function formatDate(value: string) {
-  return new Date(value).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function formatDateTime(value: string) {
-  return new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return new Date(value).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function formatSourceDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? value
-    : date.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+    : date.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }
 
 function sourceHost(value: string) {

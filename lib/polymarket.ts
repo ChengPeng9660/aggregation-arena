@@ -399,7 +399,10 @@ export async function runPolymarketScheduled(
 export async function getCurationSnapshot(db: D1Database = getD1()) {
   await ensureCurationReady(db);
   const [latestSync, latestRun, categoryRows, selectedRows] = await Promise.all([
-    db.prepare("SELECT * FROM curation_sync_runs ORDER BY id DESC LIMIT 1").first<Record<string, unknown>>(),
+    db.prepare(`
+      SELECT * FROM curation_sync_runs
+      ORDER BY CASE WHEN status='completed' THEN 0 ELSE 1 END, id DESC LIMIT 1
+    `).first<Record<string, unknown>>(),
     db.prepare("SELECT * FROM selection_runs ORDER BY started_at DESC LIMIT 1").first<Record<string, unknown>>(),
     db.prepare(`
       SELECT category, COUNT(*) AS candidate_count,
