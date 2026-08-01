@@ -77,14 +77,14 @@ Cloudflare Worker 版本：
 - 在 Forecast Pipeline 中直接展示全部冻结来源、域名、发布日期、引用状态和原文链接。
 - 一道题只检索一次；新闻来源、检索时间，以及 Polymarket 入选时和预测前的价格、成交量、流动性双快照冻结到 `research_contexts`。
 - 所有当前和未来模型复用完全相同的 Context，避免检索差异污染模型比较。
-- 首个模型为 Cloudflare Workers AI 的 `@cf/meta/llama-3.2-3b-instruct`。
+- 当前接入两个不同模型家族：Meta `@cf/meta/llama-3.2-3b-instruct` 与 Google `@cf/google/gemma-4-26b-a4b-it`。
 - Prompt 仿照 Prophet Arena：明确题目、结算规则、截止时间、共享来源和市场快照。
 - 模型必须为 Event 的每个 outcome key 输出概率、最多三句话的理由和所引用的 Source Rank。
 - 系统解析 Prophet 风格的 outcome 数组并归一化到概率 simplex；缺少任何 outcome 时自动重试一次。
 - 每次运行完整保存模型、Prompt 版本、原始响应、延迟、引用来源和失败原因。
 - 二元预测写入 `predictions`；多 outcome 预测写入 `prediction_outcomes` 和不可变 `prediction_outcome_history`，随后进入 Aggregation 和 Leaderboard。
 - Forecasts 页面显示流水线配置、待处理数量、预测结果、理由和冻结证据。
-- 每小时同步 Polymarket 后最多补跑 3 道未预测题目；也可以由管理员手工触发下一题。
+- 每小时同步 Polymarket 后最多补跑 3 个 model-event 任务；同一 Event 的两个模型复用同一个 Frozen Context，不会重复调用 Tavily。管理员也可以手工触发下一个任务。
 
 ### 聚合计算
 
@@ -188,21 +188,23 @@ Tavily Basic Search（每道题一次，最多 10 个来源）
       ↓
 同一份 Context 分发给所有模型
       ↓
-Cloudflare Llama 3.2 3B（首个免费模型）
+并行模型注册表
+  ├─ Meta Llama 3.2 3B
+  └─ Google Gemma 4 26B A4B
       ↓
 严格 JSON 解析 + 概率归一化 + 一次格式重试
       ↓
 Prediction History → Aggregators → Brier Leaderboard
 ```
 
-这个实现保留了 Prophet Arena 最重要的实验控制：同一事件的模型必须看到同样的信息来源与市场快照。后续增加模型时，只需在模型注册表中增加 Runner，并使用已有的 `context_id`，不能重新搜索。
+这个实现保留了 Prophet Arena 最重要的实验控制：同一事件的模型必须看到同样的信息来源与市场快照。模型注册表按 Event × Model 生成任务，已有 `context_id` 时直接复用，不能重新搜索。
 
 ### 免费额度估算
 
 - Tavily 免费账户每月 1,000 API Credits；Basic Search 每次 1 Credit。
 - 默认每日最多 15 题，每题搜索一次，30 天约使用 `15 × 30 = 450 Credits`。
-- Cloudflare Workers AI 有每日免费 Neurons 配额；实际消耗取决于 Prompt 来源长度和输出长度。
-- 为减少消耗，当前每小时最多处理 3 题、每个来源摘要最多 1,800 字符、模型最多输出 700 tokens。
+- 两个 Cloudflare Workers AI 模型共享同一份每日免费 Neurons 配额；实际消耗取决于 Prompt 来源长度和输出长度。
+- 为减少消耗，当前每小时最多处理 3 个 model-event 任务、每个来源摘要最多 1,800 字符、模型最多输出 700 tokens。
 
 ### 配置 API 密钥
 
@@ -870,7 +872,7 @@ aggregation-benchmark-platform/
 ## 当前限制
 
 - 手工创建和手工概率录入界面目前仍以 Yes / No 为主；Polymarket 自动流水线支持多 outcome Event。
-- 当前自动 Predictor 只有 Cloudflare Workers AI 的 Llama 3.2 3B；加入第二个模型后六种 aggregation 才会在新 Event 上产生结果。
+- 当前自动 Predictor 包含 Llama 3.2 3B 与 Gemma 4 26B A4B；模型共享 Evidence，但两次独立推理。六种 aggregation 会在同一 Event 收齐两个底层预测后产生有意义的组合结果。
 - 自动结算要求 Polymarket 已关闭，并且 Event 中恰有一个 outcome Market 的 Yes 价格达到 `≥0.999`。
 - 固定分类器使用标签和关键词；低置信度的边界题仍可能需要后续人工审核。
 - 不支持连续结果或数值预测评分；多 outcome 必须互斥且穷尽。

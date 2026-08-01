@@ -131,15 +131,18 @@ type ForecastSource = {
   score: number | null;
 };
 
-type ForecastPipelineSnapshot = {
-  model: {
+type ForecastModel = {
     participantId: string;
     participantName: string;
     organization: string;
     modelId: string;
     promptVersion: string;
     color: string;
-  };
+};
+
+type ForecastPipelineSnapshot = {
+  models: ForecastModel[];
+  model: ForecastModel;
   configured: { aiBinding: boolean; searchSecret: boolean };
   stats: { contextsReady: number; completed: number; failed: number; pending: number };
   runs: {
@@ -148,6 +151,7 @@ type ForecastPipelineSnapshot = {
     title: string;
     category: string;
     contextId: string;
+    participantId: string;
     modelId: string;
     status: "running" | "completed" | "failed";
     yesProbability: number | null;
@@ -414,6 +418,9 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
   const pipeline = snapshot.forecastPipeline;
   const [selectedRunId, setSelectedRunId] = useState(pipeline.runs[0]?.id || "");
   const run = pipeline.runs.find((item) => item.id === selectedRunId) || pipeline.runs[0];
+  const selectedModel = pipeline.models.find((model) => model.participantId === run?.participantId)
+    || pipeline.models.find((model) => model.modelId === run?.modelId)
+    || pipeline.model;
   const runEvent = run ? snapshot.events.find((event) => event.id === run.eventId) : undefined;
   const selectedMarket = run ? curation.selectedMarkets.find((market) => market.eventId === run.eventId) : curation.selectedMarkets[0];
   const fetched = curation.latestSync?.fetchedMarkets || 0;
@@ -495,7 +502,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       <section id="pipeline-stage-5" className="story-stage">
         <StageHeader number="05" eyebrow="INFERENCE" title="Model call" summary="Question, rules, evidence, and market data are assembled into a versioned prompt." />
         <div className="model-call-layout">
-          <div className="model-identity"><span className="model-pulse" /><small>MODEL</small><h3>{pipeline.model.participantName}</h3><code>{pipeline.model.modelId}</code><dl><DetailTerm label="Prompt version" value={pipeline.model.promptVersion} /><DetailTerm label="Temperature" value="0.1" /><DetailTerm label="Output mode" value="Strict JSON" /><DetailTerm label="Validation" value="Complete probability simplex" /></dl></div>
+          <div className="model-identity"><span className="model-pulse" /><small>MODEL</small><h3>{selectedModel.participantName}</h3><code>{selectedModel.modelId}</code><dl><DetailTerm label="Model family" value={selectedModel.organization} /><DetailTerm label="Prompt version" value={selectedModel.promptVersion} /><DetailTerm label="Temperature" value="0.1" /><DetailTerm label="Validation" value="Complete probability simplex" /></dl></div>
           <div className="prompt-anatomy"><small>PROMPT ASSEMBLY</small>{[
             ["01", "Current time", run?.asOfTime || "Awaiting context"],
             ["02", "Forecasting question", run?.title || selectedMarket?.title || "Awaiting selected event"],
@@ -790,9 +797,9 @@ function ForecastsView({
 
       <section className="metric-strip">
         <Metric label="Frozen contexts" value={pipeline.stats.contextsReady} detail="one search per event" />
-        <Metric label="Completed" value={pipeline.stats.completed} detail={pipeline.model.participantName} />
-        <Metric label="Pending" value={pipeline.stats.pending} detail="open selected events" />
-        <Metric label="Pipeline" value={ready ? "READY" : "SETUP"} detail="3 events / hourly run" highlight />
+        <Metric label="Completed" value={pipeline.stats.completed} detail={`${pipeline.models.length} model families`} />
+        <Metric label="Pending" value={pipeline.stats.pending} detail="model-event runs" />
+        <Metric label="Pipeline" value={ready ? "READY" : "SETUP"} detail="3 model runs / hour" highlight />
       </section>
 
       <section className="pipeline-flow" aria-label="Forecast pipeline">
@@ -802,7 +809,7 @@ function ForecastsView({
         <i>→</i>
         <div><span>03</span><b>Frozen context</b><small>same evidence for every model</small></div>
         <i>→</i>
-        <div className="model-step"><span>04</span><b>{pipeline.model.participantName}</b><small>Workers AI · strict JSON validation</small></div>
+        <div className="model-step"><span>04</span><b>{pipeline.models.length} independent models</b><small>{pipeline.models.map((model) => model.participantName).join(" · ")}</small></div>
         <i>→</i>
         <div><span>05</span><b>Arena score</b><small>prediction history + Brier</small></div>
       </section>
@@ -810,13 +817,13 @@ function ForecastsView({
       <section className="forecast-runs">
         <div className="section-title">
           <div><h2>Recent model forecasts</h2></div>
-          <span>{pipeline.model.promptVersion}</span>
+          <span>{pipeline.models.length} models · {pipeline.model.promptVersion}</span>
         </div>
         {pipeline.runs.length ? pipeline.runs.map((run) => (
           <article key={run.id} className={`forecast-run ${run.status}`}>
             <div className="run-status"><i /><span>{run.status}</span></div>
             <div className="run-question">
-              <span>{run.category} · {run.sourceCount} shared sources</span>
+              <span>{pipeline.models.find((model) => model.participantId === run.participantId)?.participantName || run.modelId} · {run.category} · {run.sourceCount} shared sources</span>
               <h3>{run.title}</h3>
               {run.rationale && <p>{run.rationale}</p>}
               {run.error && <p className="run-error">{run.error}</p>}

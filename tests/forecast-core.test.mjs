@@ -1,11 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  FORECAST_MODELS,
   buildProphetPredictionPrompt,
   buildSearchQuery,
   normalizeSources,
   parsePredictionResponse,
 } from "../lib/forecast-core.js";
+
+test("forecast registry contains two independent model families on the shared prompt", () => {
+  assert.equal(FORECAST_MODELS.length, 2);
+  assert.equal(new Set(FORECAST_MODELS.map((model) => model.participantId)).size, 2);
+  assert.equal(new Set(FORECAST_MODELS.map((model) => model.modelId)).size, 2);
+  assert.deepEqual(
+    FORECAST_MODELS.map((model) => model.modelId),
+    ["@cf/meta/llama-3.2-3b-instruct", "@cf/google/gemma-4-26b-a4b-it"],
+  );
+  assert.ok(FORECAST_MODELS.every((model) => model.promptVersion === "prophet-shared-context-v1"));
+});
 
 const event = {
   id: "poly-123",
