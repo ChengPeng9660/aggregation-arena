@@ -556,8 +556,12 @@ tbody tr.top-row { background: linear-gradient(90deg, rgba(138,97,255,.05), tran
 .evidence-stack small { display: block; margin-top: 4px; color: var(--gold); font: 7px var(--font-geist-mono), monospace; }
 .evidence-stack p { display: -webkit-box; margin: 7px 0 0; overflow: hidden; color: var(--quiet); font-size: 8px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .model-call-layout { display: grid; grid-template-columns: minmax(230px, .7fr) minmax(0, 1.6fr); gap: 34px; }
+.model-registry { display: grid; gap: 14px; }
 .model-identity { position: relative; padding: 24px; border: 1px solid rgba(243,128,32,.3); background: #fffaf5; }
+.model-registry .model-identity { padding: 18px; background: var(--surface-raised); }
+.model-registry .model-identity dl { margin-top: 16px; }
 .model-pulse { display: block; width: 9px; height: 9px; margin-bottom: 25px; border-radius: 50%; background: #f38020; box-shadow: 0 0 0 7px rgba(243,128,32,.10); animation: breathe 2.2s ease-in-out infinite; }
+.model-registry .model-pulse { margin-bottom: 18px; }
 .model-identity h3 { margin: 10px 0 5px; font-size: 20px; }
 .model-identity > code { color: #a65312; font: 8px var(--font-geist-mono), monospace; }
 .prompt-anatomy { border-top: 1px solid var(--line); }
@@ -573,6 +577,22 @@ tbody tr.top-row { background: linear-gradient(90deg, rgba(138,97,255,.05), tran
 .probability-visual strong { font: 14px var(--font-geist-mono), monospace; }
 .probability-visual i { height: 10px; }
 .prediction-explanation blockquote { margin: 17px 0 0; padding: 0 0 0 18px; border-left: 3px solid var(--gold); color: var(--muted); font-size: 11px; line-height: 1.75; }
+.model-prediction-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
+.model-prediction { min-width: 0; padding: 24px 28px 30px 0; border-top: 3px solid var(--purple); }
+.model-prediction + .model-prediction { padding-right: 0; padding-left: 28px; border-left: 1px solid var(--line); }
+.model-prediction-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+.model-prediction-head small { color: var(--quiet); font: 9px var(--font-geist-mono), monospace; }
+.model-prediction-head h3 { margin: 7px 0 5px; font-size: 21px; letter-spacing: -.035em; }
+.model-prediction-head code { display: block; overflow-wrap: anywhere; color: var(--purple); font: 9px var(--font-geist-mono), monospace; }
+.model-prediction-head > span { padding: 4px 7px; border-radius: 99px; color: var(--quiet); background: var(--surface-soft); font: 8px var(--font-geist-mono), monospace; text-transform: uppercase; }
+.model-prediction.completed .model-prediction-head > span { color: #0d624f; background: #edf9f5; }
+.model-prediction.failed .model-prediction-head > span { color: var(--red); background: #fff1f1; }
+.model-prediction .probability-visual { margin-top: 28px; }
+.model-prediction .prediction-explanation { margin-top: 34px; }
+.prediction-pending { display: grid; min-height: 260px; place-content: center; padding: 32px; text-align: center; }
+.prediction-pending b { font-size: 16px; }
+.prediction-pending p { max-width: 400px; margin: 10px auto 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.prediction-pending code { color: var(--purple); font: inherit; }
 .scoring-line { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr auto 1fr; align-items: center; margin-top: 46px; padding: 17px 0; border-block: 1px solid var(--line); }
 .scoring-line span { text-align: center; font: 7px var(--font-geist-mono), monospace; letter-spacing: .08em; }
 .scoring-line i { color: var(--gold); font-style: normal; }
@@ -774,7 +794,9 @@ td { font-size: 12px; }
   .release-summary { grid-template-columns: 1fr 1fr; }
   .release-summary > div:nth-child(3) { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
   .release-summary > div:nth-child(4) { border-top: 1px solid var(--line); }
-  .evidence-layout, .model-call-layout, .prediction-story { grid-template-columns: 1fr; }
+  .evidence-layout, .model-call-layout, .prediction-story, .model-prediction-grid { grid-template-columns: 1fr; }
+  .model-prediction { padding-right: 0; }
+  .model-prediction + .model-prediction { padding-left: 0; border-left: 0; }
 }
 
 @media (max-width: 560px) {

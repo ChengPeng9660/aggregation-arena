@@ -416,21 +416,19 @@ function NavButton({ active, label, icon, onClick }: { active: boolean; label: s
 function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEvent: (event: ArenaEvent) => void }) {
   const curation = snapshot.curation;
   const pipeline = snapshot.forecastPipeline;
-  const [selectedRunId, setSelectedRunId] = useState(pipeline.runs[0]?.id || "");
-  const run = pipeline.runs.find((item) => item.id === selectedRunId) || pipeline.runs[0];
-  const selectedModel = pipeline.models.find((model) => model.participantId === run?.participantId)
-    || pipeline.models.find((model) => model.modelId === run?.modelId)
-    || pipeline.model;
+  const [selectedEventId, setSelectedEventId] = useState(pipeline.runs[0]?.eventId || "");
+  const run = pipeline.runs.find((item) => item.eventId === selectedEventId) || pipeline.runs[0];
+  const eventRuns = run ? pipeline.runs.filter((item) => item.eventId === run.eventId) : [];
+  const modelComparisons = pipeline.models.map((model) => ({
+    model,
+    run: eventRuns.find((item) => item.participantId === model.participantId || item.modelId === model.modelId),
+  }));
+  const citedSourceRanks = new Set(eventRuns.flatMap((item) => item.citedSourceRanks));
   const runEvent = run ? snapshot.events.find((event) => event.id === run.eventId) : undefined;
   const selectedMarket = run ? curation.selectedMarkets.find((market) => market.eventId === run.eventId) : curation.selectedMarkets[0];
   const fetched = curation.latestSync?.fetchedMarkets || 0;
   const eligible = curation.latestSync?.eligibleMarkets || 0;
   const selected = curation.latestSelection?.selectedCount || 0;
-  const probabilities = run
-    ? Object.keys(run.probabilities).length
-      ? run.probabilities
-      : run.yesProbability === null ? {} : { Yes: run.yesProbability, No: run.noProbability || 0 }
-    : {};
 
   return (
     <div className="page-content pipeline-story enter">
@@ -492,17 +490,17 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
 
       <section id="pipeline-stage-4" className="story-stage">
         <StageHeader number="04" eyebrow="EVIDENCE" title="Research context" summary="Tavily sources and the market snapshot are frozen once per event." />
-        <RunSelector runs={pipeline.runs} selected={run?.id || ""} onSelect={setSelectedRunId} />
+        <RunSelector runs={pipeline.runs} selected={run?.eventId || ""} onSelect={setSelectedEventId} modelCount={pipeline.models.length} />
         {run ? <div className="evidence-layout">
           <div className="query-panel"><small>SEARCH QUERY</small><code>{run.searchQuery || run.title}</code><dl><DetailTerm label="Provider" value={run.provider} /><DetailTerm label="As-of time" value={formatDateTime(run.asOfTime)} /><DetailTerm label="Frozen sources" value={String(run.sourceCount)} /><DetailTerm label="Context ID" value={run.contextId} /></dl></div>
-          <div className="evidence-stack">{run.sources.slice(0, 6).map((source) => <a key={source.rank} href={source.url} target="_blank" rel="noreferrer"><span>{String(source.rank).padStart(2, "0")}</span><div><b>{source.title}</b><small>{sourceHost(source.url)}{source.publishedDate ? ` · ${formatSourceDate(source.publishedDate)}` : ""}{run.citedSourceRanks.includes(source.rank) ? " · used by model" : ""}</small><p>{source.content}</p></div></a>)}</div>
+          <div className="evidence-stack">{run.sources.slice(0, 6).map((source) => <a key={source.rank} href={source.url} target="_blank" rel="noreferrer"><span>{String(source.rank).padStart(2, "0")}</span><div><b>{source.title}</b><small>{sourceHost(source.url)}{source.publishedDate ? ` · ${formatSourceDate(source.publishedDate)}` : ""}{citedSourceRanks.has(source.rank) ? " · cited by model" : ""}</small><p>{source.content}</p></div></a>)}</div>
         </div> : <div className="empty-block">No model context has been created yet.</div>}
       </section>
 
       <section id="pipeline-stage-5" className="story-stage">
         <StageHeader number="05" eyebrow="INFERENCE" title="Model call" summary="Question, rules, evidence, and market data are assembled into a versioned prompt." />
         <div className="model-call-layout">
-          <div className="model-identity"><span className="model-pulse" /><small>MODEL</small><h3>{selectedModel.participantName}</h3><code>{selectedModel.modelId}</code><dl><DetailTerm label="Model family" value={selectedModel.organization} /><DetailTerm label="Prompt version" value={selectedModel.promptVersion} /><DetailTerm label="Temperature" value="0.1" /><DetailTerm label="Validation" value="Complete probability simplex" /></dl></div>
+          <div className="model-registry">{modelComparisons.map(({ model, run: modelRun }) => <div className="model-identity" key={model.participantId}><span className="model-pulse" style={{ background: model.color, boxShadow: `0 0 0 7px ${model.color}1a` }} /><small>{modelRun?.status || "PENDING"}</small><h3>{model.participantName}</h3><code>{model.modelId}</code><dl><DetailTerm label="Model family" value={model.organization} /><DetailTerm label="Context" value={modelRun?.contextId || run?.contextId || "Awaiting context"} /><DetailTerm label="Prompt version" value={model.promptVersion} /></dl></div>)}</div>
           <div className="prompt-anatomy"><small>PROMPT ASSEMBLY</small>{[
             ["01", "Current time", run?.asOfTime || "Awaiting context"],
             ["02", "Forecasting question", run?.title || selectedMarket?.title || "Awaiting selected event"],
@@ -516,11 +514,17 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </section>
 
       <section id="pipeline-stage-6" className="story-stage output-stage">
-        <StageHeader number="06" eyebrow="OUTPUT" title="Prediction" summary="Probabilities are validated, normalized, and stored with the rationale and sources." />
-        {run ? <div className="prediction-story">
-          <div className="probability-visual"><small>PROBABILITY DISTRIBUTION</small>{Object.entries(probabilities).map(([key, probability], index) => <div key={key}><header><b>{runEvent?.outcomes.find((outcome) => outcome.key === key)?.label || key}</b><strong>{(probability * 100).toFixed(1)}%</strong></header><i><em className={index === 0 ? "gold" : "purple"} style={{ width: `${probability * 100}%` }} /></i></div>)}</div>
-          <div className="prediction-explanation"><small>MODEL RATIONALE</small><blockquote>{run.rationale || "The model returned a probability distribution without a written rationale."}</blockquote><dl><DetailTerm label="Run status" value={run.status} /><DetailTerm label="Latency" value={run.latencyMs === null ? "—" : `${(run.latencyMs / 1000).toFixed(1)} seconds`} /><DetailTerm label="Cited evidence" value={run.citedSourceRanks.length ? run.citedSourceRanks.map((rank) => `#${rank}`).join(", ") : "None"} /><DetailTerm label="Stored result" value="Prediction history + audit log" /></dl></div>
-        </div> : <div className="empty-block">No model output is available yet.</div>}
+        <StageHeader number="06" eyebrow="OUTPUT" title="Model predictions" summary="Llama and Gemma are compared on the same Event and Frozen Context." />
+        {run ? <div className="model-prediction-grid">{modelComparisons.map(({ model, run: modelRun }) => {
+          const probabilities = predictionProbabilities(modelRun);
+          return <article className={`model-prediction ${modelRun?.status || "pending"}`} key={model.participantId} style={{ borderTopColor: model.color }}>
+            <header className="model-prediction-head"><div><small>{model.organization}</small><h3>{model.participantName}</h3><code>{model.modelId}</code></div><span>{modelRun?.status || "pending"}</span></header>
+            {modelRun ? <>
+              <div className="probability-visual"><small>PROBABILITY DISTRIBUTION</small>{Object.entries(probabilities).map(([key, probability], index) => <div key={key}><header><b>{runEvent?.outcomes.find((outcome) => outcome.key === key)?.label || key}</b><strong>{(probability * 100).toFixed(1)}%</strong></header><i><em className={index === 0 ? "gold" : "purple"} style={{ width: `${probability * 100}%` }} /></i></div>)}</div>
+              <div className="prediction-explanation"><small>MODEL RATIONALE</small><blockquote>{modelRun.rationale || "The model returned a probability distribution without a written rationale."}</blockquote><dl><DetailTerm label="Latency" value={modelRun.latencyMs === null ? "—" : `${(modelRun.latencyMs / 1000).toFixed(1)} seconds`} /><DetailTerm label="Cited evidence" value={modelRun.citedSourceRanks.length ? modelRun.citedSourceRanks.map((rank) => `#${rank}`).join(", ") : "None"} /><DetailTerm label="Context ID" value={modelRun.contextId} /></dl></div>
+            </> : <div className="prediction-pending"><b>Awaiting prediction</b><p>This model will reuse Context ID <code>{run.contextId}</code> in the next model-event batch. Tavily will not run again.</p></div>}
+          </article>;
+        })}</div> : <div className="empty-block">No model output is available yet.</div>}
         <div className="scoring-line"><span>MODEL FORECASTS</span><i>→</i><span>SIX AGGREGATION METHODS</span><i>→</i><span>EVENT RESOLUTION</span><i>→</i><span>EVENT BRIER</span><i>→</i><span>LIVE LEADERBOARD</span></div>
       </section>
     </div>
@@ -543,9 +547,19 @@ function DetailTerm({ label, value }: { label: string; value: string }) {
   return <div><dt>{label}</dt><dd>{value}</dd></div>;
 }
 
-function RunSelector({ runs, selected, onSelect }: { runs: ForecastPipelineSnapshot["runs"]; selected: string; onSelect: (id: string) => void }) {
+function RunSelector({ runs, selected, onSelect, modelCount }: { runs: ForecastPipelineSnapshot["runs"]; selected: string; onSelect: (id: string) => void; modelCount: number }) {
   if (!runs.length) return null;
-  return <label className="run-selector">Walk through a completed run<select value={selected} onChange={(event) => onSelect(event.target.value)}>{runs.map((run) => <option key={run.id} value={run.id}>{run.title} · {run.status}</option>)}</select></label>;
+  const events = Array.from(new Map(runs.map((run) => [run.eventId, run])).values());
+  return <label className="run-selector">Compare models on one Event<select value={selected} onChange={(event) => onSelect(event.target.value)}>{events.map((eventRun) => {
+    const completedModels = new Set(runs.filter((item) => item.eventId === eventRun.eventId && item.status === "completed").map((item) => item.participantId)).size;
+    return <option key={eventRun.eventId} value={eventRun.eventId}>{eventRun.title} · {completedModels}/{modelCount} models</option>;
+  })}</select></label>;
+}
+
+function predictionProbabilities(run: ForecastPipelineSnapshot["runs"][number] | undefined) {
+  if (!run) return {};
+  if (Object.keys(run.probabilities).length) return run.probabilities;
+  return run.yesProbability === null ? {} : { Yes: run.yesProbability, No: run.noProbability || 0 };
 }
 
 function LeaderboardView({
