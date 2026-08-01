@@ -444,7 +444,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       <section id="pipeline-stage-1" className="story-stage">
         <StageHeader number="01" eyebrow="SOURCE" title="Market intake" summary="Active Polymarket events are synced hourly." />
         <div className="funnel-visual">
-          <FunnelBar label="Source events fetched" value={curation.latestSync?.fetchedEvents || 0} max={Math.max(1, curation.latestSync?.fetchedEvents || 0)} detail="Gamma API / active events" tone="purple" />
+          <FunnelBar label="Top-volume events fetched" value={curation.latestSync?.fetchedEvents || 0} max={Math.max(1, curation.latestSync?.fetchedEvents || 0)} detail="Active events ordered by 24h volume" tone="purple" />
           <FunnelBar label="Markets normalized" value={fetched} max={Math.max(1, fetched)} detail="Canonical IDs, prices, rules, volume" tone="purple" />
           <FunnelBar label="Markets passing all gates" value={eligible} max={Math.max(1, fetched)} detail={`${fetched ? ((eligible / fetched) * 100).toFixed(1) : "0.0"}% of normalized universe`} tone="gold" />
         </div>

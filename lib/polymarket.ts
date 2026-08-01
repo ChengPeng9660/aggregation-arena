@@ -33,7 +33,7 @@ type EventCandidate = Candidate & {
 };
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
-const MAX_EVENT_PAGES = 4;
+const MAX_EVENT_PAGES = 8;
 const EVENT_PAGE_SIZE = 100;
 
 const CURATION_SCHEMA = [
