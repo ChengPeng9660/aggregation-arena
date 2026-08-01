@@ -15,7 +15,7 @@ export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
   description: text("description").notNull().default(""),
-  category: text("category").notNull().default("General"),
+  category: text("category").notNull().default("Entertainment"),
   season: text("season").notNull().default("Season 1"),
   closeTime: text("close_time"),
   status: text("status").notNull().default("open"),

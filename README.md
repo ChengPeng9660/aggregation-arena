@@ -42,8 +42,8 @@ Cloudflare Worker 版本：
 - 有开始时间时，市场至少存在 6 小时。
 - 题目说明与结算依据必须有足够文字。
 - 通过硬筛选后，还要位于所属类别的 24 小时成交量前 30%。
-- 固定为七类：Politics & Policy、Economics、Finance & Crypto、Business & Technology、Science & Health、Sports、Culture & World。
-- 每日 `00:10 UTC` 生成不可变批次，默认每类最多 3 题、总计最多 21 题。
+- 与 Prophet Arena 的公开研究设计一致，固定为五类：Politics、Economics、Science、Sports、Entertainment。
+- 每日 `00:10 UTC` 生成不可变批次，默认每类最多 3 题、总计最多 15 题。
 - 若某类没有足够高质量题目，保留空位，不用低质量题补齐。
 - 一个 Polymarket Event 每个批次最多入选一次；若它是 `negRisk` 互斥 Event，则保留全部活跃、具名 outcomes，而不是只保留代表 Market。
 - 自动忽略 `Company A`、`Person X` 等尚未具名的 augmented negRisk 占位 Market。
@@ -201,7 +201,7 @@ Prediction History → Aggregators → Brier Leaderboard
 ### 免费额度估算
 
 - Tavily 免费账户每月 1,000 API Credits；Basic Search 每次 1 Credit。
-- 默认每日最多 21 题，每题搜索一次，30 天约使用 `21 × 30 = 630 Credits`。
+- 默认每日最多 15 题，每题搜索一次，30 天约使用 `15 × 30 = 450 Credits`。
 - Cloudflare Workers AI 有每日免费 Neurons 配额；实际消耗取决于 Prompt 来源长度和输出长度。
 - 为减少消耗，当前每小时最多处理 3 题、每个来源摘要最多 1,800 字符、模型最多输出 700 tokens。
 
@@ -477,7 +477,7 @@ npm run build
    - 排名重新排序。
 9. 打开 `Audit log`，确认出现创建题目、提交预测和结算记录。
 10. 点击 `Export CSV`，确认当前排名可以导出。
-11. 打开 `Curation`，确认能看到同步状态、七类配额和最新不可变批次。
+11. 打开 `Curation`，确认能看到同步状态、五类配额和最新不可变批次。
 
 建议同时验证以下边界：
 
@@ -815,7 +815,7 @@ POST /api/arena
   "action": "create_event",
   "title": "Will the event happen?",
   "description": "Resolution criteria",
-  "category": "General",
+  "category": "Science",
   "season": "Season 1",
   "closeTime": "2026-12-31T12:00:00.000Z"
 }

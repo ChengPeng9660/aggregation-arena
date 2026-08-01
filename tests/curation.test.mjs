@@ -2,11 +2,26 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   CANONICAL_CATEGORIES,
+  classifyMarket,
   evaluateHardEligibility,
   selectBalancedCandidates,
 } from "../lib/curation-core.js";
 
 const now = new Date("2026-07-29T00:00:00.000Z");
+
+test("uses Prophet Arena's five public forecasting domains", () => {
+  assert.deepEqual(CANONICAL_CATEGORIES, ["Politics", "Economics", "Science", "Sports", "Entertainment"]);
+  const examples = [
+    ["Will the candidate win the presidential election?", "Politics"],
+    ["Will Bitcoin finish above $100,000?", "Economics"],
+    ["Will an AI model pass the scientific benchmark?", "Science"],
+    ["Will the home team win the football match?", "Sports"],
+    ["Will the film win an Oscar?", "Entertainment"],
+  ];
+  for (const [title, expected] of examples) {
+    assert.equal(classifyMarket({ title }, {}).category, expected);
+  }
+});
 
 function candidate(overrides = {}) {
   return {
@@ -15,7 +30,7 @@ function candidate(overrides = {}) {
     title: "Will a well specified event happen before October 2026?",
     description: "This resolves Yes according to the official source by the stated deadline.",
     rules: "Official source is authoritative.",
-    category: "Politics & Policy",
+    category: "Politics",
     outcomes: ["Yes", "No"],
     closeTime: "2026-09-01T00:00:00.000Z",
     startTime: "2026-07-01T00:00:00.000Z",
@@ -65,7 +80,7 @@ test("balanced selector caps every category at the target", () => {
   for (const category of CANONICAL_CATEGORIES) {
     assert.equal(selected.filter((item) => item.category === category).length, 3);
   }
-  assert.equal(selected.length, 21);
+  assert.equal(selected.length, 15);
 });
 
 test("selector deduplicates source events and never fills weak empty slots", () => {

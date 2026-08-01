@@ -1,5 +1,6 @@
 import { getD1 } from "@/db";
 import { getCurationSnapshot } from "@/lib/polymarket";
+import { CANONICAL_CATEGORIES } from "@/lib/curation-core.js";
 import { aggregateDistribution, normalizeDistribution, prophetEventBrier } from "@/lib/event-core.js";
 
 export type ArenaFilters = {
@@ -90,7 +91,7 @@ const SCHEMA_STATEMENTS = [
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    category TEXT NOT NULL DEFAULT 'General',
+    category TEXT NOT NULL DEFAULT 'Entertainment',
     season TEXT NOT NULL DEFAULT 'Season 1',
     close_time TEXT,
     status TEXT NOT NULL DEFAULT 'open',
@@ -351,7 +352,10 @@ export async function createEvent(
   const title = requiredText(payload.title, "title");
   const id = `evt-${crypto.randomUUID().slice(0, 8)}`;
   const now = new Date().toISOString();
-  const category = String(payload.category || "General").trim().slice(0, 50);
+  const category = String(payload.category || "Entertainment").trim().slice(0, 50);
+  if (!CANONICAL_CATEGORIES.includes(category)) {
+    throw new Error(`category must be one of: ${CANONICAL_CATEGORIES.join(", ")}`);
+  }
   const season = String(payload.season || "Season 1").trim().slice(0, 50);
   const closeTime = payload.closeTime ? new Date(payload.closeTime).toISOString() : null;
   const db = getD1();
@@ -894,13 +898,13 @@ async function seedDemoIfEmpty() {
     ["Will the monthly inflation print exceed consensus?", "Economics", 1, [0.62, 0.55, 0.71, 0.48, 0.58]],
     ["Will the central bank hold its policy rate?", "Economics", 1, [0.76, 0.68, 0.81, 0.64, 0.72]],
     ["Will the incumbent coalition retain a majority?", "Politics", 0, [0.44, 0.39, 0.51, 0.47, 0.42]],
-    ["Will the benchmark index close the week higher?", "Markets", 1, [0.57, 0.63, 0.54, 0.69, 0.59]],
-    ["Will the launch occur before the stated deadline?", "Technology", 0, [0.73, 0.61, 0.67, 0.58, 0.64]],
+    ["Will the benchmark index close the week higher?", "Economics", 1, [0.57, 0.63, 0.54, 0.69, 0.59]],
+    ["Will the launch occur before the stated deadline?", "Science", 0, [0.73, 0.61, 0.67, 0.58, 0.64]],
     ["Will the home team win the series?", "Sports", 1, [0.66, 0.59, 0.74, 0.71, 0.68]],
-    ["Will the quarterly revenue beat guidance?", "Business", 1, [0.69, 0.77, 0.65, 0.72, 0.70]],
-    ["Will the proposed regulation pass this session?", "Policy", 0, [0.36, 0.43, 0.31, 0.49, 0.39]],
+    ["Will the quarterly revenue beat guidance?", "Economics", 1, [0.69, 0.77, 0.65, 0.72, 0.70]],
+    ["Will the proposed regulation pass this session?", "Politics", 0, [0.36, 0.43, 0.31, 0.49, 0.39]],
     ["Will the next inflation release fall below 3%?", "Economics", null, [0.48, 0.56, 0.51, 0.44, 0.52]],
-    ["Will the AI safety bill advance to a final vote?", "Policy", null, [0.61, 0.53, 0.66, 0.57, 0.59]],
+    ["Will the AI safety bill advance to a final vote?", "Politics", null, [0.61, 0.53, 0.66, 0.57, 0.59]],
   ] as const;
   for (let index = 0; index < demo.length; index += 1) {
     const [title, category, resolution, values] = demo[index];

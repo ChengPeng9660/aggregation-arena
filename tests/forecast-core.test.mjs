@@ -12,14 +12,14 @@ const event = {
   title: "Will Example Corp ship its product before December 31?",
   description: "Resolves Yes if the product becomes generally available.",
   rules: "A limited beta does not count.",
-  category: "Business & Technology",
+  category: "Science",
   closeTime: "2026-12-31T23:59:00.000Z",
 };
 
 test("buildSearchQuery includes the question, category, and deadline", () => {
   const query = buildSearchQuery(event);
   assert.match(query, /Example Corp/);
-  assert.match(query, /Business & Technology/);
+  assert.match(query, /Science/);
   assert.match(query, /2026-12-31/);
 });
 

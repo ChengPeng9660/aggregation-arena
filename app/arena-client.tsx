@@ -2,6 +2,8 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
+const PROPHET_CATEGORIES = ["Politics", "Economics", "Science", "Sports", "Entertainment"] as const;
+
 type Prediction = {
   id: string;
   name: string;
@@ -473,7 +475,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </section>
 
       <section id="pipeline-stage-3" className="story-stage">
-        <StageHeader number="03" eyebrow="CATEGORY-BALANCED RELEASE" title="Balanced question slate" summary="Eligible markets are deduplicated by source event, balanced across seven categories, and frozen into an immutable daily release." />
+        <StageHeader number="03" eyebrow="CATEGORY-BALANCED RELEASE" title="Balanced question slate" summary="Eligible markets are deduplicated by source event, balanced across Prophet Arena's five public domains, and frozen into an immutable daily release." />
         <div className="release-summary">
           <div><small>Release ID</small><strong>{curation.latestSelection?.id || "Pending"}</strong></div>
           <div><small>Eligible candidates</small><strong>{curation.latestSelection?.eligibleCount || 0}</strong></div>
@@ -651,7 +653,7 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
         <div>
           <span className="eyebrow">POLYMARKET / AUTOMATED</span>
           <h1>Balanced market curation</h1>
-          <p>High-volume Polymarket events are processed hourly; mutually exclusive outcomes stay together before the daily seven-category release.</p>
+          <p>High-volume Polymarket events are processed hourly; mutually exclusive outcomes stay together before the daily five-domain release.</p>
         </div>
         <div className="updated-stamp"><span /><div><small>Latest sync</small><b>{curation.latestSync?.completedAt ? formatTime(curation.latestSync.completedAt) : "Waiting"}</b></div></div>
       </section>
@@ -671,7 +673,7 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
       </section>
 
       <section className="balance-board">
-        <div className="section-title"><div><span className="eyebrow">CATEGORY QUOTAS</span><h2>Seven-category balance</h2></div><span>{curation.config.targetPerCategory} per category / release</span></div>
+        <div className="section-title"><div><span className="eyebrow">DOMAIN QUOTAS</span><h2>Prophet Arena five-domain balance</h2></div><span>{curation.config.targetPerCategory} per domain / release</span></div>
         <div className="balance-grid">
           {curation.categories.map((item) => (
             <article key={item.category}>
@@ -934,14 +936,14 @@ function DialogShell({ title, kicker, onClose, children }: { title: string; kick
 function CreateEventForm({ snapshot, busy, onSubmit }: { snapshot: Snapshot | null; busy: boolean; onSubmit: (payload: Record<string, string | null>) => void }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [category, setCategory] = useState("General");
+  const [category, setCategory] = useState<string>(PROPHET_CATEGORIES[0]);
   const [season, setSeason] = useState(snapshot?.seasons[0] || "Season 1");
   const [closeTime, setCloseTime] = useState("");
   const submit = (event: FormEvent) => { event.preventDefault(); onSubmit({ title, description, category, season, closeTime: closeTime || null }); };
   return <form className="arena-form" onSubmit={submit}>
     <label className="wide">Question title<input required value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Will … occur before …?" /></label>
     <label className="wide">Description / resolution context<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Optional context and precise resolution rule" /></label>
-    <label>Category<input list="category-list" value={category} onChange={(event) => setCategory(event.target.value)} /><datalist id="category-list">{snapshot?.categories.map((item) => <option key={item}>{item}</option>)}</datalist></label>
+    <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}>{PROPHET_CATEGORIES.map((item) => <option key={item}>{item}</option>)}</select></label>
     <label>Season<input value={season} onChange={(event) => setSeason(event.target.value)} /></label>
     <label className="wide">Forecast deadline<input type="datetime-local" value={closeTime} onChange={(event) => setCloseTime(event.target.value)} /></label>
     <div className="form-note wide"><b>Binary question</b><span>Manual events use Yes / No and enter the live Brier standings after resolution.</span></div>

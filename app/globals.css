@@ -417,7 +417,7 @@ tbody tr.top-row { background: linear-gradient(90deg, rgba(138,97,255,.05), tran
 .arena-form { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .arena-form label, .resolve-form > label { color: var(--muted); font-size: 9px; }
 .arena-form label.wide, .arena-form .wide { grid-column: 1 / -1; }
-.arena-form input, .arena-form textarea, .resolve-form textarea {
+.arena-form input, .arena-form select, .arena-form textarea, .resolve-form textarea {
   width: 100%; margin-top: 7px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--bg); font-size: 11px;
 }
 .arena-form textarea, .resolve-form textarea { min-height: 90px; resize: vertical; line-height: 1.5; }

@@ -460,7 +460,7 @@ function rowToForecastEvent(row: Record<string, unknown>): ForecastEvent {
     id: String(row.id),
     title: String(row.title),
     description: String(row.description || ""),
-    category: String(row.category || "General"),
+    category: String(row.category || "Entertainment"),
     closeTime: row.close_time ? String(row.close_time) : null,
     rules: String(row.rules || ""),
     selectionRunId: String(row.run_id),
