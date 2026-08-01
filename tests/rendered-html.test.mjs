@@ -48,7 +48,7 @@ test("production server renders the finished Aggregation Arena shell", async () 
     const html = await response.text();
     assert.match(html, /<title>Aggregation Arena/);
     assert.match(html, /Aggregation Arena/);
-    assert.match(html, /Preparing benchmark/);
+    assert.match(html, /Loading data/);
     assert.doesNotMatch(html, /codex-preview/);
     assert.doesNotMatch(html, /Your site is taking shape/);
     assert.doesNotMatch(html, /react-loading-skeleton/);

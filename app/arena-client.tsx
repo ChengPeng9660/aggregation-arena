@@ -307,25 +307,24 @@ export function ArenaClient({ userName }: { userName: string }) {
           <span className="brand-orbit" aria-hidden="true"><i /></span>
           <div>
             <strong>Aggregation Arena</strong>
-            <small>Forecast benchmark</small>
           </div>
         </div>
         <nav aria-label="Benchmark navigation">
-          <NavButton active={view === "pipeline"} label="Pipeline" meta="End-to-end story" icon="01" onClick={() => setView("pipeline")} />
-          <NavButton active={view === "leaderboard"} label="Leaderboard" meta="Live standings" icon="02" onClick={() => setView("leaderboard")} />
-          <NavButton active={view === "curation"} label="Curation" meta="Question selection" icon="03" onClick={() => setView("curation")} />
-          <NavButton active={view === "forecasts"} label="Forecasts" meta="Model runs" icon="04" onClick={() => setView("forecasts")} />
-          <NavButton active={view === "events"} label="Events" meta="Data operations" icon="05" onClick={() => setView("events")} />
-          <NavButton active={view === "methods"} label="Methods" meta="Aggregation logic" icon="06" onClick={() => setView("methods")} />
-          <NavButton active={view === "activity"} label="Audit log" meta="Provenance" icon="07" onClick={() => setView("activity")} />
+          <NavButton active={view === "pipeline"} label="Pipeline" icon="01" onClick={() => setView("pipeline")} />
+          <NavButton active={view === "leaderboard"} label="Leaderboard" icon="02" onClick={() => setView("leaderboard")} />
+          <NavButton active={view === "curation"} label="Curation" icon="03" onClick={() => setView("curation")} />
+          <NavButton active={view === "forecasts"} label="Forecasts" icon="04" onClick={() => setView("forecasts")} />
+          <NavButton active={view === "events"} label="Events" icon="05" onClick={() => setView("events")} />
+          <NavButton active={view === "methods"} label="Methods" icon="06" onClick={() => setView("methods")} />
+          <NavButton active={view === "activity"} label="Audit log" icon="07" onClick={() => setView("activity")} />
         </nav>
         <div className="sidebar-status">
           <span className="status-dot" />
-          <div><b>Benchmark online</b><small>Refreshes every 30 seconds</small></div>
+          <div><b>Online</b><small>30s refresh</small></div>
         </div>
         <div className="sidebar-user">
           <span>{initials(userName)}</span>
-          <div><b>{userName}</b><small>Benchmark admin</small></div>
+          <div><b>{userName}</b></div>
         </div>
       </aside>
 
@@ -406,8 +405,8 @@ export function ArenaClient({ userName }: { userName: string }) {
   );
 }
 
-function NavButton({ active, label, meta, icon, onClick }: { active: boolean; label: string; meta: string; icon: string; onClick: () => void }) {
-  return <button className={active ? "active" : ""} onClick={onClick}><span>{icon}</span><div><b>{label}</b><small>{meta}</small></div></button>;
+function NavButton({ active, label, icon, onClick }: { active: boolean; label: string; icon: string; onClick: () => void }) {
+  return <button className={active ? "active" : ""} onClick={onClick}><span>{icon}</span><b>{label}</b></button>;
 }
 
 function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEvent: (event: ArenaEvent) => void }) {
@@ -430,9 +429,8 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
     <div className="page-content pipeline-story enter">
       <section className="page-heading pipeline-heading">
         <div>
-          <span className="eyebrow">EXECUTIVE WALKTHROUGH / LIVE DATA</span>
-          <h1>From market signal to calibrated prediction</h1>
-          <p>Every transformation is visible: universe intake, quality gates, balanced selection, evidence retrieval, model inference, and scored output.</p>
+          <h1>Pipeline</h1>
+          <p>Live question selection, evidence, model input, and prediction output.</p>
         </div>
         <div className="updated-stamp"><span /><div><small>Snapshot generated</small><b>{formatDateTime(snapshot.generatedAt)}</b></div></div>
       </section>
@@ -444,7 +442,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </nav>
 
       <section id="pipeline-stage-1" className="story-stage">
-        <StageHeader number="01" eyebrow="POLYMARKET UNIVERSE" title="Market intake" summary="The hourly job reads active Polymarket events ordered by 24-hour trading volume." />
+        <StageHeader number="01" eyebrow="SOURCE" title="Market intake" summary="Active Polymarket events are synced hourly." />
         <div className="funnel-visual">
           <FunnelBar label="Source events fetched" value={curation.latestSync?.fetchedEvents || 0} max={Math.max(1, curation.latestSync?.fetchedEvents || 0)} detail="Gamma API / active events" tone="purple" />
           <FunnelBar label="Markets normalized" value={fetched} max={Math.max(1, fetched)} detail="Canonical IDs, prices, rules, volume" tone="purple" />
@@ -454,7 +452,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </section>
 
       <section id="pipeline-stage-2" className="story-stage">
-        <StageHeader number="02" eyebrow="DETERMINISTIC FILTERING" title="Quality gates" summary="Every market must pass the same auditable rules before category balancing begins." />
+        <StageHeader number="02" eyebrow="FILTERS" title="Quality gates" summary="The same rules apply to every market." />
         <div className="gate-line">
           <Gate label="24h volume" value={`≥ ${formatCompactMoney(curation.config.minimumVolume24h)}`} />
           <Gate label="Total volume" value={`≥ ${formatCompactMoney(curation.config.minimumTotalVolume)}`} />
@@ -473,7 +471,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </section>
 
       <section id="pipeline-stage-3" className="story-stage">
-        <StageHeader number="03" eyebrow="CATEGORY-BALANCED RELEASE" title="Balanced question slate" summary="Eligible markets are deduplicated by source event, balanced across Prophet Arena's five public domains, and frozen into an immutable daily release." />
+        <StageHeader number="03" eyebrow="SELECTION" title="Daily question slate" summary="Eligible events are deduplicated and capped at three per domain." />
         <div className="release-summary">
           <div><small>Release ID</small><strong>{curation.latestSelection?.id || "Pending"}</strong></div>
           <div><small>Eligible candidates</small><strong>{curation.latestSelection?.eligibleCount || 0}</strong></div>
@@ -486,7 +484,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </section>
 
       <section id="pipeline-stage-4" className="story-stage">
-        <StageHeader number="04" eyebrow="ONE SEARCH / SHARED ACROSS MODELS" title="Evidence retrieval and freeze" summary="Tavily retrieves ranked evidence once. The source list and Polymarket snapshot are frozen so every model receives identical information." />
+        <StageHeader number="04" eyebrow="EVIDENCE" title="Research context" summary="Tavily sources and the market snapshot are frozen once per event." />
         <RunSelector runs={pipeline.runs} selected={run?.id || ""} onSelect={setSelectedRunId} />
         {run ? <div className="evidence-layout">
           <div className="query-panel"><small>SEARCH QUERY</small><code>{run.searchQuery || run.title}</code><dl><DetailTerm label="Provider" value={run.provider} /><DetailTerm label="As-of time" value={formatDateTime(run.asOfTime)} /><DetailTerm label="Frozen sources" value={String(run.sourceCount)} /><DetailTerm label="Context ID" value={run.contextId} /></dl></div>
@@ -495,7 +493,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </section>
 
       <section id="pipeline-stage-5" className="story-stage">
-        <StageHeader number="05" eyebrow="CLOUDFLARE WORKERS AI" title="Model call" summary="The selected question, resolution rules, frozen evidence, and market snapshot are assembled into a versioned Prophet-style prompt." />
+        <StageHeader number="05" eyebrow="INFERENCE" title="Model call" summary="Question, rules, evidence, and market data are assembled into a versioned prompt." />
         <div className="model-call-layout">
           <div className="model-identity"><span className="model-pulse" /><small>MODEL</small><h3>{pipeline.model.participantName}</h3><code>{pipeline.model.modelId}</code><dl><DetailTerm label="Prompt version" value={pipeline.model.promptVersion} /><DetailTerm label="Temperature" value="0.1" /><DetailTerm label="Output mode" value="Strict JSON" /><DetailTerm label="Validation" value="Complete probability simplex" /></dl></div>
           <div className="prompt-anatomy"><small>PROMPT ASSEMBLY</small>{[
@@ -511,7 +509,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </section>
 
       <section id="pipeline-stage-6" className="story-stage output-stage">
-        <StageHeader number="06" eyebrow="VALIDATED MODEL RESPONSE" title="Prediction output" summary="The response is parsed, checked for complete outcome coverage, normalized to sum to one, and stored with its rationale and provenance." />
+        <StageHeader number="06" eyebrow="OUTPUT" title="Prediction" summary="Probabilities are validated, normalized, and stored with the rationale and sources." />
         {run ? <div className="prediction-story">
           <div className="probability-visual"><small>PROBABILITY DISTRIBUTION</small>{Object.entries(probabilities).map(([key, probability], index) => <div key={key}><header><b>{runEvent?.outcomes.find((outcome) => outcome.key === key)?.label || key}</b><strong>{(probability * 100).toFixed(1)}%</strong></header><i><em className={index === 0 ? "gold" : "purple"} style={{ width: `${probability * 100}%` }} /></i></div>)}</div>
           <div className="prediction-explanation"><small>MODEL RATIONALE</small><blockquote>{run.rationale || "The model returned a probability distribution without a written rationale."}</blockquote><dl><DetailTerm label="Run status" value={run.status} /><DetailTerm label="Latency" value={run.latencyMs === null ? "—" : `${(run.latencyMs / 1000).toFixed(1)} seconds`} /><DetailTerm label="Cited evidence" value={run.citedSourceRanks.length ? run.citedSourceRanks.map((rank) => `#${rank}`).join(", ") : "None"} /><DetailTerm label="Stored result" value="Prediction history + audit log" /></dl></div>
@@ -570,9 +568,8 @@ function LeaderboardView({
     <div className="page-content enter">
       <section className="page-heading">
         <div>
-          <span className="eyebrow">LIVE / OUTCOME-BASED</span>
           <h1>Aggregation leaderboard</h1>
-          <p>Every aggregation method receives the same forecast panel; standings recompute as soon as an event resolves.</p>
+          <p>Ranks update when events resolve. Lower Event Brier is better.</p>
         </div>
         <div className="updated-stamp"><span /><div><small>Last computed</small><b>{formatTime(snapshot.generatedAt)}</b></div></div>
       </section>
@@ -615,7 +612,7 @@ function LeaderboardView({
       </section>
 
       <section className="open-queue">
-        <div className="section-title"><div><span className="eyebrow">NEXT TO RESOLVE</span><h2>Open benchmark queue</h2></div><span>{snapshot.stats.openEvents} open</span></div>
+        <div className="section-title"><div><h2>Open events</h2></div><span>{snapshot.stats.openEvents} open</span></div>
         <div className="event-rail">
           {snapshot.events.filter((event) => event.status === "open").slice(0, 4).map((event) => (
             <button key={event.id} onClick={() => onOpenEvent(event)}>
@@ -649,9 +646,8 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
     <div className="page-content enter">
       <section className="page-heading">
         <div>
-          <span className="eyebrow">POLYMARKET / AUTOMATED</span>
           <h1>Balanced market curation</h1>
-          <p>High-volume Polymarket events are processed hourly; mutually exclusive outcomes stay together before the daily five-domain release.</p>
+          <p>Hourly Polymarket sync and daily five-domain selection.</p>
         </div>
         <div className="updated-stamp"><span /><div><small>Latest sync</small><b>{curation.latestSync?.completedAt ? formatTime(curation.latestSync.completedAt) : "Waiting"}</b></div></div>
       </section>
@@ -726,7 +722,7 @@ function EventsView({
   return (
     <div className="page-content enter">
       <section className="page-heading compact-heading">
-        <div><span className="eyebrow">MANUAL OPERATIONS</span><h1>Events & data entry</h1><p>Create binary questions and enter forecast panels; every aggregation recomputes while version history remains immutable.</p></div>
+        <div><h1>Events</h1><p>Create questions, enter forecasts, and record outcomes.</p></div>
         <button className="ghost-button" onClick={onCreateParticipant}>+ Add forecaster</button>
       </section>
       <section className="queue-board">
@@ -774,9 +770,8 @@ function ForecastsView({
     <div className="page-content enter">
       <section className="page-heading compact-heading">
         <div>
-          <span className="eyebrow">PROPHET-STYLE / SHARED CONTEXT</span>
           <h1>LLM forecast pipeline</h1>
-          <p>Each question is researched once. Sources, market data, and timestamps are frozen so every model receives the same context before predicting independently.</p>
+          <p>Each question uses one frozen research context.</p>
         </div>
         <button className="primary-button" disabled={busy || !ready || !pipeline.stats.pending} onClick={onRun}>
           {busy ? "Running…" : "Run next event"}
@@ -814,7 +809,7 @@ function ForecastsView({
 
       <section className="forecast-runs">
         <div className="section-title">
-          <div><span className="eyebrow">REPRODUCIBLE RUNS</span><h2>Recent model forecasts</h2></div>
+          <div><h2>Recent model forecasts</h2></div>
           <span>{pipeline.model.promptVersion}</span>
         </div>
         {pipeline.runs.length ? pipeline.runs.map((run) => (
@@ -872,7 +867,7 @@ function ForecastsView({
 function MethodsView({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="page-content enter">
-      <section className="page-heading compact-heading"><div><span className="eyebrow">REPRODUCIBLE BY DESIGN</span><h1>Aggregation methods</h1><p>Every method receives the same forecaster panel; performance weights use resolved history only.</p></div></section>
+      <section className="page-heading compact-heading"><div><h1>Aggregation methods</h1><p>All methods receive the same forecast panel.</p></div></section>
       <section className="method-list">
         {snapshot.methods.map((method, index) => (
           <article key={method.id}>
@@ -901,7 +896,7 @@ function MethodsView({ snapshot }: { snapshot: Snapshot }) {
 function ActivityView({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="page-content enter">
-      <section className="page-heading compact-heading"><div><span className="eyebrow">PROVENANCE</span><h1>Audit log</h1><p>Question, forecast, and resolution operations retain timestamps, actors, and entity IDs.</p></div></section>
+      <section className="page-heading compact-heading"><div><h1>Audit log</h1><p>Question, forecast, and resolution changes with timestamps and actors.</p></div></section>
       <section className="activity-list">
         {snapshot.activity.map((item) => (
           <article key={item.id}>
@@ -1017,11 +1012,11 @@ function EventDetail({ event, onInput, onResolve }: { event: ArenaEvent; onInput
 }
 
 function LoadingState() {
-  return <div className="loading-state"><span /><h2>Preparing benchmark</h2><p>Loading questions, aggregation methods, and standings.</p></div>;
+  return <div className="loading-state"><span /><h2>Loading data</h2></div>;
 }
 
 function viewLabel(view: View) {
-  return { pipeline: "Pipeline / Executive walkthrough", leaderboard: "Leaderboard / Live standings", curation: "Curation / Question selection", forecasts: "Forecasts / Model runs", events: "Events / Data operations", methods: "Methods / Aggregation logic", activity: "Audit log / Provenance" }[view];
+  return { pipeline: "Pipeline", leaderboard: "Leaderboard", curation: "Curation", forecasts: "Forecasts", events: "Events", methods: "Methods", activity: "Audit log" }[view];
 }
 
 function dialogTitle(dialog: NonNullable<Dialog>) {

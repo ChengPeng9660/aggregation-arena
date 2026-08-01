@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   CANONICAL_CATEGORIES,
+  CURATION_CONFIG,
   classifyMarket,
   evaluateHardEligibility,
   rankCandidates,
@@ -22,6 +23,12 @@ test("uses Prophet Arena's five public forecasting domains", () => {
   for (const [title, expected] of examples) {
     assert.equal(classifyMarket({ title }, {}).category, expected);
   }
+});
+
+test("uses the relaxed market activity thresholds", () => {
+  assert.equal(CURATION_CONFIG.minimumVolume24h, 7_500);
+  assert.equal(CURATION_CONFIG.minimumTotalVolume, 35_000);
+  assert.equal(CURATION_CONFIG.minimumLiquidity, 7_500);
 });
 
 function candidate(overrides = {}) {
