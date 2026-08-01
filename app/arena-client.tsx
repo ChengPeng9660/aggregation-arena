@@ -157,6 +157,13 @@ type ForecastPipelineSnapshot = {
     sources: ForecastSource[];
     sourceCount: number;
     provider: string;
+    searchQuery: string;
+    marketSnapshot: {
+      sourceUrl?: string;
+      outcomes?: { key: string; label: string; priceAtSelection?: number }[];
+      atSelection?: { yesPrice?: number; volume24h?: number; totalVolume?: number; liquidity?: number };
+      atForecast?: { yesPrice?: number; volume24h?: number; totalVolume?: number; liquidity?: number };
+    };
     latencyMs: number | null;
     error: string | null;
     asOfTime: string;
@@ -200,7 +207,7 @@ type Snapshot = {
   forecastPipeline: ForecastPipelineSnapshot;
 };
 
-type View = "leaderboard" | "curation" | "forecasts" | "events" | "methods" | "activity";
+type View = "pipeline" | "leaderboard" | "curation" | "forecasts" | "events" | "methods" | "activity";
 type Dialog =
   | { type: "create-event" }
   | { type: "create-participant" }
@@ -210,22 +217,22 @@ type Dialog =
   | null;
 
 const ACTION_LABELS: Record<string, string> = {
-  "benchmark.seeded": "初始化演示赛季",
-  "event.created": "创建题目",
-  "event.resolved": "结算题目",
-  "event.reopened": "重新开放题目",
-  "event.invalidated": "作废题目",
-  "forecast.batch_submitted": "提交一批预测",
-  "forecast.automated_completed": "自动模型预测完成",
-  "forecast.pipeline_failed": "自动预测流水线失败",
-  "participant.upserted": "更新 forecaster",
-  "curation.event_selected": "Polymarket 题目入选",
-  "curation.event_resolved": "Polymarket 自动结算",
+  "benchmark.seeded": "Demo season initialized",
+  "event.created": "Event created",
+  "event.resolved": "Event resolved",
+  "event.reopened": "Event reopened",
+  "event.invalidated": "Event invalidated",
+  "forecast.batch_submitted": "Forecast batch submitted",
+  "forecast.automated_completed": "Automated forecast completed",
+  "forecast.pipeline_failed": "Forecast pipeline failed",
+  "participant.upserted": "Forecaster updated",
+  "curation.event_selected": "Polymarket event selected",
+  "curation.event_resolved": "Polymarket event resolved",
 };
 
 export function ArenaClient({ userName }: { userName: string }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [view, setView] = useState<View>("leaderboard");
+  const [view, setView] = useState<View>("pipeline");
   const [track, setTrack] = useState("aggregators");
   const [windowRange, setWindowRange] = useState("all");
   const [season, setSeason] = useState("all");
@@ -243,10 +250,10 @@ export function ArenaClient({ userName }: { userName: string }) {
     try {
       const response = await fetch(`/api/arena?${params}`, { cache: "no-store" });
       const payload = (await response.json()) as Snapshot & { message?: string };
-      if (!response.ok) throw new Error(payload.message || "Benchmark 数据加载失败");
+      if (!response.ok) throw new Error(payload.message || "Failed to load benchmark data");
       setSnapshot(payload);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Benchmark 数据加载失败");
+      setError(loadError instanceof Error ? loadError.message : "Failed to load benchmark data");
     } finally {
       if (!silent) setLoading(false);
     }
@@ -271,13 +278,13 @@ export function ArenaClient({ userName }: { userName: string }) {
         body: JSON.stringify(payload),
       });
       const result = (await response.json()) as { ok: boolean; message?: string };
-      if (!response.ok) throw new Error(result.message || "操作失败");
+      if (!response.ok) throw new Error(result.message || "Operation failed");
       setDialog(null);
       setToast(successMessage);
       window.setTimeout(() => setToast(""), 2600);
       await load(true);
     } catch (mutationError) {
-      setError(mutationError instanceof Error ? mutationError.message : "操作失败");
+      setError(mutationError instanceof Error ? mutationError.message : "Operation failed");
     } finally {
       setMutating(false);
     }
@@ -303,16 +310,17 @@ export function ArenaClient({ userName }: { userName: string }) {
           </div>
         </div>
         <nav aria-label="Benchmark navigation">
-          <NavButton active={view === "leaderboard"} label="Leaderboard" meta="实时榜单" icon="01" onClick={() => setView("leaderboard")} />
-          <NavButton active={view === "curation"} label="Curation" meta="动态选题" icon="02" onClick={() => setView("curation")} />
-          <NavButton active={view === "forecasts"} label="Forecasts" meta="模型流水线" icon="03" onClick={() => setView("forecasts")} />
-          <NavButton active={view === "events"} label="Events" meta="题目与录入" icon="04" onClick={() => setView("events")} />
-          <NavButton active={view === "methods"} label="Methods" meta="聚合方法" icon="05" onClick={() => setView("methods")} />
-          <NavButton active={view === "activity"} label="Audit log" meta="审计记录" icon="06" onClick={() => setView("activity")} />
+          <NavButton active={view === "pipeline"} label="Pipeline" meta="End-to-end story" icon="01" onClick={() => setView("pipeline")} />
+          <NavButton active={view === "leaderboard"} label="Leaderboard" meta="Live standings" icon="02" onClick={() => setView("leaderboard")} />
+          <NavButton active={view === "curation"} label="Curation" meta="Question selection" icon="03" onClick={() => setView("curation")} />
+          <NavButton active={view === "forecasts"} label="Forecasts" meta="Model runs" icon="04" onClick={() => setView("forecasts")} />
+          <NavButton active={view === "events"} label="Events" meta="Data operations" icon="05" onClick={() => setView("events")} />
+          <NavButton active={view === "methods"} label="Methods" meta="Aggregation logic" icon="06" onClick={() => setView("methods")} />
+          <NavButton active={view === "activity"} label="Audit log" meta="Provenance" icon="07" onClick={() => setView("activity")} />
         </nav>
         <div className="sidebar-status">
           <span className="status-dot" />
-          <div><b>Benchmark online</b><small>每 30 秒刷新</small></div>
+          <div><b>Benchmark online</b><small>Refreshes every 30 seconds</small></div>
         </div>
         <div className="sidebar-user">
           <span>{initials(userName)}</span>
@@ -339,6 +347,7 @@ export function ArenaClient({ userName }: { userName: string }) {
         {error && <div className="error-banner"><span>{error}</span><button onClick={() => setError("")}>Dismiss</button></div>}
         {loading && !snapshot ? <LoadingState /> : snapshot ? (
           <>
+            {view === "pipeline" && <PipelineView snapshot={snapshot} onOpenEvent={(event) => setDialog({ type: "event", event })} />}
             {view === "leaderboard" && (
               <LeaderboardView
                 snapshot={snapshot}
@@ -368,7 +377,7 @@ export function ArenaClient({ userName }: { userName: string }) {
               <ForecastsView
                 snapshot={snapshot}
                 busy={mutating}
-                onRun={() => post({ action: "run_forecast_batch" }, "已运行一个预测任务")}
+                onRun={() => post({ action: "run_forecast_batch" }, "One forecast job completed")}
               />
             )}
             {view === "methods" && <MethodsView snapshot={snapshot} />}
@@ -379,15 +388,15 @@ export function ArenaClient({ userName }: { userName: string }) {
 
       {dialog && (
         <DialogShell title={dialogTitle(dialog)} kicker={dialogKicker(dialog)} onClose={() => setDialog(null)}>
-          {dialog.type === "create-event" && <CreateEventForm snapshot={snapshot} busy={mutating} onSubmit={(payload) => post({ action: "create_event", ...payload }, "题目已创建")} />}
-          {dialog.type === "create-participant" && <CreateParticipantForm busy={mutating} onSubmit={(payload) => post({ action: "create_participant", ...payload }, "Forecaster 已保存")} />}
-          {dialog.type === "forecasts" && snapshot && <ForecastForm event={dialog.event} participants={snapshot.participants} busy={mutating} onSubmit={(forecasts) => post({ action: "submit_forecasts", eventId: dialog.event.id, forecasts }, "概率已录入，aggregation 已重算")} />}
+          {dialog.type === "create-event" && <CreateEventForm snapshot={snapshot} busy={mutating} onSubmit={(payload) => post({ action: "create_event", ...payload }, "Event created") } />}
+          {dialog.type === "create-participant" && <CreateParticipantForm busy={mutating} onSubmit={(payload) => post({ action: "create_participant", ...payload }, "Forecaster saved") } />}
+          {dialog.type === "forecasts" && snapshot && <ForecastForm event={dialog.event} participants={snapshot.participants} busy={mutating} onSubmit={(forecasts) => post({ action: "submit_forecasts", eventId: dialog.event.id, forecasts }, "Probabilities saved and aggregations recomputed") } />}
           {dialog.type === "resolve" && <ResolveForm event={dialog.event} busy={mutating} onSubmit={(resolvedOutcome, note) => post({
             action: "resolve_event", eventId: dialog.event.id,
             resolvedOutcome,
             resolution: resolvedOutcome === "yes" ? 1 : resolvedOutcome === "no" ? 0 : "",
             note,
-          }, "题目已结算，榜单已更新")} />}
+          }, "Event resolved and leaderboard updated") } />}
           {dialog.type === "event" && <EventDetail event={dialog.event} onInput={() => setDialog({ type: "forecasts", event: dialog.event })} onResolve={() => setDialog({ type: "resolve", event: dialog.event })} />}
         </DialogShell>
       )}
@@ -398,6 +407,140 @@ export function ArenaClient({ userName }: { userName: string }) {
 
 function NavButton({ active, label, meta, icon, onClick }: { active: boolean; label: string; meta: string; icon: string; onClick: () => void }) {
   return <button className={active ? "active" : ""} onClick={onClick}><span>{icon}</span><div><b>{label}</b><small>{meta}</small></div></button>;
+}
+
+function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEvent: (event: ArenaEvent) => void }) {
+  const curation = snapshot.curation;
+  const pipeline = snapshot.forecastPipeline;
+  const [selectedRunId, setSelectedRunId] = useState(pipeline.runs[0]?.id || "");
+  const run = pipeline.runs.find((item) => item.id === selectedRunId) || pipeline.runs[0];
+  const runEvent = run ? snapshot.events.find((event) => event.id === run.eventId) : undefined;
+  const selectedMarket = run ? curation.selectedMarkets.find((market) => market.eventId === run.eventId) : curation.selectedMarkets[0];
+  const fetched = curation.latestSync?.fetchedMarkets || 0;
+  const eligible = curation.latestSync?.eligibleMarkets || 0;
+  const selected = curation.latestSelection?.selectedCount || 0;
+  const probabilities = run
+    ? Object.keys(run.probabilities).length
+      ? run.probabilities
+      : run.yesProbability === null ? {} : { Yes: run.yesProbability, No: run.noProbability || 0 }
+    : {};
+
+  return (
+    <div className="page-content pipeline-story enter">
+      <section className="page-heading pipeline-heading">
+        <div>
+          <span className="eyebrow">EXECUTIVE WALKTHROUGH / LIVE DATA</span>
+          <h1>From market signal to calibrated prediction</h1>
+          <p>Every transformation is visible: universe intake, quality gates, balanced selection, evidence retrieval, model inference, and scored output.</p>
+        </div>
+        <div className="updated-stamp"><span /><div><small>Snapshot generated</small><b>{formatDateTime(snapshot.generatedAt)}</b></div></div>
+      </section>
+
+      <nav className="story-rail" aria-label="Pipeline stages">
+        {["Market intake", "Quality gates", "Balanced slate", "Evidence freeze", "Model call", "Prediction output"].map((label, index) => (
+          <a key={label} href={`#pipeline-stage-${index + 1}`}><span>{String(index + 1).padStart(2, "0")}</span><b>{label}</b></a>
+        ))}
+      </nav>
+
+      <section id="pipeline-stage-1" className="story-stage">
+        <StageHeader number="01" eyebrow="POLYMARKET UNIVERSE" title="Market intake" summary="The hourly job reads active Polymarket events ordered by 24-hour trading volume." />
+        <div className="funnel-visual">
+          <FunnelBar label="Source events fetched" value={curation.latestSync?.fetchedEvents || 0} max={Math.max(1, curation.latestSync?.fetchedEvents || 0)} detail="Gamma API / active events" tone="purple" />
+          <FunnelBar label="Markets normalized" value={fetched} max={Math.max(1, fetched)} detail="Canonical IDs, prices, rules, volume" tone="purple" />
+          <FunnelBar label="Markets passing all gates" value={eligible} max={Math.max(1, fetched)} detail={`${fetched ? ((eligible / fetched) * 100).toFixed(1) : "0.0"}% of normalized universe`} tone="gold" />
+        </div>
+        <div className="stage-note"><b>Input</b><span>Polymarket Gamma event and market records</span><b>Refresh</b><span>Hourly at minute 00 UTC</span><b>Latest status</b><span>{curation.latestSync?.status || "Waiting for first sync"}</span></div>
+      </section>
+
+      <section id="pipeline-stage-2" className="story-stage">
+        <StageHeader number="02" eyebrow="DETERMINISTIC FILTERING" title="Quality gates" summary="Every market must pass the same auditable rules before category balancing begins." />
+        <div className="gate-line">
+          <Gate label="24h volume" value={`≥ ${formatCompactMoney(curation.config.minimumVolume24h)}`} />
+          <Gate label="Total volume" value={`≥ ${formatCompactMoney(curation.config.minimumTotalVolume)}`} />
+          <Gate label="Liquidity" value={`≥ ${formatCompactMoney(curation.config.minimumLiquidity)}`} />
+          <Gate label="Close window" value={`${curation.config.minimumCloseHours}h–${curation.config.maximumCloseDays}d`} />
+          <Gate label="Category percentile" value={`Top ${Math.round((1 - curation.config.minimumCategoryPercentile) * 100)}%`} />
+        </div>
+        <div className="category-flow">
+          {curation.categories.map((item) => (
+            <div key={item.category}>
+              <span>{item.category}</span>
+              <i><em style={{ width: `${item.candidates ? Math.max(3, (item.eligible / item.candidates) * 100) : 0}%` }} /></i>
+              <code>{item.candidates} → {item.eligible} eligible</code>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section id="pipeline-stage-3" className="story-stage">
+        <StageHeader number="03" eyebrow="CATEGORY-BALANCED RELEASE" title="Balanced question slate" summary="Eligible markets are deduplicated by source event, balanced across seven categories, and frozen into an immutable daily release." />
+        <div className="release-summary">
+          <div><small>Release ID</small><strong>{curation.latestSelection?.id || "Pending"}</strong></div>
+          <div><small>Eligible candidates</small><strong>{curation.latestSelection?.eligibleCount || 0}</strong></div>
+          <div><small>Selected events</small><strong>{selected}</strong></div>
+          <div><small>Per-category cap</small><strong>{curation.config.targetPerCategory}</strong></div>
+        </div>
+        <div className="stage-table-wrap"><table className="stage-table"><thead><tr><th>Category</th><th>Selected question</th><th>Selection score</th><th>24h volume</th><th>Market probability</th></tr></thead><tbody>
+          {curation.selectedMarkets.slice(0, 8).map((market) => <tr key={market.marketId}><td>{market.category}</td><td><button onClick={() => { const event = snapshot.events.find((item) => item.id === market.eventId); if (event) onOpenEvent(event); }}>{market.title}</button></td><td>{market.score.toFixed(3)}</td><td>{formatCompactMoney(market.volume24h)}</td><td>{(market.yesPrice * 100).toFixed(1)}%</td></tr>)}
+        </tbody></table></div>
+      </section>
+
+      <section id="pipeline-stage-4" className="story-stage">
+        <StageHeader number="04" eyebrow="ONE SEARCH / SHARED ACROSS MODELS" title="Evidence retrieval and freeze" summary="Tavily retrieves ranked evidence once. The source list and Polymarket snapshot are frozen so every model receives identical information." />
+        <RunSelector runs={pipeline.runs} selected={run?.id || ""} onSelect={setSelectedRunId} />
+        {run ? <div className="evidence-layout">
+          <div className="query-panel"><small>SEARCH QUERY</small><code>{run.searchQuery || run.title}</code><dl><DetailTerm label="Provider" value={run.provider} /><DetailTerm label="As-of time" value={formatDateTime(run.asOfTime)} /><DetailTerm label="Frozen sources" value={String(run.sourceCount)} /><DetailTerm label="Context ID" value={run.contextId} /></dl></div>
+          <div className="evidence-stack">{run.sources.slice(0, 6).map((source) => <a key={source.rank} href={source.url} target="_blank" rel="noreferrer"><span>{String(source.rank).padStart(2, "0")}</span><div><b>{source.title}</b><small>{sourceHost(source.url)}{source.publishedDate ? ` · ${formatSourceDate(source.publishedDate)}` : ""}{run.citedSourceRanks.includes(source.rank) ? " · used by model" : ""}</small><p>{source.content}</p></div></a>)}</div>
+        </div> : <div className="empty-block">No model context has been created yet.</div>}
+      </section>
+
+      <section id="pipeline-stage-5" className="story-stage">
+        <StageHeader number="05" eyebrow="CLOUDFLARE WORKERS AI" title="Model call" summary="The selected question, resolution rules, frozen evidence, and market snapshot are assembled into a versioned Prophet-style prompt." />
+        <div className="model-call-layout">
+          <div className="model-identity"><span className="model-pulse" /><small>MODEL</small><h3>{pipeline.model.participantName}</h3><code>{pipeline.model.modelId}</code><dl><DetailTerm label="Prompt version" value={pipeline.model.promptVersion} /><DetailTerm label="Temperature" value="0.1" /><DetailTerm label="Output mode" value="Strict JSON" /><DetailTerm label="Validation" value="Complete probability simplex" /></dl></div>
+          <div className="prompt-anatomy"><small>PROMPT ASSEMBLY</small>{[
+            ["01", "Current time", run?.asOfTime || "Awaiting context"],
+            ["02", "Forecasting question", run?.title || selectedMarket?.title || "Awaiting selected event"],
+            ["03", "Resolution rules", runEvent?.description || "Exact market rules and deadline"],
+            ["04", "Allowed outcomes", runEvent?.outcomes.map((outcome) => outcome.label).join(" · ") || "Yes · No"],
+            ["05", "Shared evidence", `${run?.sourceCount || 0} frozen Tavily sources`],
+            ["06", "Market data", selectedMarket ? `${(selectedMarket.yesPrice * 100).toFixed(1)}% at selection · ${formatCompactMoney(selectedMarket.volume24h)} 24h volume` : "Frozen Polymarket snapshot"],
+            ["07", "Output contract", "Rationale + every outcome probability + cited source ranks"],
+          ].map(([number, label, value]) => <div key={number}><span>{number}</span><b>{label}</b><p>{value}</p></div>)}</div>
+        </div>
+      </section>
+
+      <section id="pipeline-stage-6" className="story-stage output-stage">
+        <StageHeader number="06" eyebrow="VALIDATED MODEL RESPONSE" title="Prediction output" summary="The response is parsed, checked for complete outcome coverage, normalized to sum to one, and stored with its rationale and provenance." />
+        {run ? <div className="prediction-story">
+          <div className="probability-visual"><small>PROBABILITY DISTRIBUTION</small>{Object.entries(probabilities).map(([key, probability], index) => <div key={key}><header><b>{runEvent?.outcomes.find((outcome) => outcome.key === key)?.label || key}</b><strong>{(probability * 100).toFixed(1)}%</strong></header><i><em className={index === 0 ? "gold" : "purple"} style={{ width: `${probability * 100}%` }} /></i></div>)}</div>
+          <div className="prediction-explanation"><small>MODEL RATIONALE</small><blockquote>{run.rationale || "The model returned a probability distribution without a written rationale."}</blockquote><dl><DetailTerm label="Run status" value={run.status} /><DetailTerm label="Latency" value={run.latencyMs === null ? "—" : `${(run.latencyMs / 1000).toFixed(1)} seconds`} /><DetailTerm label="Cited evidence" value={run.citedSourceRanks.length ? run.citedSourceRanks.map((rank) => `#${rank}`).join(", ") : "None"} /><DetailTerm label="Stored result" value="Prediction history + audit log" /></dl></div>
+        </div> : <div className="empty-block">No model output is available yet.</div>}
+        <div className="scoring-line"><span>MODEL FORECASTS</span><i>→</i><span>SIX AGGREGATION METHODS</span><i>→</i><span>EVENT RESOLUTION</span><i>→</i><span>EVENT BRIER</span><i>→</i><span>LIVE LEADERBOARD</span></div>
+      </section>
+    </div>
+  );
+}
+
+function StageHeader({ number, eyebrow, title, summary }: { number: string; eyebrow: string; title: string; summary: string }) {
+  return <header className="stage-header"><span>{number}</span><div><small>{eyebrow}</small><h2>{title}</h2></div><p>{summary}</p></header>;
+}
+
+function FunnelBar({ label, value, max, detail, tone }: { label: string; value: number; max: number; detail: string; tone: "purple" | "gold" }) {
+  return <div><header><b>{label}</b><strong>{value.toLocaleString()}</strong></header><i><em className={tone} style={{ width: `${Math.max(value ? 2 : 0, (value / max) * 100)}%` }} /></i><small>{detail}</small></div>;
+}
+
+function Gate({ label, value }: { label: string; value: string }) {
+  return <div><span>PASS</span><b>{label}</b><strong>{value}</strong></div>;
+}
+
+function DetailTerm({ label, value }: { label: string; value: string }) {
+  return <div><dt>{label}</dt><dd>{value}</dd></div>;
+}
+
+function RunSelector({ runs, selected, onSelect }: { runs: ForecastPipelineSnapshot["runs"]; selected: string; onSelect: (id: string) => void }) {
+  if (!runs.length) return null;
+  return <label className="run-selector">Walk through a completed run<select value={selected} onChange={(event) => onSelect(event.target.value)}>{runs.map((run) => <option key={run.id} value={run.id}>{run.title} · {run.status}</option>)}</select></label>;
 }
 
 function LeaderboardView({
@@ -429,16 +572,16 @@ function LeaderboardView({
         <div>
           <span className="eyebrow">LIVE / OUTCOME-BASED</span>
           <h1>Aggregation leaderboard</h1>
-          <p>同一组手工概率进入所有 aggregation 方法；题目结算后即时按 Brier 表现重排。</p>
+          <p>Every aggregation method receives the same forecast panel; standings recompute as soon as an event resolves.</p>
         </div>
         <div className="updated-stamp"><span /><div><small>Last computed</small><b>{formatTime(snapshot.generatedAt)}</b></div></div>
       </section>
 
       <section className="metric-strip">
-        <Metric label="Open events" value={snapshot.stats.openEvents} detail="等待录入或结算" />
-        <Metric label="Resolved" value={snapshot.stats.resolvedEvents} detail="进入当前排名" />
+        <Metric label="Open events" value={snapshot.stats.openEvents} detail="awaiting forecasts or resolution" />
+        <Metric label="Resolved" value={snapshot.stats.resolvedEvents} detail="included in current standings" />
         <Metric label="Forecasters" value={snapshot.stats.activeForecasters} detail={`${snapshot.stats.totalForecasts} locked forecasts`} />
-        <Metric label="Leader Brier" value={snapshot.stats.leaderBrier === null ? "—" : snapshot.stats.leaderBrier.toFixed(4)} detail={snapshot.stats.leaderName || "等待结算"} highlight />
+        <Metric label="Leader Brier" value={snapshot.stats.leaderBrier === null ? "—" : snapshot.stats.leaderBrier.toFixed(4)} detail={snapshot.stats.leaderName || "awaiting resolved events"} highlight />
       </section>
 
       <section className="filters">
@@ -464,7 +607,7 @@ function LeaderboardView({
             <thead><tr><th>Rank</th><th>Method / Forecaster</th><th>Event Brier</th><th>95% CI</th><th>N</th><th>Coverage</th></tr></thead>
             <tbody>
               {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} />) : (
-                <tr><td colSpan={6} className="empty-cell">当前筛选下还没有已结算成绩。</td></tr>
+                <tr><td colSpan={6} className="empty-cell">No resolved scores match the current filters.</td></tr>
               )}
             </tbody>
           </table>
@@ -508,7 +651,7 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
         <div>
           <span className="eyebrow">POLYMARKET / AUTOMATED</span>
           <h1>Balanced market curation</h1>
-          <p>每小时读取高成交量 Polymarket Events；互斥市场保留完整 outcome 集合，再按七个类别每日均衡发布。</p>
+          <p>High-volume Polymarket events are processed hourly; mutually exclusive outcomes stay together before the daily seven-category release.</p>
         </div>
         <div className="updated-stamp"><span /><div><small>Latest sync</small><b>{curation.latestSync?.completedAt ? formatTime(curation.latestSync.completedAt) : "Waiting"}</b></div></div>
       </section>
@@ -559,7 +702,7 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
               ))}</tbody>
             </table>
           </div>
-        ) : <div className="empty-block">部署定时任务后，首次同步会建立候选池；每日 00:10 UTC 发布固定批次。</div>}
+        ) : <div className="empty-block">The first scheduled sync creates the candidate pool; an immutable release is published daily at 00:10 UTC.</div>}
       </section>
     </div>
   );
@@ -583,7 +726,7 @@ function EventsView({
   return (
     <div className="page-content enter">
       <section className="page-heading compact-heading">
-        <div><span className="eyebrow">MANUAL OPERATIONS</span><h1>Events & data entry</h1><p>创建二元题目，批量输入概率；提交后所有 aggregation 自动重算并锁定版本。</p></div>
+        <div><span className="eyebrow">MANUAL OPERATIONS</span><h1>Events & data entry</h1><p>Create binary questions and enter forecast panels; every aggregation recomputes while version history remains immutable.</p></div>
         <button className="ghost-button" onClick={onCreateParticipant}>+ Add forecaster</button>
       </section>
       <section className="queue-board">
@@ -597,7 +740,7 @@ function EventsView({
             <div className="event-progress"><b>{event.forecasterCount}</b><span>forecasts</span><i><em style={{ width: `${Math.min(100, event.forecasterCount * 20)}%` }} /></i></div>
             <div className="event-actions"><button onClick={() => onForecasts(event)}>Input probabilities</button><button className="gold-action" onClick={() => onResolve(event)} disabled={event.forecasterCount < 2}>Resolve</button></div>
           </article>
-        )) : <div className="empty-block">没有开放题目。使用右上角 “New event” 创建第一道题。</div>}
+        )) : <div className="empty-block">There are no open events. Use “New event” to create one.</div>}
       </section>
 
       <section className="resolved-board">
@@ -633,7 +776,7 @@ function ForecastsView({
         <div>
           <span className="eyebrow">PROPHET-STYLE / SHARED CONTEXT</span>
           <h1>LLM forecast pipeline</h1>
-          <p>每道题只检索一次并冻结来源、市场价格和时间戳；所有模型读取完全相同的 context，再独立给出 Yes / No 概率。</p>
+          <p>Each question is researched once. Sources, market data, and timestamps are frozen so every model receives the same context before predicting independently.</p>
         </div>
         <button className="primary-button" disabled={busy || !ready || !pipeline.stats.pending} onClick={onRun}>
           {busy ? "Running…" : "Run next event"}
@@ -642,9 +785,9 @@ function ForecastsView({
 
       {!ready && (
         <section className="pipeline-alert">
-          <b>还差一项部署配置</b>
+          <b>One deployment setting is missing</b>
           <span>
-            {pipeline.configured.aiBinding ? "Workers AI 已连接；请设置 TAVILY_API_KEY。" : "请连接 Workers AI binding。"}
+            {pipeline.configured.aiBinding ? "Workers AI is connected; set TAVILY_API_KEY." : "Connect the Workers AI binding."}
           </span>
           <code>npx wrangler secret put TAVILY_API_KEY</code>
         </section>
@@ -719,7 +862,7 @@ function ForecastsView({
             </div>
           </article>
         )) : (
-          <div className="empty-block">设置 Tavily 密钥后，定时任务会为最新题集建立第一批共享研究 context。</div>
+          <div className="empty-block">After the Tavily key is configured, the scheduled job creates shared research contexts for the latest release.</div>
         )}
       </section>
     </div>
@@ -729,7 +872,7 @@ function ForecastsView({
 function MethodsView({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="page-content enter">
-      <section className="page-heading compact-heading"><div><span className="eyebrow">REPRODUCIBLE BY DESIGN</span><h1>Aggregation methods</h1><p>所有方法对同一题目使用完全相同的 forecaster panel，历史权重只读取已结算数据。</p></div></section>
+      <section className="page-heading compact-heading"><div><span className="eyebrow">REPRODUCIBLE BY DESIGN</span><h1>Aggregation methods</h1><p>Every method receives the same forecaster panel; performance weights use resolved history only.</p></div></section>
       <section className="method-list">
         {snapshot.methods.map((method, index) => (
           <article key={method.id}>
@@ -741,15 +884,15 @@ function MethodsView({ snapshot }: { snapshot: Snapshot }) {
         ))}
       </section>
       <section className="methodology-band">
-        <div><span>01</span><h3>Same inputs</h3><p>每个方法收到完全相同的手工概率。</p></div>
-        <div><span>02</span><h3>Immutable snapshot</h3><p>每次修改写入 history，结算后锁定。</p></div>
-        <div><span>03</span><h3>Outcome scoring</h3><p>{snapshot.methodology.primaryMetric}，直接按 Event 报告，越低越好。</p></div>
-        <div><span>04</span><h3>Live ranking</h3><p>结算完成后榜单立即重排并更新置信区间。</p></div>
+        <div><span>01</span><h3>Same inputs</h3><p>Every method receives exactly the same probability panel.</p></div>
+        <div><span>02</span><h3>Immutable snapshot</h3><p>Every revision enters history; resolved events are locked.</p></div>
+        <div><span>03</span><h3>Outcome scoring</h3><p>{snapshot.methodology.primaryMetric}, reported directly at the event level; lower is better.</p></div>
+        <div><span>04</span><h3>Live ranking</h3><p>Resolution immediately refreshes ranks and confidence intervals.</p></div>
       </section>
       <section className="formula-panel">
         <div><span className="eyebrow">PRIMARY SCORE</span><h2>Prophet Event Brier</h2></div>
         <code>Event Brier = (1 / K) × Σ(pₖ − yₖ)²</code>
-        <p>每个 Event 先在全部 K 个互斥 outcomes 上求平均，再跨 Event 求均值；数值越低越好。</p>
+        <p>Squared error is averaged over all K mutually exclusive outcomes, then averaged across events. Lower is better.</p>
       </section>
     </div>
   );
@@ -758,7 +901,7 @@ function MethodsView({ snapshot }: { snapshot: Snapshot }) {
 function ActivityView({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="page-content enter">
-      <section className="page-heading compact-heading"><div><span className="eyebrow">PROVENANCE</span><h1>Audit log</h1><p>题目、预测批次和结算操作均留下时间、操作者与实体 ID。</p></div></section>
+      <section className="page-heading compact-heading"><div><span className="eyebrow">PROVENANCE</span><h1>Audit log</h1><p>Question, forecast, and resolution operations retain timestamps, actors, and entity IDs.</p></div></section>
       <section className="activity-list">
         {snapshot.activity.map((item) => (
           <article key={item.id}>
@@ -801,7 +944,7 @@ function CreateEventForm({ snapshot, busy, onSubmit }: { snapshot: Snapshot | nu
     <label>Category<input list="category-list" value={category} onChange={(event) => setCategory(event.target.value)} /><datalist id="category-list">{snapshot?.categories.map((item) => <option key={item}>{item}</option>)}</datalist></label>
     <label>Season<input value={season} onChange={(event) => setSeason(event.target.value)} /></label>
     <label className="wide">Forecast deadline<input type="datetime-local" value={closeTime} onChange={(event) => setCloseTime(event.target.value)} /></label>
-    <div className="form-note wide"><b>Binary question</b><span>当前版本固定使用 Yes / No，结算后进入实时 Brier 排名。</span></div>
+    <div className="form-note wide"><b>Binary question</b><span>Manual events use Yes / No and enter the live Brier standings after resolution.</span></div>
     <button className="primary-button wide" disabled={busy}>{busy ? "Creating…" : "Create event"}</button>
   </form>;
 }
@@ -815,7 +958,7 @@ function CreateParticipantForm({ busy, onSubmit }: { busy: boolean; onSubmit: (p
     <label className="wide">Display name<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Model E or Human Panel" /></label>
     <label>Organization<input value={organization} onChange={(event) => setOrganization(event.target.value)} placeholder="Independent" /></label>
     <label>Color<input type="color" value={color} onChange={(event) => setColor(event.target.value)} /></label>
-    <div className="form-note wide"><b>Stable identity</b><span>同名 forecaster 会更新显示信息，不会删除历史预测。</span></div>
+    <div className="form-note wide"><b>Stable identity</b><span>A matching forecaster updates display metadata without deleting forecast history.</span></div>
     <button className="primary-button wide" disabled={busy}>{busy ? "Saving…" : "Save forecaster"}</button>
   </form>;
 }
@@ -829,14 +972,14 @@ function ForecastForm({ event, participants, busy, onSubmit }: { event: ArenaEve
     onSubmit(rows);
   };
   return <form className="forecast-form" onSubmit={submit}>
-    <div className="event-context"><span>{event.category} / {event.season}</span><h3>{event.title}</h3><p>可输入 0–1 小数或使用右侧百分比预览。再次提交会更新当前版本，同时保留历史。</p></div>
+    <div className="event-context"><span>{event.category} / {event.season}</span><h3>{event.title}</h3><p>Enter decimals from 0 to 1. Resubmitting updates the current version while retaining immutable history.</p></div>
     <div className="probability-grid">
       {participants.map((participant) => {
         const numeric = Number(values[participant.id]);
         return <label key={participant.id}><i style={{ background: participant.color }} /><div><b>{participant.name}</b><small>{participant.organization}</small></div><input inputMode="decimal" min="0" max="1" step="0.01" value={values[participant.id]} onChange={(inputEvent) => setValues((current) => ({ ...current, [participant.id]: inputEvent.target.value }))} placeholder="0.50" /><span>{Number.isFinite(numeric) && values[participant.id] !== "" ? `${Math.round(numeric * 100)}%` : "—"}</span></label>;
       })}
     </div>
-    <div className="form-note"><b>Automatic recompute</b><span>提交后 Equal Mean、Median、Trimmed、Logit、Extremized 和 Performance Weighted 会一起更新。</span></div>
+    <div className="form-note"><b>Automatic recompute</b><span>Equal Mean, Median, Trimmed, Logit, Extremized, and Performance Weighted update together.</span></div>
     <button className="primary-button" disabled={busy}>{busy ? "Computing…" : "Submit probabilities & recompute"}</button>
   </form>;
 }
@@ -845,7 +988,7 @@ function ResolveForm({ event, busy, onSubmit }: { event: ArenaEvent; busy: boole
   const [resolvedOutcome, setResolvedOutcome] = useState<string | null>(null);
   const [note, setNote] = useState("");
   return <form className="resolve-form" onSubmit={(formEvent) => { formEvent.preventDefault(); if (resolvedOutcome !== null) onSubmit(resolvedOutcome, note); }}>
-    <div className="event-context"><span>{event.forecasterCount} locked forecasts</span><h3>{event.title}</h3><p>结算后题目和概率会锁定，并立即进入榜单。</p></div>
+    <div className="event-context"><span>{event.forecasterCount} locked forecasts</span><h3>{event.title}</h3><p>Resolution locks the event and its forecasts, then updates the leaderboard immediately.</p></div>
     <div className="outcome-picker">{event.outcomes.map((outcome) => (
       <button type="button" key={outcome.key} className={resolvedOutcome === outcome.key ? "selected yes" : ""} onClick={() => setResolvedOutcome(outcome.key)}>
         <b>{outcome.label}</b><span>{outcome.key}</span>
@@ -874,11 +1017,11 @@ function EventDetail({ event, onInput, onResolve }: { event: ArenaEvent; onInput
 }
 
 function LoadingState() {
-  return <div className="loading-state"><span /><h2>Preparing benchmark</h2><p>正在初始化题目、聚合方法与榜单。</p></div>;
+  return <div className="loading-state"><span /><h2>Preparing benchmark</h2><p>Loading questions, aggregation methods, and standings.</p></div>;
 }
 
 function viewLabel(view: View) {
-  return { leaderboard: "Leaderboard / 实时榜单", curation: "Curation / 动态选题", forecasts: "Forecasts / 模型流水线", events: "Events / 题目管理", methods: "Methods / 方法说明", activity: "Audit log / 审计记录" }[view];
+  return { pipeline: "Pipeline / Executive walkthrough", leaderboard: "Leaderboard / Live standings", curation: "Curation / Question selection", forecasts: "Forecasts / Model runs", events: "Events / Data operations", methods: "Methods / Aggregation logic", activity: "Audit log / Provenance" }[view];
 }
 
 function dialogTitle(dialog: NonNullable<Dialog>) {

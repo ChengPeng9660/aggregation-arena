@@ -96,7 +96,7 @@ export async function POST(request: Request) {
       const forecast = await runForecastBatch(runtime, 3);
       result = { selection, forecast };
     } else {
-      throw new ArenaError(400, "未知操作");
+      throw new ArenaError(400, "Unknown operation");
     }
 
     return Response.json({ ok: true, result }, { status: 201 });
@@ -110,7 +110,7 @@ function pipelineActor(request: Request) {
   const authorization = request.headers.get("authorization") || "";
   const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   if (!configured || !supplied || supplied !== configured) {
-    throw new ArenaError(401, "无权手工运行生产预测流水线");
+    throw new ArenaError(401, "Not authorized to run the production forecast pipeline");
   }
   return "pipeline-admin";
 }
@@ -120,7 +120,7 @@ function writeActor(request: Request) {
   const email = request.headers.get("oai-authenticated-user-email");
   const isLocal = url.hostname === "localhost" || url.hostname === "127.0.0.1";
   if (!email && !isLocal) {
-    throw new ArenaError(401, "请先登录后再修改 benchmark 数据");
+    throw new ArenaError(401, "Sign in before changing benchmark data");
   }
   return email || "local-admin";
 }

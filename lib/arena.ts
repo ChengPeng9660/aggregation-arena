@@ -28,42 +28,42 @@ export const AGGREGATE_METHODS: AggregateDefinition[] = [
     id: "agg-equal-mean",
     name: "Equal Probability Mean",
     shortName: "Equal Mean",
-    description: "所有 forecaster 概率等权平均。",
+    description: "Arithmetic mean of all forecaster probabilities.",
     color: "#7c4dff",
   },
   {
     id: "agg-median",
     name: "Median Forecast",
     shortName: "Median",
-    description: "使用概率中位数，降低极端预测的影响。",
+    description: "Uses the median probability to reduce the influence of extreme forecasts.",
     color: "#a879ff",
   },
   {
     id: "agg-trimmed-mean",
     name: "Trimmed Mean",
     shortName: "Trimmed",
-    description: "样本足够时去掉两端预测后求平均。",
+    description: "Drops both tails before averaging when the panel is large enough.",
     color: "#6f8cff",
   },
   {
     id: "agg-logit-pool",
     name: "Log-odds Pool",
     shortName: "Logit Pool",
-    description: "在 log-odds 空间等权聚合，再转回概率。",
+    description: "Pools forecasts equally in log-odds space, then converts back to probability.",
     color: "#20b9a8",
   },
   {
     id: "agg-extremized",
     name: "Extremized Mean",
     shortName: "Extremized",
-    description: "将等权平均在 log-odds 空间放大 1.2 倍。",
+    description: "Amplifies the equal mean by 1.2 in log-odds space.",
     color: "#efab02",
   },
   {
     id: "agg-performance-weighted",
     name: "Performance Weighted",
     shortName: "Perf. Weighted",
-    description: "仅使用此前已结算题目的收缩 Brier 表现动态加权。",
+    description: "Dynamically weights forecasters using shrunk Brier performance on previously resolved events.",
     color: "#f06f56",
   },
 ];
@@ -323,7 +323,7 @@ export async function createParticipant(
   await ensureArenaReady();
   const name = requiredText(payload.name, "name");
   const id = slugify(payload.id || name);
-  if (!id) throw new ArenaError(400, "参与者名称无法生成有效 ID");
+  if (!id) throw new ArenaError(400, "The participant name cannot produce a valid ID");
   const organization = String(payload.organization || "Independent").trim().slice(0, 80);
   const color = /^#[0-9a-f]{6}$/i.test(String(payload.color || "")) ? String(payload.color) : "#7c4dff";
   const db = getD1();
@@ -374,10 +374,10 @@ export async function submitForecasts(
   const eventId = requiredText(payload.eventId, "eventId");
   const db = getD1();
   const event = await db.prepare("SELECT * FROM events WHERE id = ?").bind(eventId).first<Record<string, unknown>>();
-  if (!event) throw new ArenaError(404, "题目不存在");
-  if (event.status !== "open") throw new ArenaError(409, "题目已锁定，不能再修改预测");
+  if (!event) throw new ArenaError(404, "Event not found");
+  if (event.status !== "open") throw new ArenaError(409, "The event is locked and forecasts cannot be changed");
   const forecasts = Array.isArray(payload.forecasts) ? payload.forecasts : [];
-  if (!forecasts.length) throw new ArenaError(400, "至少输入一个概率");
+  if (!forecasts.length) throw new ArenaError(400, "Enter at least one probability");
   const participants = await db.prepare("SELECT * FROM participants WHERE status = 'active'").all<Record<string, unknown>>();
   const participantMap = new Map(participants.results.map((row) => [String(row.id), row]));
   const accepted: BaseForecast[] = [];
@@ -385,10 +385,10 @@ export async function submitForecasts(
   for (const item of forecasts) {
     const participantId = String(item.participantId || "");
     const participant = participantMap.get(participantId);
-    if (!participant) throw new ArenaError(400, `未知 forecaster: ${participantId}`);
+    if (!participant) throw new ArenaError(400, `Unknown forecaster: ${participantId}`);
     const probability = Number(item.probability);
     if (!Number.isFinite(probability) || probability < 0 || probability > 1) {
-      throw new ArenaError(400, `${participant.name} 的概率必须在 0–1 之间`);
+      throw new ArenaError(400, `${participant.name}'s probability must be between 0 and 1`);
     }
     const row = {
       participantId,
@@ -419,23 +419,23 @@ export async function resolveEvent(
   const eventId = requiredText(payload.eventId, "eventId");
   const db = getD1();
   const event = await db.prepare("SELECT * FROM events WHERE id = ?").bind(eventId).first<Record<string, unknown>>();
-  if (!event) throw new ArenaError(404, "题目不存在");
-  if (event.status !== "open") throw new ArenaError(409, "题目已经结算或作废");
+  if (!event) throw new ArenaError(404, "Event not found");
+  if (event.status !== "open") throw new ArenaError(409, "The event is already resolved or invalid");
   const categorical = String(event.event_type || "binary") === "categorical";
   const resolution = Number(payload.resolution);
   const resolvedOutcome = categorical ? String(payload.resolvedOutcome || "") : resolution === 1 ? "yes" : "no";
-  if (!categorical && ![0, 1].includes(resolution)) throw new ArenaError(400, "结算结果必须是 Yes 或 No");
+  if (!categorical && ![0, 1].includes(resolution)) throw new ArenaError(400, "The resolution must be Yes or No");
   if (categorical) {
     const outcome = await db.prepare(
       "SELECT outcome_key FROM event_outcomes WHERE event_id=? AND outcome_key=?",
     ).bind(eventId, resolvedOutcome).first();
-    if (!outcome) throw new ArenaError(400, "结算结果不属于该 Event");
+    if (!outcome) throw new ArenaError(400, "The resolution is not an outcome of this event");
   }
   const count = await db.prepare(categorical
     ? "SELECT COUNT(DISTINCT participant_id) AS count FROM prediction_outcomes WHERE event_id=? AND kind='forecaster'"
     : "SELECT COUNT(*) AS count FROM predictions WHERE event_id=? AND kind='forecaster'"
   ).bind(eventId).first<{ count: number }>();
-  if (Number(count?.count || 0) < 2) throw new ArenaError(409, "至少录入两个 forecaster 概率后才能结算");
+  if (Number(count?.count || 0) < 2) throw new ArenaError(409, "At least two forecaster predictions are required before resolution");
   await syncAggregates(eventId);
   const now = new Date().toISOString();
   await db.prepare(`
@@ -452,7 +452,7 @@ export async function changeEventStatus(
 ) {
   await ensureArenaReady();
   const eventId = requiredText(payload.eventId, "eventId");
-  if (!["invalid", "open"].includes(String(payload.status))) throw new ArenaError(400, "不支持的状态");
+  if (!["invalid", "open"].includes(String(payload.status))) throw new ArenaError(400, "Unsupported status");
   const status = payload.status as "invalid" | "open";
   const now = new Date().toISOString();
   const db = getD1();
@@ -460,7 +460,7 @@ export async function changeEventStatus(
     UPDATE events SET status = ?, resolution = NULL, resolution_note = NULL,
       resolved_outcome=NULL, resolved_at = NULL, updated_at = ? WHERE id = ?
   `).bind(status, now, eventId).run();
-  if (!Number(result.meta.changes || 0)) throw new ArenaError(404, "题目不存在");
+  if (!Number(result.meta.changes || 0)) throw new ArenaError(404, "Event not found");
   await writeAudit(`event.${status === "open" ? "reopened" : "invalidated"}`, "event", eventId, {}, actor);
   return { eventId, status };
 }
@@ -684,8 +684,8 @@ export async function recordAutomatedForecast(payload: {
   const db = getD1();
   const event = await db.prepare("SELECT status FROM events WHERE id=?").bind(payload.eventId)
     .first<{ status: string }>();
-  if (!event) throw new ArenaError(404, "题目不存在");
-  if (event.status !== "open") throw new ArenaError(409, "题目已锁定，不能写入自动预测");
+  if (!event) throw new ArenaError(404, "Event not found");
+  if (event.status !== "open") throw new ArenaError(409, "The event is locked and cannot accept automated forecasts");
   await upsertPrediction(
     payload.eventId,
     {
@@ -727,8 +727,8 @@ export async function recordAutomatedEventForecast(payload: {
   const db = getD1();
   const event = await db.prepare("SELECT status FROM events WHERE id=?").bind(payload.eventId)
     .first<{ status: string }>();
-  if (!event) throw new ArenaError(404, "题目不存在");
-  if (event.status !== "open") throw new ArenaError(409, "题目已锁定，不能写入自动预测");
+  if (!event) throw new ArenaError(404, "Event not found");
+  if (event.status !== "open") throw new ArenaError(409, "The event is locked and cannot accept automated forecasts");
   const outcomes = await db.prepare(
     "SELECT outcome_key FROM event_outcomes WHERE event_id=? ORDER BY display_order",
   ).bind(payload.eventId).all<{ outcome_key: string }>();
@@ -1023,7 +1023,7 @@ function slugify(value: string) {
 
 function requiredText(value: unknown, label: string) {
   const text = String(value || "").trim();
-  if (!text) throw new ArenaError(400, `${label} 不能为空`);
+  if (!text) throw new ArenaError(400, `${label} is required`);
   return text.slice(0, 300);
 }
 

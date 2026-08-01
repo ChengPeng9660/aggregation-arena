@@ -398,6 +398,7 @@ export async function getForecastPipelineSnapshot(
     `).first<Record<string, unknown>>(),
     db.prepare(`
       SELECT mfr.*, rc.source_count, rc.provider, rc.as_of_time, rc.sources_json,
+        rc.search_query, rc.market_snapshot_json,
         e.title, e.category
       FROM model_forecast_runs mfr
       JOIN research_contexts rc ON rc.id=mfr.context_id
@@ -440,6 +441,7 @@ export async function getForecastPipelineSnapshot(
       sources: safeJson(String(row.sources_json || "[]"), []),
       sourceCount: Number(row.source_count || 0),
       provider: row.provider,
+      searchQuery: row.search_query,
       marketSnapshot: safeJson(String(row.market_snapshot_json || "{}"), {}),
       latencyMs: row.latency_ms === null ? null : Number(row.latency_ms),
       error: row.error,
