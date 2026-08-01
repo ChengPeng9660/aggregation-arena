@@ -78,7 +78,6 @@ type CurationSnapshot = {
     minimumLiquidity: number;
     minimumCloseHours: number;
     maximumCloseDays: number;
-    minimumCategoryPercentile: number;
   };
   latestSync: null | {
     status: string;
@@ -461,7 +460,6 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
           <Gate label="Total volume" value={`≥ ${formatCompactMoney(curation.config.minimumTotalVolume)}`} />
           <Gate label="Liquidity" value={`≥ ${formatCompactMoney(curation.config.minimumLiquidity)}`} />
           <Gate label="Close window" value={`${curation.config.minimumCloseHours}h–${curation.config.maximumCloseDays}d`} />
-          <Gate label="Category percentile" value={`Top ${Math.round((1 - curation.config.minimumCategoryPercentile) * 100)}%`} />
         </div>
         <div className="category-flow">
           {curation.categories.map((item) => (
@@ -666,7 +664,7 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
       </section>
 
       <section className="curation-rules">
-        <div><small>24H VOLUME</small><b>≥ {formatCompactMoney(curation.config.minimumVolume24h)}</b><span>Within-category top 30%</span></div>
+        <div><small>24H VOLUME</small><b>≥ {formatCompactMoney(curation.config.minimumVolume24h)}</b><span>Minimum activity threshold</span></div>
         <div><small>TOTAL VOLUME</small><b>≥ {formatCompactMoney(curation.config.minimumTotalVolume)}</b><span>Established markets only</span></div>
         <div><small>LIQUIDITY</small><b>≥ {formatCompactMoney(curation.config.minimumLiquidity)}</b><span>Executable probability signal</span></div>
         <div><small>CLOSE WINDOW</small><b>{curation.config.minimumCloseHours}h–{curation.config.maximumCloseDays}d</b><span>Enough time to forecast</span></div>

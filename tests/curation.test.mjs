@@ -4,6 +4,7 @@ import {
   CANONICAL_CATEGORIES,
   classifyMarket,
   evaluateHardEligibility,
+  rankCandidates,
   selectBalancedCandidates,
 } from "../lib/curation-core.js";
 
@@ -56,6 +57,17 @@ test("hard filters reject low-volume and non-binary markets", () => {
   const multiOutcome = evaluateHardEligibility(candidate({ outcomes: ["A", "B", "C"] }), now);
   assert.equal(multiOutcome.eligible, false);
   assert.ok(multiOutcome.reasons.includes("not_binary_yes_no"));
+});
+
+test("category percentile ranks candidates but is not an eligibility gate", () => {
+  const ranked = rankCandidates([
+    candidate({ marketId: "lower-volume", volume24h: 20_000 }),
+    candidate({ marketId: "higher-volume", volume24h: 100_000 }),
+  ], now);
+  const lowerVolume = ranked.find((item) => item.marketId === "lower-volume");
+  assert.equal(lowerVolume.volume24Percentile, 0);
+  assert.equal(lowerVolume.eligible, true);
+  assert.ok(!lowerVolume.reasons.includes("below_category_volume_percentile"));
 });
 
 test("balanced selector caps every category at the target", () => {
