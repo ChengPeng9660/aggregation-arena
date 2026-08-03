@@ -87,6 +87,15 @@ type CurationSnapshot = {
     startedAt: string;
     completedAt: string | null;
   };
+  automation: {
+    status: "healthy" | "recovering" | "degraded";
+    schedules: { intake: string; selection: string; forecast: string };
+    latestAttemptStatus: string | null;
+    latestAttemptAt: string | null;
+    lastSuccessfulSyncAt: string | null;
+    staleRuns: number;
+    failed24h: number;
+  };
   latestSelection: null | {
     id: string;
     status: string;
@@ -429,6 +438,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
   const fetched = curation.latestSync?.fetchedMarkets || 0;
   const eligible = curation.latestSync?.eligibleMarkets || 0;
   const selected = curation.latestSelection?.selectedCount || 0;
+  const automation = curation.automation;
 
   return (
     <div className="page-content pipeline-story enter">
@@ -438,6 +448,13 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
           <p>Live question selection, evidence, model input, and prediction output.</p>
         </div>
         <div className="updated-stamp"><span /><div><small>Snapshot generated</small><b>{formatDateTime(snapshot.generatedAt)}</b></div></div>
+      </section>
+
+      <section className={`automation-health ${automation.status}`}>
+        <span aria-hidden="true" />
+        <div><small>AUTOMATION</small><b>{automation.status}</b></div>
+        <p>Intake at :00 · forecast at :20 · daily selection at 00:10 UTC</p>
+        <dl><DetailTerm label="Last successful sync" value={automation.lastSuccessfulSyncAt ? formatDateTime(automation.lastSuccessfulSyncAt) : "Waiting"} /><DetailTerm label="Latest attempt" value={automation.latestAttemptStatus || "Waiting"} /></dl>
       </section>
 
       <nav className="story-rail" aria-label="Pipeline stages">
@@ -453,7 +470,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
           <FunnelBar label="Markets normalized" value={fetched} max={Math.max(1, fetched)} detail="Canonical IDs, prices, rules, volume" tone="purple" />
           <FunnelBar label="Markets passing all gates" value={eligible} max={Math.max(1, fetched)} detail={`${fetched ? ((eligible / fetched) * 100).toFixed(1) : "0.0"}% of normalized universe`} tone="gold" />
         </div>
-        <div className="stage-note"><b>Input</b><span>Polymarket Gamma event and market records</span><b>Refresh</b><span>Hourly at minute 00 UTC</span><b>Latest status</b><span>{curation.latestSync?.status || "Waiting for first sync"}</span></div>
+        <div className="stage-note"><b>Input</b><span>Polymarket Gamma event and market records</span><b>Refresh</b><span>{automation.schedules.intake}</span><b>Latest status</b><span>{automation.latestAttemptStatus || "Waiting for first sync"}</span></div>
       </section>
 
       <section id="pipeline-stage-2" className="story-stage">

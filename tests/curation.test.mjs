@@ -6,6 +6,7 @@ import {
   classifyMarket,
   evaluateHardEligibility,
   rankCandidates,
+  selectPersistenceCandidates,
   selectBalancedCandidates,
 } from "../lib/curation-core.js";
 
@@ -75,6 +76,15 @@ test("category percentile ranks candidates but is not an eligibility gate", () =
   assert.equal(lowerVolume.volume24Percentile, 0);
   assert.equal(lowerVolume.eligible, true);
   assert.ok(!lowerVolume.reasons.includes("below_category_volume_percentile"));
+});
+
+test("hourly persistence keeps every market in an eligible event and drops irrelevant events", () => {
+  const persisted = selectPersistenceCandidates([
+    candidate({ marketId: "eligible", sourceEventId: "event-a", eligible: true }),
+    candidate({ marketId: "sibling", sourceEventId: "event-a", eligible: false }),
+    candidate({ marketId: "irrelevant", sourceEventId: "event-b", eligible: false }),
+  ]);
+  assert.deepEqual(persisted.map((item) => item.marketId), ["eligible", "sibling"]);
 });
 
 test("balanced selector caps every category at the target", () => {

@@ -4,6 +4,7 @@ import {
   CURATION_CONFIG,
   normalizePolymarketMarket,
   rankCandidates,
+  selectPersistenceCandidates,
   selectBalancedCandidates,
 } from "@/lib/curation-core";
 
@@ -35,6 +36,8 @@ type EventCandidate = Candidate & {
 const GAMMA_API = "https://gamma-api.polymarket.com";
 const MAX_EVENT_PAGES = 8;
 const EVENT_PAGE_SIZE = 100;
+const EXTERNAL_FETCH_TIMEOUT_MS = 15_000;
+const STALE_SYNC_MINUTES = 20;
 
 const CURATION_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS polymarket_candidates (
@@ -105,6 +108,7 @@ export async function ensureCurationReady(db: D1Database = getD1()) {
 export async function syncPolymarketCandidates(db: D1Database = getD1(), now = new Date()) {
   await ensureCurationReady(db);
   const startedAt = now.toISOString();
+  await closeStaleSyncRuns(db, now);
   const run = await db.prepare(
     "INSERT INTO curation_sync_runs (status, started_at) VALUES ('running', ?) RETURNING id",
   ).bind(startedAt).first<{ id: number }>();
@@ -120,7 +124,10 @@ export async function syncPolymarketCandidates(db: D1Database = getD1(), now = n
       url.searchParams.set("ascending", "false");
       url.searchParams.set("limit", String(EVENT_PAGE_SIZE));
       url.searchParams.set("offset", String(page * EVENT_PAGE_SIZE));
-      const response = await fetch(url, { headers: { accept: "application/json", "user-agent": "AggregationArena/1.0" } });
+      const response = await fetch(url, {
+        headers: { accept: "application/json", "user-agent": "AggregationArena/1.0" },
+        signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
+      });
       if (!response.ok) throw new Error(`Polymarket Gamma returned ${response.status}`);
       const pageRows = await response.json() as Record<string, unknown>[];
       events.push(...pageRows);
@@ -132,8 +139,13 @@ export async function syncPolymarketCandidates(db: D1Database = getD1(), now = n
       return markets.map((market) => normalizePolymarketMarket(event, market, now));
     }).filter((candidate) => candidate.marketId);
     const ranked = rankCandidates(normalized, now) as Candidate[];
+    const persisted = selectPersistenceCandidates(ranked) as Candidate[];
+    const categoryStats = Object.fromEntries(CANONICAL_CATEGORIES.map((category) => [category, {
+      candidates: ranked.filter((candidate) => candidate.category === category).length,
+      eligible: ranked.filter((candidate) => candidate.category === category && candidate.eligible).length,
+    }]));
 
-    const statements = ranked.flatMap((candidate) => {
+    const statements = persisted.flatMap((candidate) => {
       const upsert = db.prepare(`
         INSERT INTO polymarket_candidates (
           market_id, source_event_id, event_slug, market_slug, series_id, title, description, rules,
@@ -180,7 +192,12 @@ export async function syncPolymarketCandidates(db: D1Database = getD1(), now = n
       events.length,
       ranked.length,
       eligibleCount,
-      JSON.stringify({ configVersion: CURATION_CONFIG.configVersion, pages: Math.ceil(events.length / EVENT_PAGE_SIZE) }),
+      JSON.stringify({
+        configVersion: CURATION_CONFIG.configVersion,
+        pages: Math.ceil(events.length / EVENT_PAGE_SIZE),
+        persistedMarkets: persisted.length,
+        categoryStats,
+      }),
       new Date().toISOString(),
       runId,
     ).run();
@@ -209,7 +226,9 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
       WHERE prior.source_event_id=c.source_event_id
     ) THEN 1 ELSE 0 END AS already_selected
     FROM polymarket_candidates c
-    WHERE datetime(c.close_time) > datetime(?)
+    WHERE c.last_seen_at=(
+      SELECT started_at FROM curation_sync_runs WHERE status='completed' ORDER BY id DESC LIMIT 1
+    ) AND datetime(c.close_time) > datetime(?)
     ORDER BY c.category, c.selection_score DESC
   `).bind(new Date(now.getTime() + CURATION_CONFIG.minimumCloseHours * 3_600_000).toISOString()).all<Record<string, unknown>>();
   const recent = await db.prepare(`
@@ -319,6 +338,7 @@ export async function resolveSelectedPolymarketMarkets(db: D1Database = getD1())
     if (row.event_type === "categorical" && row.source_event_id) {
       const response = await fetch(`${GAMMA_API}/events/${encodeURIComponent(row.source_event_id)}`, {
         headers: { accept: "application/json", "user-agent": "AggregationArena/1.0" },
+        signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
       });
       if (!response.ok) continue;
       const sourceEvent = await response.json() as Record<string, unknown>;
@@ -358,6 +378,7 @@ export async function resolveSelectedPolymarketMarkets(db: D1Database = getD1())
     }
     const response = await fetch(`${GAMMA_API}/markets/${encodeURIComponent(row.market_id)}`, {
       headers: { accept: "application/json", "user-agent": "AggregationArena/1.0" },
+      signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
     });
     if (!response.ok) continue;
     const market = await response.json() as Record<string, unknown>;
@@ -388,20 +409,35 @@ export async function runPolymarketScheduled(
   controller: { cron: string },
 ) {
   const daily = controller.cron === "10 0 * * *";
-  const sync = daily ? null : await syncPolymarketCandidates(env.DB);
-  const resolution = await resolveSelectedPolymarketMarkets(env.DB);
-  const selection = daily
-    ? await selectDailyBalancedSlate(env.DB)
-    : null;
-  return { sync, resolution, selection };
+  if (daily) {
+    return { sync: null, resolution: null, selection: await selectDailyBalancedSlate(env.DB) };
+  }
+  await ensureCurationReady(env.DB);
+  const [sync, resolution] = await Promise.allSettled([
+    syncPolymarketCandidates(env.DB),
+    resolveSelectedPolymarketMarkets(env.DB),
+  ]);
+  if (sync.status === "rejected") console.error("Polymarket sync failed", sync.reason);
+  if (resolution.status === "rejected") console.error("Polymarket resolution failed", resolution.reason);
+  return {
+    sync: settledValue(sync),
+    resolution: settledValue(resolution),
+    selection: null,
+  };
 }
 
 export async function getCurationSnapshot(db: D1Database = getD1()) {
   await ensureCurationReady(db);
-  const [latestSync, latestRun, categoryRows, selectedRows] = await Promise.all([
+  const [latestSync, latestAttempt, syncHealth, latestRun, categoryRows, selectedRows] = await Promise.all([
     db.prepare(`
-      SELECT * FROM curation_sync_runs
-      ORDER BY CASE WHEN status='completed' THEN 0 ELSE 1 END, id DESC LIMIT 1
+      SELECT * FROM curation_sync_runs WHERE status='completed' ORDER BY id DESC LIMIT 1
+    `).first<Record<string, unknown>>(),
+    db.prepare("SELECT * FROM curation_sync_runs ORDER BY id DESC LIMIT 1").first<Record<string, unknown>>(),
+    db.prepare(`
+      SELECT
+        SUM(CASE WHEN status='running' AND datetime(started_at) < datetime('now', '-20 minutes') THEN 1 ELSE 0 END) AS stale_runs,
+        SUM(CASE WHEN status='failed' AND datetime(started_at) >= datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS failed_24h
+      FROM curation_sync_runs
     `).first<Record<string, unknown>>(),
     db.prepare("SELECT * FROM selection_runs ORDER BY started_at DESC LIMIT 1").first<Record<string, unknown>>(),
     db.prepare(`
@@ -422,6 +458,14 @@ export async function getCurationSnapshot(db: D1Database = getD1()) {
   `).all<Record<string, unknown>>();
   const rollingMap = Object.fromEntries(rolling.results.map((row) => [String(row.category), Number(row.count)]));
   const categoryMap = new Map(categoryRows.results.map((row) => [String(row.category), row]));
+  const latestDetail = safeJson(latestSync?.detail_json, {}) as Record<string, unknown>;
+  const categoryStats = (latestDetail.categoryStats || {}) as Record<string, { candidates?: number; eligible?: number }>;
+  const staleRuns = Number(syncHealth?.stale_runs || 0);
+  const failed24h = Number(syncHealth?.failed_24h || 0);
+  const lastSuccessAt = latestSync?.completed_at ? String(latestSync.completed_at) : null;
+  const successAgeMs = lastSuccessAt ? Date.now() - new Date(lastSuccessAt).getTime() : Number.POSITIVE_INFINITY;
+  const latestAttemptFailedAfterSuccess = latestAttempt?.status === "failed"
+    && (!lastSuccessAt || new Date(String(latestAttempt.started_at)).getTime() > new Date(lastSuccessAt).getTime());
 
   return {
     config: CURATION_CONFIG,
@@ -434,6 +478,21 @@ export async function getCurationSnapshot(db: D1Database = getD1()) {
       completedAt: latestSync.completed_at,
       detail: safeJson(latestSync.detail_json, {}),
     } : null,
+    automation: {
+      status: staleRuns > 0 || successAgeMs > 3 * 3_600_000
+        ? "degraded"
+        : latestAttemptFailedAfterSuccess ? "recovering" : "healthy",
+      schedules: {
+        intake: "Hourly at minute 00 UTC",
+        selection: "Daily at 00:10 UTC",
+        forecast: "Hourly at minute 20 UTC",
+      },
+      latestAttemptStatus: latestAttempt?.status ? String(latestAttempt.status) : null,
+      latestAttemptAt: latestAttempt?.started_at ? String(latestAttempt.started_at) : null,
+      lastSuccessfulSyncAt: lastSuccessAt,
+      staleRuns,
+      failed24h,
+    },
     latestSelection: latestRun ? {
       id: latestRun.id,
       status: latestRun.status,
@@ -445,10 +504,11 @@ export async function getCurationSnapshot(db: D1Database = getD1()) {
     } : null,
     categories: CANONICAL_CATEGORIES.map((category) => {
       const row = categoryMap.get(category);
+      const stats = categoryStats[category];
       return {
         category,
-        candidates: Number(row?.candidate_count || 0),
-        eligible: Number(row?.eligible_count || 0),
+        candidates: Number(stats?.candidates ?? row?.candidate_count ?? 0),
+        eligible: Number(stats?.eligible ?? row?.eligible_count ?? 0),
         selectedThisRun: Number((safeJson(latestRun?.category_counts_json, {}) as Record<string, number>)[category] || 0),
         selectedLast7d: rollingMap[category] || 0,
         target: CURATION_CONFIG.targetPerCategory,
@@ -557,6 +617,25 @@ async function runBatches(db: D1Database, statements: D1PreparedStatement[]) {
   for (let index = 0; index < statements.length; index += 80) {
     await db.batch(statements.slice(index, index + 80));
   }
+}
+
+async function closeStaleSyncRuns(db: D1Database, now: Date) {
+  const cutoff = new Date(now.getTime() - STALE_SYNC_MINUTES * 60_000).toISOString();
+  await db.prepare(`
+    UPDATE curation_sync_runs
+    SET status='failed', detail_json=?, completed_at=?
+    WHERE status='running' AND started_at < ?
+  `).bind(
+    JSON.stringify({ error: `Automatically closed after ${STALE_SYNC_MINUTES} minutes without completion` }),
+    now.toISOString(),
+    cutoff,
+  ).run();
+}
+
+function settledValue<T>(result: PromiseSettledResult<T>) {
+  return result.status === "fulfilled"
+    ? result.value
+    : { status: "failed", error: result.reason instanceof Error ? result.reason.message : String(result.reason) };
 }
 
 function parseJsonList(value: unknown): unknown[] {

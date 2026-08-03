@@ -4,7 +4,7 @@
 
 一个支持 Polymarket 自动选题、共享信息检索、LLM 自动预测、手工概率录入、自动聚合、结果结算、实时排名和审计追踪的预测聚合 Benchmark 平台。
 
-系统每小时从 Polymarket Gamma API 同步活跃市场，先做成交量、流动性、截止窗口、概率区间和规则完整性筛选，再按七个固定类别均衡发布每日题集。与 Prophet Arena 一样，Polymarket 的互斥 `negRisk` Event 会保留全部具名 Market 作为 outcomes；模型对同一 Event 输出完整概率分布，结算后以 Event Brier Score 实时更新 Leaderboard。旧的 Yes / No 题目继续兼容。
+系统每小时从 Polymarket Gamma API 同步活跃市场，先做成交量、流动性、截止窗口、概率区间和规则完整性筛选，再按五个固定类别均衡发布每日题集。与 Prophet Arena 一样，Polymarket 的互斥 `negRisk` Event 会保留全部具名 Market 作为 outcomes；模型对同一 Event 输出完整概率分布，结算后以 Event Brier Score 实时更新 Leaderboard。旧的 Yes / No 题目继续兼容。
 
 Cloudflare Worker 版本：
 
@@ -50,6 +50,9 @@ Cloudflare Worker 版本：
 - 已经入选过的 market 永久不重复选择。
 - 入选时保存价格、成交量、流动性、选题分数、类别和批次 ID。
 - Curation 页面每 30 秒刷新，显示最近同步、筛选后数量、类别配额和最新题集。
+- Pipeline 页面显示自动化健康状态、最后成功同步时间和最近一次运行状态。
+- 每轮仍以完整 800 个 Event / 全部 Market 计算门槛和类别统计，但 D1 只持久化至少含一个合格 Market 的 Event，并保留其全部 outcomes，避免无意义的大规模小时写入。
+- 超过 20 分钟仍未完成的同步会在下一轮自动标记为 `failed`，不会永久停在 `running`。
 - 临近截止的已选题会检查 Polymarket 最终状态；明确结算后自动写回 Arena 事件。
 
 ### 事件管理
@@ -84,7 +87,7 @@ Cloudflare Worker 版本：
 - 每次运行完整保存模型、Prompt 版本、原始响应、延迟、引用来源和失败原因。
 - 二元预测写入 `predictions`；多 outcome 预测写入 `prediction_outcomes` 和不可变 `prediction_outcome_history`，随后进入 Aggregation 和 Leaderboard。
 - Forecasts 页面显示流水线配置、待处理数量、预测结果、理由和冻结证据。
-- 每小时同步 Polymarket 后最多补跑 3 个 model-event 任务；同一 Event 的两个模型复用同一个 Frozen Context，不会重复调用 Tavily。管理员也可以手工触发下一个任务。
+- 每小时 `20` 分独立补跑最多 3 个 model-event 任务；即使整点 Polymarket 同步失败，模型队列仍会继续处理已有题目。同一 Event 的两个模型复用同一个 Frozen Context，不会重复调用 Tavily。管理员也可以手工触发下一个任务。
 
 ### 聚合计算
 
@@ -226,11 +229,12 @@ npx wrangler secret put TAVILY_API_KEY
 }
 ```
 
-部署后打开网站的 `Forecasts` 页面。`Pipeline` 显示 `READY` 后，可等待每小时 Cron，或登录后点击 `Run next event`。
+部署后打开网站的 `Pipeline` 页面查看 `AUTOMATION` 状态，也可以在 `Forecasts` 页面检查模型任务。配置正常时可等待每小时 `:20` 的预测 Cron，或登录后点击 `Run next event`。
 
 生产环境若需要立即发布当日题集并生成首批 3 条预测，可由维护者使用仅存于
 Cloudflare Secret 的 `PIPELINE_ADMIN_TOKEN` 调用 `run_daily_forecast_batch`。
 该操作会复用当天不可变 selection run，多次调用不会重复发布题目。
+同一密钥还可以调用 `run_pipeline_sync`，用于运维人员立即执行一次与整点 Cron 相同的同步和结算检查。
 
 ### 本地测试限制
 
@@ -741,10 +745,11 @@ npx wrangler d1 migrations apply aggregation-arena-production --remote
 npx wrangler deploy
 ```
 
-部署会注册两个 UTC 定时任务：
+部署会注册三个相互隔离的 UTC 定时任务：
 
 - `0 * * * *`：每小时同步候选市场并检查结算。
-- `10 0 * * *`：每日同步、检查结算并发布新题集。
+- `10 0 * * *`：每日发布新的均衡题集。
+- `20 * * * *`：每小时独立处理最多 3 个 model-event 预测任务。
 
 必须先检查 `wrangler whoami` 的账号和目标 D1 ID。当前生产目标是 ChengPeng 账户与 `aggregation-arena-production`。
 

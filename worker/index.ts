@@ -49,10 +49,19 @@ const worker = {
     return handler.fetch(request, env, ctx);
   },
   async scheduled(controller: { cron: string }, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil((async () => {
-      await runPolymarketScheduled(env, controller);
-      await runForecastBatch(env, 3);
-    })());
+    let task: Promise<unknown>;
+    if (controller.cron === "0 * * * *" || controller.cron === "10 0 * * *") {
+      task = runPolymarketScheduled(env, controller);
+    } else if (controller.cron === "20 * * * *") {
+      task = runForecastBatch(env, 3);
+    } else {
+      console.warn(`Ignoring unknown cron schedule: ${controller.cron}`);
+      return;
+    }
+    ctx.waitUntil(task.catch((error) => {
+      console.error(`Scheduled pipeline stage failed for ${controller.cron}`, error);
+      throw error;
+    }));
   },
 };
 

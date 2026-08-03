@@ -8,7 +8,7 @@ import {
   submitForecasts,
 } from "@/lib/arena";
 import { getForecastPipelineSnapshot, runForecastBatch } from "@/lib/forecasting";
-import { selectDailyBalancedSlate } from "@/lib/polymarket";
+import { runPolymarketScheduled, selectDailyBalancedSlate } from "@/lib/polymarket";
 import { env } from "cloudflare:workers";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as Record<string, unknown>;
     const action = String(payload.action || "");
-    const actor = action === "run_daily_forecast_batch"
+    const actor = action === "run_daily_forecast_batch" || action === "run_pipeline_sync"
       ? pipelineActor(request)
       : writeActor(request);
     let result: unknown;
@@ -95,6 +95,9 @@ export async function POST(request: Request) {
       const selection = await selectDailyBalancedSlate(runtime.DB);
       const forecast = await runForecastBatch(runtime, 3);
       result = { selection, forecast };
+    } else if (action === "run_pipeline_sync") {
+      const runtime = env as unknown as Parameters<typeof runForecastBatch>[0];
+      result = await runPolymarketScheduled(runtime, { cron: "0 * * * *" });
     } else {
       throw new ArenaError(400, "Unknown operation");
     }
