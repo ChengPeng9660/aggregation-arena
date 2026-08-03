@@ -244,9 +244,9 @@ const ACTION_LABELS: Record<string, string> = {
   "curation.event_resolved": "Polymarket event resolved",
 };
 
-export function ArenaClient({ userName }: { userName: string }) {
+export function ArenaClient() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [view, setView] = useState<View>("pipeline");
+  const [view, setView] = useState<View>("leaderboard");
   const [track, setTrack] = useState("aggregators");
   const [windowRange, setWindowRange] = useState("all");
   const [season, setSeason] = useState("all");
@@ -314,48 +314,24 @@ export function ArenaClient({ userName }: { userName: string }) {
   );
 
   return (
-    <div className="arena-app">
-      <aside className="sidebar">
-        <div className="brand-lockup">
-          <span className="brand-orbit" aria-hidden="true"><i /></span>
-          <div>
+    <div className="arena-app public-arena">
+      <header className="public-header">
+        <div className="public-header-inner">
+          <button className="public-brand" onClick={() => setView("leaderboard")} aria-label="Aggregation Arena home">
+            <span className="public-mark" aria-hidden="true"><i /><i /><i /></span>
             <strong>Aggregation Arena</strong>
-          </div>
+          </button>
+          <nav aria-label="Public benchmark navigation">
+            <PublicNavButton active={view === "leaderboard"} label="Leaderboard" onClick={() => setView("leaderboard")} />
+            <PublicNavButton active={view === "events"} label="Events" onClick={() => setView("events")} />
+            <PublicNavButton active={view === "pipeline"} label="How it works" onClick={() => setView("pipeline")} />
+            <PublicNavButton active={view === "methods"} label="Methodology" onClick={() => setView("methods")} />
+          </nav>
+          <div className="public-live"><span />Live benchmark</div>
         </div>
-        <nav aria-label="Benchmark navigation">
-          <NavButton active={view === "pipeline"} label="Pipeline" icon="01" onClick={() => setView("pipeline")} />
-          <NavButton active={view === "leaderboard"} label="Leaderboard" icon="02" onClick={() => setView("leaderboard")} />
-          <NavButton active={view === "curation"} label="Curation" icon="03" onClick={() => setView("curation")} />
-          <NavButton active={view === "forecasts"} label="Forecasts" icon="04" onClick={() => setView("forecasts")} />
-          <NavButton active={view === "events"} label="Events" icon="05" onClick={() => setView("events")} />
-          <NavButton active={view === "methods"} label="Methods" icon="06" onClick={() => setView("methods")} />
-          <NavButton active={view === "activity"} label="Audit log" icon="07" onClick={() => setView("activity")} />
-        </nav>
-        <div className="sidebar-status">
-          <span className="status-dot" />
-          <div><b>Online</b><small>30s refresh</small></div>
-        </div>
-        <div className="sidebar-user">
-          <span>{initials(userName)}</span>
-          <div><b>{userName}</b></div>
-        </div>
-      </aside>
+      </header>
 
-      <main className="main-surface">
-        <header className="topbar">
-          <div>
-            <span className="mobile-brand">Aggregation Arena</span>
-            <p>{viewLabel(view)}</p>
-          </div>
-          <div className="topbar-actions">
-            <button className="ghost-button" onClick={() => exportLeaderboard(snapshot)} disabled={!snapshot?.leaderboard.length}>
-              Export CSV
-            </button>
-            <button className="primary-button" onClick={() => setDialog({ type: "create-event" })}>
-              + New event
-            </button>
-          </div>
-        </header>
+      <main className="main-surface public-surface">
 
         {error && <div className="error-banner"><span>{error}</span><button onClick={() => void load()}>Retry</button></div>}
         {loading && !snapshot ? <LoadingState /> : snapshot ? (
@@ -380,9 +356,6 @@ export function ArenaClient({ userName }: { userName: string }) {
                 snapshot={snapshot}
                 openEvents={openEvents}
                 resolvedEvents={resolvedEvents}
-                onCreateParticipant={() => setDialog({ type: "create-participant" })}
-                onForecasts={(event) => setDialog({ type: "forecasts", event })}
-                onResolve={(event) => setDialog({ type: "resolve", event })}
                 onDetail={(event) => setDialog({ type: "event", event })}
               />
             )}
@@ -400,6 +373,11 @@ export function ArenaClient({ userName }: { userName: string }) {
         ) : null}
       </main>
 
+      <footer className="public-footer">
+        <div><strong>Aggregation Arena</strong><span>Open forecasting aggregation benchmark</span></div>
+        <p>Polymarket questions · frozen research context · public Event Brier scoring</p>
+      </footer>
+
       {dialog && (
         <DialogShell title={dialogTitle(dialog)} kicker={dialogKicker(dialog)} onClose={() => setDialog(null)}>
           {dialog.type === "create-event" && <CreateEventForm snapshot={snapshot} busy={mutating} onSubmit={(payload) => post({ action: "create_event", ...payload }, "Event created") } />}
@@ -411,7 +389,7 @@ export function ArenaClient({ userName }: { userName: string }) {
             resolution: resolvedOutcome === "yes" ? 1 : resolvedOutcome === "no" ? 0 : "",
             note,
           }, "Event resolved and leaderboard updated") } />}
-          {dialog.type === "event" && <EventDetail event={dialog.event} onInput={() => setDialog({ type: "forecasts", event: dialog.event })} onResolve={() => setDialog({ type: "resolve", event: dialog.event })} />}
+          {dialog.type === "event" && <EventDetail event={dialog.event} />}
         </DialogShell>
       )}
       <div className={`toast ${toast ? "show" : ""}`}>{toast}</div>
@@ -419,8 +397,8 @@ export function ArenaClient({ userName }: { userName: string }) {
   );
 }
 
-function NavButton({ active, label, icon, onClick }: { active: boolean; label: string; icon: string; onClick: () => void }) {
-  return <button className={active ? "active" : ""} onClick={onClick}><span>{icon}</span><b>{label}</b></button>;
+function PublicNavButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+  return <button className={active ? "active" : ""} onClick={onClick}>{label}</button>;
 }
 
 function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEvent: (event: ArenaEvent) => void }) {
@@ -604,54 +582,81 @@ function LeaderboardView({
   onOpenEvent: (event: ArenaEvent) => void;
 }) {
   return (
-    <div className="page-content enter">
-      <section className="page-heading">
-        <div>
-          <h1>Aggregation leaderboard</h1>
-          <p>Ranks update when events resolve. Lower Event Brier is better.</p>
+    <div className="page-content public-leaderboard enter">
+      <section className="public-leaderboard-hero">
+        <div className="public-hero-copy">
+          <span className="eyebrow">AGGREGATION ARENA · LIVE BENCHMARK</span>
+          <h1>Forecast Aggregation<br />Leaderboard</h1>
+          <p>Aggregation methods combine independent AI forecasts on real prediction markets and are scored in public when events resolve.</p>
+          <div className="public-hero-actions">
+            <button className="primary-button" onClick={() => document.getElementById("rankings")?.scrollIntoView({ behavior: "smooth" })}>See the standings</button>
+            <button className="text-button" onClick={() => {
+              const event = snapshot.events.find((item) => item.status === "open") || snapshot.events[0];
+              if (event) onOpenEvent(event);
+            }} disabled={!snapshot.events.length}>View a live event →</button>
+          </div>
         </div>
-        <div className="updated-stamp"><span /><div><small>Last computed</small><b>{formatTime(snapshot.generatedAt)}</b></div></div>
-      </section>
-
-      <section className="metric-strip">
-        <Metric label="Open events" value={snapshot.stats.openEvents} detail="awaiting forecasts or resolution" />
-        <Metric label="Resolved" value={snapshot.stats.resolvedEvents} detail="included in current standings" />
-        <Metric label="Forecasters" value={snapshot.stats.activeForecasters} detail={`${snapshot.stats.totalForecasts} locked forecasts`} />
-        <Metric label="Leader Brier" value={snapshot.stats.leaderBrier === null ? "—" : snapshot.stats.leaderBrier.toFixed(4)} detail={snapshot.stats.leaderName || "awaiting resolved events"} highlight />
-      </section>
-
-      <section className="filters">
-        <div className="segmented">
-          <button className={track === "aggregators" ? "active" : ""} onClick={() => onTrack("aggregators")}>Aggregators</button>
-          <button className={track === "forecasters" ? "active" : ""} onClick={() => onTrack("forecasters")}>Forecasters</button>
-          <button className={track === "all" ? "active" : ""} onClick={() => onTrack("all")}>All</button>
-        </div>
-        <div className="select-row">
-          <label>Window<select value={windowRange} onChange={(event) => onWindow(event.target.value)}><option value="all">All time</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option></select></label>
-          <label>Season<select value={season} onChange={(event) => onSeason(event.target.value)}><option value="all">All seasons</option>{snapshot.seasons.map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>Category<select value={category} onChange={(event) => onCategory(event.target.value)}><option value="all">All categories</option>{snapshot.categories.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <div className="public-hero-signal" aria-label="Live benchmark signal">
+          <span>LIVE SCORE</span>
+          <strong>{snapshot.stats.leaderBrier === null ? "—" : snapshot.stats.leaderBrier.toFixed(4)}</strong>
+          <p>{snapshot.stats.leaderName || "Awaiting resolved events"}</p>
+          <i><em /></i>
+          <small>Lower Event Brier is better</small>
         </div>
       </section>
 
-      <section className="leaderboard-panel">
-        <div className="table-caption">
-          <div><b>Official standings</b><span>Lower Event Brier is better · minimum {snapshot.methodology.minimumResolved} resolved events</span></div>
-          <span className="metric-definition">{snapshot.methodology.displayMetric}</span>
-        </div>
-        <div className="table-scroll">
-          <table>
-            <thead><tr><th>Rank</th><th>Method / Forecaster</th><th>Event Brier</th><th>95% CI</th><th>N</th><th>Coverage</th></tr></thead>
-            <tbody>
-              {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} />) : (
-                <tr><td colSpan={6} className="empty-cell">No resolved scores match the current filters.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+      <section className="public-stat-line" aria-label="Benchmark summary">
+        <div><strong>{snapshot.leaderboard.length}</strong><span>ranked methods</span></div>
+        <div><strong>{snapshot.stats.openEvents}</strong><span>open events</span></div>
+        <div><strong>{snapshot.stats.resolvedEvents}</strong><span>resolved events</span></div>
+        <div><strong>{snapshot.stats.totalForecasts}</strong><span>locked forecasts</span></div>
+        <div><strong>{formatTime(snapshot.generatedAt)}</strong><span>last computed</span></div>
       </section>
 
-      <section className="open-queue">
-        <div className="section-title"><div><h2>Open events</h2></div><span>{snapshot.stats.openEvents} open</span></div>
+      <section className="metric-explainer">
+        <strong>Why Event Brier?</strong>
+        <p>Each method is evaluated on the same resolved outcomes. Event Brier measures the squared distance between its probability distribution and what actually happened, averaged across all outcomes and events.</p>
+        <button onClick={() => onTrack("aggregators")}>Lower is better</button>
+      </section>
+
+      <section className="public-ranking-section" id="rankings">
+        <div className="public-ranking-heading">
+          <div><span className="eyebrow">CURRENT STANDINGS</span><h2>Rankings</h2><p>Scores update as selected Polymarket events resolve.</p></div>
+          <button className="export-button" onClick={() => exportLeaderboard(snapshot)} disabled={!snapshot.leaderboard.length}>Export CSV ↓</button>
+        </div>
+        <div className="filters public-filters">
+          <div className="segmented">
+            <button className={track === "aggregators" ? "active" : ""} onClick={() => onTrack("aggregators")}>Aggregation methods</button>
+            <button className={track === "forecasters" ? "active" : ""} onClick={() => onTrack("forecasters")}>Individual models</button>
+            <button className={track === "all" ? "active" : ""} onClick={() => onTrack("all")}>All</button>
+          </div>
+          <div className="select-row">
+            <label>Window<select value={windowRange} onChange={(event) => onWindow(event.target.value)}><option value="all">All time</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option></select></label>
+            <label>Season<select value={season} onChange={(event) => onSeason(event.target.value)}><option value="all">All seasons</option>{snapshot.seasons.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label>Category<select value={category} onChange={(event) => onCategory(event.target.value)}><option value="all">All categories</option>{snapshot.categories.map((item) => <option key={item}>{item}</option>)}</select></label>
+          </div>
+        </div>
+
+        <section className="leaderboard-panel public-ranking-table">
+          <div className="table-caption">
+            <div><b>Official standings</b><span>Minimum {snapshot.methodology.minimumResolved} resolved event{snapshot.methodology.minimumResolved === 1 ? "" : "s"} to be ranked</span></div>
+            <span className="metric-definition">{snapshot.methodology.displayMetric}</span>
+          </div>
+          <div className="table-scroll">
+            <table>
+              <thead><tr><th>Rank</th><th>Method / Forecaster</th><th>Event Brier ↓</th><th>Resolved events</th><th>Coverage</th></tr></thead>
+              <tbody>
+                {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} />) : (
+                  <tr><td colSpan={5} className="empty-cell">No resolved scores match the current filters.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section className="open-queue public-open-events">
+        <div className="section-title"><div><span className="eyebrow">LIVE TEST SET</span><h2>Open events</h2></div><span>{snapshot.stats.openEvents} open questions</span></div>
         <div className="event-rail">
           {snapshot.events.filter((event) => event.status === "open").slice(0, 4).map((event) => (
             <button key={event.id} onClick={() => onOpenEvent(event)}>
@@ -671,7 +676,6 @@ function LeaderboardRowView({ row }: { row: LeaderboardRow }) {
       <td><span className={`rank rank-${row.rank}`}>{String(row.rank).padStart(2, "0")}</span></td>
       <td><div className="method-cell"><i style={{ background: row.color }} /><div><b>{row.name}</b><small>{row.organization} · {row.version}</small></div>{row.status === "provisional" && <em>PROV</em>}</div></td>
       <td><strong className="index-value">{row.brier.toFixed(4)}</strong></td>
-      <td className="muted-number">{row.ciLow.toFixed(4)}–{row.ciHigh.toFixed(4)}</td>
       <td className="mono-number">{row.resolved}</td>
       <td><div className="coverage-cell"><span><i style={{ width: `${Math.min(100, row.coverage)}%` }} /></span><b>{row.coverage.toFixed(0)}%</b></div></td>
     </tr>
@@ -747,17 +751,11 @@ function EventsView({
   snapshot,
   openEvents,
   resolvedEvents,
-  onCreateParticipant,
-  onForecasts,
-  onResolve,
   onDetail,
 }: {
   snapshot: Snapshot;
   openEvents: ArenaEvent[];
   resolvedEvents: ArenaEvent[];
-  onCreateParticipant: () => void;
-  onForecasts: (event: ArenaEvent) => void;
-  onResolve: (event: ArenaEvent) => void;
   onDetail: (event: ArenaEvent) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -780,7 +778,6 @@ function EventsView({
     <div className="page-content enter">
       <section className="page-heading compact-heading">
         <div><span className="eyebrow">LIVE FORECAST BENCHMARK</span><h1>Events</h1><p>Every selected question, its market baseline, and how the models currently see the outcomes.</p></div>
-        <button className="ghost-button" onClick={onCreateParticipant}>+ Add forecaster</button>
       </section>
       <section className="event-discovery" aria-label="Find benchmark events">
         <label className="event-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search events by title, category, or source ticker…" /></label>
@@ -804,8 +801,6 @@ function EventsView({
             event={event}
             runs={snapshot.forecastPipeline.runs.filter((run) => run.eventId === event.id)}
             onDetail={() => onDetail(event)}
-            onForecasts={() => onForecasts(event)}
-            onResolve={() => onResolve(event)}
           />
         ))}</div> : <div className="empty-block">No events match the current search and filters.</div>}
       </section>
@@ -817,14 +812,10 @@ function ProphetEventBlock({
   event,
   runs,
   onDetail,
-  onForecasts,
-  onResolve,
 }: {
   event: ArenaEvent;
   runs: ForecastPipelineSnapshot["runs"];
   onDetail: () => void;
-  onForecasts: () => void;
-  onResolve: () => void;
 }) {
   const outcomes = eventBlockOutcomes(event).slice(0, 2);
   const sourceCount = Math.max(0, ...runs.map((run) => run.sourceCount));
@@ -855,7 +846,6 @@ function ProphetEventBlock({
       <div className="event-evidence"><span>{sourceCount ? `${sourceCount} frozen sources` : "Context pending"}</span><small>{event.sourceEventId ? `Polymarket Event ${event.sourceEventId}` : event.season}</small></div>
       <div className="event-timing"><span className={event.status === "open" ? "live" : "resolved"}>{event.status === "open" ? "LIVE" : "RESOLVED"}</span><time>{event.status === "resolved" ? (event.resolvedAt ? `Resolved ${formatDate(event.resolvedAt)}` : "Resolved") : event.closeTime ? formatCloseTime(event.closeTime) : "No deadline"}</time></div>
     </footer>
-    {event.status === "open" && <div className="event-block-actions"><button onClick={onForecasts} disabled={event.eventType !== "binary"}>Input probabilities</button><button onClick={onResolve} disabled={event.forecasterCount < 2}>Resolve</button></div>}
   </article>;
 }
 
@@ -1116,7 +1106,7 @@ function ResolveForm({ event, busy, onSubmit }: { event: ArenaEvent; busy: boole
   </form>;
 }
 
-function EventDetail({ event, onInput, onResolve }: { event: ArenaEvent; onInput: () => void; onResolve: () => void }) {
+function EventDetail({ event }: { event: ArenaEvent }) {
   const sorted = [...event.predictions].sort((a, b) => a.kind.localeCompare(b.kind) || b.probability - a.probability);
   return <div className="event-detail">
     <div className="event-context"><span>{event.category} / {event.season}</span><h3>{event.title}</h3><p>{event.description || "No additional description."}</p></div>
@@ -1129,16 +1119,11 @@ function EventDetail({ event, onInput, onResolve }: { event: ArenaEvent; onInput
         return values.map(([key, probability], index) => <div key={`${prediction.id}-${key}`}><span className={prediction.kind === "aggregate" ? "aggregate-tag" : "forecaster-tag"}>{index ? key : prediction.kind}</span><b>{index ? event.outcomes.find((outcome) => outcome.key === key)?.label || key : prediction.name}</b><i><em style={{ width: `${probability * 100}%` }} /></i><strong>{(probability * 100).toFixed(1)}%</strong></div>);
       })}
     </div>
-    {event.status === "open" && <div className="dialog-actions">{event.eventType === "binary" && <button className="ghost-button" onClick={onInput}>Input probabilities</button>}<button className="primary-button" onClick={onResolve} disabled={event.forecasterCount < 2}>Resolve event</button></div>}
   </div>;
 }
 
 function LoadingState() {
   return <div className="loading-state"><span /><h2>Loading data</h2></div>;
-}
-
-function viewLabel(view: View) {
-  return { pipeline: "Pipeline", leaderboard: "Leaderboard", curation: "Curation", forecasts: "Forecasts", events: "Events", methods: "Methods", activity: "Audit log" }[view];
 }
 
 function dialogTitle(dialog: NonNullable<Dialog>) {
