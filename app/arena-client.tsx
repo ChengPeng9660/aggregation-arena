@@ -377,6 +377,7 @@ export function ArenaClient({ userName }: { userName: string }) {
             )}
             {view === "events" && (
               <EventsView
+                snapshot={snapshot}
                 openEvents={openEvents}
                 resolvedEvents={resolvedEvents}
                 onCreateParticipant={() => setDialog({ type: "create-participant" })}
@@ -743,6 +744,7 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
 }
 
 function EventsView({
+  snapshot,
   openEvents,
   resolvedEvents,
   onCreateParticipant,
@@ -750,6 +752,7 @@ function EventsView({
   onResolve,
   onDetail,
 }: {
+  snapshot: Snapshot;
   openEvents: ArenaEvent[];
   resolvedEvents: ArenaEvent[];
   onCreateParticipant: () => void;
@@ -757,40 +760,121 @@ function EventsView({
   onResolve: (event: ArenaEvent) => void;
   onDetail: (event: ArenaEvent) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("All");
+  const [eventScope, setEventScope] = useState<"live" | "resolved">("live");
+  const [sort, setSort] = useState<"latest" | "closing">("latest");
+  const sourceEvents = eventScope === "live" ? openEvents : resolvedEvents;
+  const visibleEvents = sourceEvents
+    .filter((event) => category === "All" || event.category === category)
+    .filter((event) => `${event.title} ${event.description} ${event.sourceEventId || ""}`.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => {
+      if (sort === "closing") {
+        return (a.closeTime ? new Date(a.closeTime).getTime() : Number.MAX_SAFE_INTEGER) - (b.closeTime ? new Date(b.closeTime).getTime() : Number.MAX_SAFE_INTEGER);
+      }
+      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    });
+  const categories = ["All", ...PROPHET_CATEGORIES.filter((item) => snapshot.categories.includes(item))];
+
   return (
     <div className="page-content enter">
       <section className="page-heading compact-heading">
-        <div><h1>Events</h1><p>Create questions, enter forecasts, and record outcomes.</p></div>
+        <div><span className="eyebrow">LIVE FORECAST BENCHMARK</span><h1>Events</h1><p>Every selected question, its market baseline, and how the models currently see the outcomes.</p></div>
         <button className="ghost-button" onClick={onCreateParticipant}>+ Add forecaster</button>
       </section>
-      <section className="queue-board">
-        <div className="section-title"><div><span className="eyebrow">OPEN</span><h2>Active events</h2></div><span>{openEvents.length} questions</span></div>
-        {openEvents.length ? openEvents.map((event) => (
-          <article className="event-row" key={event.id}>
-            <button className="event-main" onClick={() => onDetail(event)}>
-              <span className="category-label">{event.category}</span>
-              <div><h3>{event.title}</h3><p>{event.season} · {event.closeTime ? `closes ${formatDate(event.closeTime)}` : "no deadline"}</p></div>
-            </button>
-            <div className="event-progress"><b>{event.forecasterCount}</b><span>forecasts</span><i><em style={{ width: `${Math.min(100, event.forecasterCount * 20)}%` }} /></i></div>
-            <div className="event-actions"><button onClick={() => onForecasts(event)}>Input probabilities</button><button className="gold-action" onClick={() => onResolve(event)} disabled={event.forecasterCount < 2}>Resolve</button></div>
-          </article>
-        )) : <div className="empty-block">There are no open events. Use “New event” to create one.</div>}
+      <section className="event-discovery" aria-label="Find benchmark events">
+        <label className="event-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search events by title, category, or source ticker…" /></label>
+        <div className="event-filter-row">
+          <div className="event-topics" aria-label="Filter by category">
+            <small>TOPIC</small>
+            {categories.map((item) => <button key={item} className={category === item ? "active" : ""} onClick={() => setCategory(item)}>{item}</button>)}
+          </div>
+          <div className="event-view-controls">
+            <div className="event-scope"><button className={eventScope === "live" ? "active" : ""} onClick={() => setEventScope("live")}>Live</button><button className={eventScope === "resolved" ? "active" : ""} onClick={() => setEventScope("resolved")}>Resolved</button></div>
+            <label>Sort<select value={sort} onChange={(event) => setSort(event.target.value as "latest" | "closing")}><option value="latest">Latest updated</option><option value="closing">Closing soon</option></select></label>
+          </div>
+        </div>
       </section>
 
-      <section className="resolved-board">
-        <div className="section-title"><div><span className="eyebrow">RESOLVED</span><h2>Resolution history</h2></div><span>{resolvedEvents.length} outcomes</span></div>
-        <div className="resolved-grid">
-          {resolvedEvents.slice(0, 12).map((event) => (
-            <button key={event.id} onClick={() => onDetail(event)}>
-              <span className={`outcome ${event.resolution ? "yes" : "no"}`}>{event.resolution ? "YES" : "NO"}</span>
-              <h3>{event.title}</h3>
-              <div><small>{event.category}</small><time>{event.resolvedAt ? formatDate(event.resolvedAt) : "—"}</time></div>
-            </button>
-          ))}
-        </div>
+      <section className="prophet-event-board">
+        <div className="section-title"><div><span className="eyebrow">{eventScope === "live" ? "OPEN" : "HISTORY"}</span><h2>{eventScope === "live" ? "Active event slate" : "Resolved events"}</h2></div><span>{visibleEvents.length} of {sourceEvents.length}</span></div>
+        {visibleEvents.length ? <div className="prophet-event-grid">{visibleEvents.map((event) => (
+          <ProphetEventBlock
+            key={event.id}
+            event={event}
+            runs={snapshot.forecastPipeline.runs.filter((run) => run.eventId === event.id)}
+            onDetail={() => onDetail(event)}
+            onForecasts={() => onForecasts(event)}
+            onResolve={() => onResolve(event)}
+          />
+        ))}</div> : <div className="empty-block">No events match the current search and filters.</div>}
       </section>
     </div>
   );
+}
+
+function ProphetEventBlock({
+  event,
+  runs,
+  onDetail,
+  onForecasts,
+  onResolve,
+}: {
+  event: ArenaEvent;
+  runs: ForecastPipelineSnapshot["runs"];
+  onDetail: () => void;
+  onForecasts: () => void;
+  onResolve: () => void;
+}) {
+  const outcomes = eventBlockOutcomes(event).slice(0, 2);
+  const sourceCount = Math.max(0, ...runs.map((run) => run.sourceCount));
+  const completedModels = new Set(runs.filter((run) => run.status === "completed").map((run) => run.participantId)).size;
+  const resolvedLabel = event.resolvedOutcome ? event.outcomes.find((outcome) => outcome.key === event.resolvedOutcome)?.label || event.resolvedOutcome : null;
+  return <article className={`prophet-event-block ${event.status}`}>
+    <header>
+      <div className="event-symbol" aria-hidden="true">{initials(event.category)}</div>
+      <button className="event-block-title" onClick={onDetail}>
+        <span>{event.category}{event.eventType === "categorical" ? " · MULTI-OUTCOME" : " · BINARY"}</span>
+        <h3>{event.title}</h3>
+      </button>
+      <button className="event-open-arrow" onClick={onDetail} aria-label={`Open ${event.title}`}>↗</button>
+    </header>
+
+    {event.status === "resolved" && resolvedLabel ? <div className="event-result"><small>RESULT</small><strong>{resolvedLabel}</strong></div> : <section className="event-consensus">
+      <div className="event-consensus-label"><b>AI consensus vs. market</b><span>{completedModels || event.forecasterCount} model{(completedModels || event.forecasterCount) === 1 ? "" : "s"}</span></div>
+      <div className="event-outcomes">
+        {outcomes.map((outcome, index) => <div className="event-outcome" key={outcome.key}>
+          <div className="event-outcome-head"><b>{outcome.label}</b><span><strong>{formatProbability(outcome.consensus)}</strong>{outcome.market === null ? "" : ` mkt ${formatProbability(outcome.market)}`}</span></div>
+          <div className="event-probability-track"><i className={`${index ? "gold" : "purple"}${outcome.consensus === null ? " pending" : ""}`} style={{ width: `${outcome.consensus === null ? 0 : Math.max(2, outcome.consensus * 100)}%` }} />{outcome.market !== null && <em style={{ left: `${Math.min(100, Math.max(0, outcome.market * 100))}%` }} />}</div>
+          <div className="event-model-calls">{outcome.models.length ? outcome.models.map((model) => <span key={`${outcome.key}-${model.name}`}><b>{model.name}</b><strong>{formatProbability(model.probability)}</strong></span>) : <span><b>Awaiting model forecast</b><strong>—</strong></span>}</div>
+        </div>)}
+      </div>
+    </section>}
+
+    <footer>
+      <div className="event-evidence"><span>{sourceCount ? `${sourceCount} frozen sources` : "Context pending"}</span><small>{event.sourceEventId ? `Polymarket Event ${event.sourceEventId}` : event.season}</small></div>
+      <div className="event-timing"><span className={event.status === "open" ? "live" : "resolved"}>{event.status === "open" ? "LIVE" : "RESOLVED"}</span><time>{event.status === "resolved" ? (event.resolvedAt ? `Resolved ${formatDate(event.resolvedAt)}` : "Resolved") : event.closeTime ? formatCloseTime(event.closeTime) : "No deadline"}</time></div>
+    </footer>
+    {event.status === "open" && <div className="event-block-actions"><button onClick={onForecasts} disabled={event.eventType !== "binary"}>Input probabilities</button><button onClick={onResolve} disabled={event.forecasterCount < 2}>Resolve</button></div>}
+  </article>;
+}
+
+function eventBlockOutcomes(event: ArenaEvent) {
+  const forecasters = event.predictions.filter((prediction) => prediction.kind === "forecaster");
+  const yesMarket = event.outcomes.find((outcome) => outcome.key === "yes")?.priceAtSelection;
+  return event.outcomes.map((outcome) => {
+    const models = forecasters.map((prediction) => {
+      const probability = prediction.probabilities?.[outcome.key]
+        ?? (outcome.key === "yes" ? prediction.probability : outcome.key === "no" ? 1 - prediction.probability : undefined);
+      return probability === undefined ? null : { name: prediction.name, probability };
+    }).filter((model): model is { name: string; probability: number } => model !== null).sort((a, b) => b.probability - a.probability);
+    const aggregate = event.predictions.find((prediction) => prediction.kind === "aggregate" && /equal|mean/i.test(prediction.name));
+    const aggregateProbability = aggregate?.probabilities?.[outcome.key]
+      ?? (aggregate ? outcome.key === "yes" ? aggregate.probability : outcome.key === "no" ? 1 - aggregate.probability : undefined : undefined);
+    const consensus = aggregateProbability ?? (models.length ? models.reduce((sum, model) => sum + model.probability, 0) / models.length : null);
+    const market = outcome.priceAtSelection ?? (outcome.key === "no" && yesMarket !== undefined ? 1 - yesMarket : null);
+    return { ...outcome, consensus, market, models: models.slice(0, 2) };
+  }).sort((a, b) => (b.consensus ?? b.market ?? 0) - (a.consensus ?? a.market ?? 0));
 }
 
 function ForecastsView({
@@ -1083,6 +1167,21 @@ function formatDate(value: string) {
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatProbability(value: number | null) {
+  return value === null ? "—" : `${Math.round(value * 100)}%`;
+}
+
+function formatCloseTime(value: string) {
+  const close = new Date(value);
+  const remaining = close.getTime() - Date.now();
+  if (remaining <= 0) return `Closed ${formatDate(value)}`;
+  const hours = Math.floor(remaining / 3_600_000);
+  if (hours < 48) return `Closes in ${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `Closes in ${days}d ${hours % 24}h`;
+  return `Closes ${formatDate(value)}`;
 }
 
 function formatSourceDate(value: string) {
