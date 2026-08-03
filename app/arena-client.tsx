@@ -262,7 +262,7 @@ export function ArenaClient({ userName }: { userName: string }) {
     if (!silent) setError("");
     const params = new URLSearchParams({ track, window: windowRange, season, category });
     try {
-      const response = await fetch(`/api/arena?${params}`, { cache: "no-store" });
+      const response = await fetchWithTimeout(`/api/arena?${params}`, { cache: "no-store" }, 15000);
       const payload = await readApiResponse<Snapshot & { message?: string }>(response);
       if (!response.ok) throw new Error(payload.message || "Failed to load benchmark data");
       setSnapshot(payload);
@@ -357,7 +357,7 @@ export function ArenaClient({ userName }: { userName: string }) {
           </div>
         </header>
 
-        {error && <div className="error-banner"><span>{error}</span><button onClick={() => setError("")}>Dismiss</button></div>}
+        {error && <div className="error-banner"><span>{error}</span><button onClick={() => void load()}>Retry</button></div>}
         {loading && !snapshot ? <LoadingState /> : snapshot ? (
           <>
             {view === "pipeline" && <PipelineView snapshot={snapshot} onOpenEvent={(event) => setDialog({ type: "event", event })} />}
@@ -1175,6 +1175,21 @@ async function readApiResponse<T>(response: Response): Promise<T> {
     return JSON.parse(body) as T;
   } catch {
     throw new Error(`The server returned malformed API data (HTTP ${response.status}). Please refresh and try again.`);
+  }
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("The data request took too long. Please retry; the page will also try again automatically.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
   }
 }
 

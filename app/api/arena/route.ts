@@ -18,20 +18,22 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const track = url.searchParams.get("track");
     const window = url.searchParams.get("window");
-    const snapshot = await getArenaSnapshot({
-      track: ["aggregators", "forecasters", "all"].includes(String(track))
-        ? (track as "aggregators" | "forecasters" | "all")
-        : "aggregators",
-      window: ["all", "30d", "90d"].includes(String(window))
-        ? (window as "all" | "30d" | "90d")
-        : "all",
-      season: url.searchParams.get("season") || "all",
-      category: url.searchParams.get("category") || "all",
-    });
-    const forecastPipeline = await getForecastPipelineSnapshot(
-      undefined,
-      env as unknown as { AI?: unknown; TAVILY_API_KEY?: string },
-    );
+    const [snapshot, forecastPipeline] = await Promise.all([
+      getArenaSnapshot({
+        track: ["aggregators", "forecasters", "all"].includes(String(track))
+          ? (track as "aggregators" | "forecasters" | "all")
+          : "aggregators",
+        window: ["all", "30d", "90d"].includes(String(window))
+          ? (window as "all" | "30d" | "90d")
+          : "all",
+        season: url.searchParams.get("season") || "all",
+        category: url.searchParams.get("category") || "all",
+      }),
+      getForecastPipelineSnapshot(
+        undefined,
+        env as unknown as { AI?: unknown; TAVILY_API_KEY?: string },
+      ),
+    ]);
     return Response.json({ ...snapshot, forecastPipeline }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return routeError(error);
