@@ -259,15 +259,15 @@ export function ArenaClient({ userName }: { userName: string }) {
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
-    setError("");
+    if (!silent) setError("");
     const params = new URLSearchParams({ track, window: windowRange, season, category });
     try {
       const response = await fetch(`/api/arena?${params}`, { cache: "no-store" });
-      const payload = (await response.json()) as Snapshot & { message?: string };
+      const payload = await readApiResponse<Snapshot & { message?: string }>(response);
       if (!response.ok) throw new Error(payload.message || "Failed to load benchmark data");
       setSnapshot(payload);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load benchmark data");
+      if (!silent) setError(apiErrorMessage(loadError, "Failed to load benchmark data"));
     } finally {
       if (!silent) setLoading(false);
     }
@@ -291,14 +291,14 @@ export function ArenaClient({ userName }: { userName: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const result = (await response.json()) as { ok: boolean; message?: string };
+      const result = await readApiResponse<{ ok: boolean; message?: string }>(response);
       if (!response.ok) throw new Error(result.message || "Operation failed");
       setDialog(null);
       setToast(successMessage);
       window.setTimeout(() => setToast(""), 2600);
       await load(true);
     } catch (mutationError) {
-      setError(mutationError instanceof Error ? mutationError.message : "Operation failed");
+      setError(apiErrorMessage(mutationError, "Operation failed"));
     } finally {
       setMutating(false);
     }
@@ -1159,6 +1159,31 @@ function dialogKicker(dialog: NonNullable<Dialog>) {
 
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+}
+
+async function readApiResponse<T>(response: Response): Promise<T> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() || "";
+  const body = await response.text();
+  if (!contentType.includes("application/json")) {
+    const status = response.status ? `HTTP ${response.status}` : "unknown status";
+    throw new Error(`The server returned a web page instead of API data (${status}). Please wait a moment and try again.`);
+  }
+  if (!body.trim()) {
+    throw new Error(`The server returned an empty API response (HTTP ${response.status}). Please try again.`);
+  }
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error(`The server returned malformed API data (HTTP ${response.status}). Please refresh and try again.`);
+  }
+}
+
+function apiErrorMessage(error: unknown, fallback: string) {
+  if (!(error instanceof Error)) return fallback;
+  if (error instanceof TypeError && /fetch|network|load/i.test(error.message)) {
+    return "The server is temporarily unreachable. Your existing data is safe; please try again in a moment.";
+  }
+  return error.message || fallback;
 }
 
 function formatDate(value: string) {
