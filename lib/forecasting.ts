@@ -149,7 +149,7 @@ export async function runForecastBatch(env: ForecastEnv, limit = 3) {
     LEFT JOIN model_forecast_runs mfr
       ON mfr.event_id=e.id AND mfr.participant_id=forecast_models.participant_id AND mfr.status='completed'
     WHERE e.status='open' AND mfr.id IS NULL
-    ORDER BY si.selected_at, si.rank, forecast_models.model_order
+    ORDER BY si.selected_at, si.category, si.rank, e.id, forecast_models.model_order
     LIMIT ?
   `).bind(...modelBindings, batchLimit).all<Record<string, unknown>>();
 
