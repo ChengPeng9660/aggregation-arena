@@ -904,7 +904,7 @@ function ForecastsView({
         <Metric label="Frozen contexts" value={pipeline.stats.contextsReady} detail="one search per event" />
         <Metric label="Completed" value={pipeline.stats.completed} detail={`${pipeline.models.length} model families`} />
         <Metric label="Pending" value={pipeline.stats.pending} detail="model-event runs" />
-        <Metric label="Pipeline" value={ready ? "READY" : "SETUP"} detail="3 model runs / hour" highlight />
+        <Metric label="Pipeline" value={ready ? "READY" : "SETUP"} detail="up to 15 complete events / hour" highlight />
       </section>
 
       <section className="pipeline-flow" aria-label="Forecast pipeline">

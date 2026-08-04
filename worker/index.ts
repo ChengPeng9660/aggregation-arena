@@ -53,7 +53,7 @@ const worker = {
     if (controller.cron === "0 * * * *" || controller.cron === "10 0 * * *") {
       task = runPolymarketScheduled(env, controller);
     } else if (controller.cron === "20 * * * *") {
-      task = runForecastBatch(env, 3);
+      task = runForecastBatch(env);
     } else {
       console.warn(`Ignoring unknown cron schedule: ${controller.cron}`);
       return;

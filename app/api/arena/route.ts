@@ -95,7 +95,7 @@ export async function POST(request: Request) {
     } else if (action === "run_daily_forecast_batch") {
       const runtime = env as unknown as Parameters<typeof runForecastBatch>[0];
       const selection = await selectDailyBalancedSlate(runtime.DB);
-      const forecast = await runForecastBatch(runtime, 3);
+      const forecast = await runForecastBatch(runtime);
       result = { selection, forecast };
     } else if (action === "run_pipeline_sync") {
       const runtime = env as unknown as Parameters<typeof runForecastBatch>[0];

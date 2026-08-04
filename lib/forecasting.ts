@@ -1,6 +1,7 @@
 import { getD1 } from "@/db";
 import { recordAutomatedEventForecast, recordAutomatedForecast } from "@/lib/arena";
 import {
+  FORECAST_EVENTS_PER_RUN,
   FORECAST_MODELS,
   buildProphetPredictionPrompt,
   buildSearchQuery,
@@ -116,7 +117,7 @@ export async function ensureForecastingReady(db: D1Database = getD1()) {
   }
 }
 
-export async function runForecastBatch(env: ForecastEnv, limit = 3) {
+export async function runForecastBatch(env: ForecastEnv, eventLimit = FORECAST_EVENTS_PER_RUN) {
   await ensureForecastingReady(env.DB);
   if (!env.TAVILY_API_KEY || !env.AI) {
     return {
@@ -127,11 +128,28 @@ export async function runForecastBatch(env: ForecastEnv, limit = 3) {
     };
   }
 
-  const batchLimit = Math.max(1, Math.min(10, limit));
+  const batchEventLimit = Math.max(1, Math.min(FORECAST_EVENTS_PER_RUN, eventLimit));
   const modelValues = FORECAST_MODELS.map(() => "(?, ?)").join(", ");
   const modelBindings = FORECAST_MODELS.flatMap((model, index) => [model.participantId, index]);
   const rows = await env.DB.prepare(`
-    WITH forecast_models(participant_id, model_order) AS (VALUES ${modelValues})
+    WITH forecast_models(participant_id, model_order) AS (VALUES ${modelValues}),
+    pending_events AS (
+      SELECT e.id
+      FROM events e
+      JOIN selection_items si ON si.event_id=e.id
+      WHERE e.status='open' AND EXISTS (
+        SELECT 1 FROM forecast_models fm
+        WHERE NOT EXISTS (
+          SELECT 1 FROM model_forecast_runs completed_run
+          WHERE completed_run.event_id=e.id
+            AND completed_run.participant_id=fm.participant_id
+            AND completed_run.status='completed'
+        )
+      )
+      GROUP BY e.id
+      ORDER BY MIN(si.selected_at), MIN(si.category), MIN(si.rank), e.id
+      LIMIT ?
+    )
     SELECT e.id, e.title, e.description, e.category, e.close_time, e.event_type,
       pc.rules, pc.source_url, pc.last_seen_at, pc.yes_price AS latest_yes_price,
       pc.volume_24h AS latest_volume_24h, pc.total_volume AS latest_total_volume,
@@ -142,16 +160,19 @@ export async function runForecastBatch(env: ForecastEnv, limit = 3) {
         'key', eo.outcome_key, 'label', eo.label, 'marketId', eo.market_id,
         'sourceUrl', eo.source_url, 'priceAtSelection', eo.price_at_selection
       )) FROM event_outcomes eo WHERE eo.event_id=e.id ORDER BY eo.display_order) AS event_outcomes_json
-    FROM events e
+    FROM pending_events pe
+    JOIN events e ON e.id=pe.id
     JOIN selection_items si ON si.event_id=e.id
     JOIN polymarket_candidates pc ON pc.market_id=si.market_id
     CROSS JOIN forecast_models
-    LEFT JOIN model_forecast_runs mfr
-      ON mfr.event_id=e.id AND mfr.participant_id=forecast_models.participant_id AND mfr.status='completed'
-    WHERE e.status='open' AND mfr.id IS NULL
+    WHERE NOT EXISTS (
+      SELECT 1 FROM model_forecast_runs completed_run
+      WHERE completed_run.event_id=e.id
+        AND completed_run.participant_id=forecast_models.participant_id
+        AND completed_run.status='completed'
+    )
     ORDER BY si.selected_at, si.category, si.rank, e.id, forecast_models.model_order
-    LIMIT ?
-  `).bind(...modelBindings, batchLimit).all<Record<string, unknown>>();
+  `).bind(...modelBindings, batchEventLimit).all<Record<string, unknown>>();
 
   const outcomes = [];
   for (const row of rows.results) {
@@ -174,6 +195,8 @@ export async function runForecastBatch(env: ForecastEnv, limit = 3) {
   }
   return {
     configured: true,
+    eventLimit: batchEventLimit,
+    processedEvents: new Set(outcomes.map((item) => item.eventId)).size,
     processed: outcomes.length,
     completed: outcomes.filter((item) => item.status === "completed").length,
     outcomes,

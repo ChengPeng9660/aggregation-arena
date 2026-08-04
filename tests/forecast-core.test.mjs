@@ -1,12 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  FORECAST_EVENTS_PER_RUN,
   FORECAST_MODELS,
   buildProphetPredictionPrompt,
   buildSearchQuery,
   normalizeSources,
   parsePredictionResponse,
 } from "../lib/forecast-core.js";
+
+test("scheduled forecast rounds cover the complete 15-event slate", () => {
+  assert.equal(FORECAST_EVENTS_PER_RUN, 15);
+});
 
 test("forecast registry contains two independent model families on the shared prompt", () => {
   assert.equal(FORECAST_MODELS.length, 2);
