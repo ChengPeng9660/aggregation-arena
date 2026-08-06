@@ -1,5 +1,5 @@
 import { getD1 } from "@/db";
-import { recordAutomatedEventForecast, recordAutomatedForecast } from "@/lib/arena";
+import { recordAutomatedEventForecast, recordAutomatedForecast, syncAggregates } from "@/lib/arena";
 import {
   FORECAST_EVENTS_PER_RUN,
   FORECAST_MODELS,
@@ -128,6 +128,13 @@ export async function runForecastBatch(env: ForecastEnv, eventLimit = FORECAST_E
     };
   }
 
+  // A model run is persisted before aggregate generation begins. If a Worker
+  // reaches its wall-time limit after a slower model response, the base
+  // forecast is safe but its aggregate rows can be missing. Repair those rows
+  // at the beginning of every scheduled pass so categorical events with many
+  // outcomes still become scoreable without rerunning paid inference/search.
+  const repairedAggregates = await repairMissingAggregates(env.DB);
+
   const batchEventLimit = Math.max(1, Math.min(FORECAST_EVENTS_PER_RUN, eventLimit));
   const modelValues = FORECAST_MODELS.map(() => "(?, ?)").join(", ");
   const modelBindings = FORECAST_MODELS.flatMap((model, index) => [model.participantId, index]);
@@ -195,12 +202,43 @@ export async function runForecastBatch(env: ForecastEnv, eventLimit = FORECAST_E
   }
   return {
     configured: true,
+    repairedAggregates,
     eventLimit: batchEventLimit,
     processedEvents: new Set(outcomes.map((item) => item.eventId)).size,
     processed: outcomes.length,
     completed: outcomes.filter((item) => item.status === "completed").length,
     outcomes,
   };
+}
+
+async function repairMissingAggregates(db: D1Database) {
+  const rows = await db.prepare(`
+    SELECT e.id
+    FROM events e
+    WHERE e.status='open' AND (
+      (
+        e.event_type='categorical'
+        AND (SELECT COUNT(DISTINCT participant_id) FROM prediction_outcomes
+             WHERE event_id=e.id AND kind='forecaster') >= 2
+        AND (SELECT COUNT(DISTINCT participant_id) FROM prediction_outcomes
+             WHERE event_id=e.id AND kind='aggregate') < 6
+      ) OR (
+        e.event_type!='categorical'
+        AND (SELECT COUNT(DISTINCT participant_id) FROM predictions
+             WHERE event_id=e.id AND kind='forecaster') >= 2
+        AND (SELECT COUNT(DISTINCT participant_id) FROM predictions
+             WHERE event_id=e.id AND kind='aggregate') < 6
+      )
+    )
+    ORDER BY e.created_at
+    LIMIT 15
+  `).all<{ id: string }>();
+  const repaired = [];
+  for (const row of rows.results) {
+    const aggregates = await syncAggregates(row.id);
+    if (aggregates.length) repaired.push({ eventId: row.id, aggregateCount: aggregates.length });
+  }
+  return repaired;
 }
 
 async function forecastEvent(env: ForecastEnv, event: ForecastEvent, model: ForecastModel) {

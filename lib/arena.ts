@@ -589,7 +589,7 @@ async function buildLeaderboard(
     .map((row, index) => ({ ...row, rank: index + 1 }));
 }
 
-async function syncAggregates(eventId: string) {
+export async function syncAggregates(eventId: string) {
   const db = getD1();
   const event = await db.prepare("SELECT event_type FROM events WHERE id=?").bind(eventId)
     .first<{ event_type: string }>();
