@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { HistoricalArena } from "./historical-arena";
 
 const PROPHET_CATEGORIES = ["Politics", "Economics", "Science", "Sports", "Entertainment"] as const;
 
@@ -221,7 +222,7 @@ type Snapshot = {
   forecastPipeline: ForecastPipelineSnapshot;
 };
 
-type View = "pipeline" | "leaderboard" | "curation" | "forecasts" | "events" | "methods" | "activity";
+type View = "pipeline" | "leaderboard" | "history" | "curation" | "forecasts" | "events" | "methods" | "activity";
 type Dialog =
   | { type: "create-event" }
   | { type: "create-participant" }
@@ -256,6 +257,22 @@ export function ArenaClient() {
   const [mutating, setMutating] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+
+  const navigateView = (next: View) => {
+    setView(next);
+    const url = new URL(window.location.href);
+    if (next === "history") url.searchParams.set("view", "history");
+    else {
+      url.searchParams.delete("view");
+      url.searchParams.delete("models");
+    }
+    window.history.replaceState({}, "", url);
+  };
+
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("view");
+    if (requested === "history") setView("history");
+  }, []);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -317,15 +334,16 @@ export function ArenaClient() {
     <div className="arena-app public-arena">
       <header className="public-header">
         <div className="public-header-inner">
-          <button className="public-brand" onClick={() => setView("leaderboard")} aria-label="Aggregation Arena home">
+          <button className="public-brand" onClick={() => navigateView("leaderboard")} aria-label="Aggregation Arena home">
             <span className="public-mark" aria-hidden="true"><i /><i /><i /></span>
             <strong>Aggregation Arena</strong>
           </button>
           <nav aria-label="Public benchmark navigation">
-            <PublicNavButton active={view === "leaderboard"} label="Leaderboard" onClick={() => setView("leaderboard")} />
-            <PublicNavButton active={view === "events"} label="Events" onClick={() => setView("events")} />
-            <PublicNavButton active={view === "pipeline"} label="How it works" onClick={() => setView("pipeline")} />
-            <PublicNavButton active={view === "methods"} label="Methodology" onClick={() => setView("methods")} />
+            <PublicNavButton active={view === "leaderboard"} label="Leaderboard" onClick={() => navigateView("leaderboard")} />
+            <PublicNavButton active={view === "history"} label="Historical Arena" onClick={() => navigateView("history")} />
+            <PublicNavButton active={view === "events"} label="Events" onClick={() => navigateView("events")} />
+            <PublicNavButton active={view === "pipeline"} label="How it works" onClick={() => navigateView("pipeline")} />
+            <PublicNavButton active={view === "methods"} label="Methodology" onClick={() => navigateView("methods")} />
           </nav>
           <div className="public-live"><span />Live benchmark</div>
         </div>
@@ -333,8 +351,8 @@ export function ArenaClient() {
 
       <main className="main-surface public-surface">
 
-        {error && <div className="error-banner"><span>{error}</span><button onClick={() => void load()}>Retry</button></div>}
-        {loading && !snapshot ? <LoadingState /> : snapshot ? (
+        {view !== "history" && error && <div className="error-banner"><span>{error}</span><button onClick={() => void load()}>Retry</button></div>}
+        {view === "history" ? <HistoricalArena /> : loading && !snapshot ? <LoadingState /> : snapshot ? (
           <>
             {view === "pipeline" && <PipelineView snapshot={snapshot} onOpenEvent={(event) => setDialog({ type: "event", event })} />}
             {view === "leaderboard" && (
@@ -375,7 +393,7 @@ export function ArenaClient() {
 
       <footer className="public-footer">
         <div><strong>Aggregation Arena</strong><span>Open forecasting aggregation benchmark</span></div>
-        <p>Polymarket questions · frozen research context · public Event Brier scoring</p>
+        <p>{view === "history" ? "ForecastBench history · interactive model selection · resolved Brier scoring" : "Polymarket questions · frozen research context · public Event Brier scoring"}</p>
       </footer>
 
       {dialog && (

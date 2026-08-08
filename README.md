@@ -13,6 +13,7 @@ Cloudflare Worker 版本：
 ## 目录
 
 - [已经实现的功能](#已经实现的功能)
+- [ForecastBench Historical Arena](#forecastbench-historical-arena)
 - [完整数据流程](#完整数据流程)
 - [LLM 自动预测流水线](#llm-自动预测流水线)
 - [聚合方法](#聚合方法)
@@ -134,6 +135,22 @@ Cloudflare Worker 版本：
 - 手机端底部导航。
 - 响应式 Leaderboard、事件列表、方法说明和弹窗。
 - 支持键盘 Focus 状态和 Reduced Motion。
+
+## ForecastBench Historical Arena
+
+公开网站导航中的 **Historical Arena** 是独立于 Polymarket 实时榜的历史聚合回测页：
+
+- 数据来自完整 ForecastBench resolved marginal panel 快照：4,541,879 条可用预测记录、13,660 个已结算事件、81 个基础模型、11 家模型提供方、25 个预测轮次。除 OpenAI / Anthropic 外，还包括 Google、Meta、DeepSeek、Mistral、Qwen、Moonshot、xAI、Z.ai 和 Minimax。
+- 用户可以自由勾选要聚合的基础模型；模型集合和模型数 `K` 都是聚合器输入，选择变化后六种方法、排名和全部图表会立即重算。
+- 默认使用 available-case aggregation：一道题只要至少两个已选模型有预测就进入聚合；不会强制所有模型处于共同覆盖区间。
+- 页面显示 Events、Coverage 与平均实际 `K`，覆盖差异不会被隐藏；需要严格共同样本时可打开 **Complete cases only**。
+- Past-performance Pool 的权重只使用更早预测轮次的历史 Brier，避免用当前题目的结果训练当前题目。
+- 提供累计表现、表现随 `K` 变化、历史排名与校准曲线，以及实际进入评分的事件审计列表。
+- 当前快照生成脚本为 `scripts/build_forecastbench_history.py`，浏览器数据为 `public/forecastbench/history.json`。重新生成需要本机对应 ForecastBench 研究数据路径。
+
+直接打开：
+
+<https://aggregation-arena.chengpeng9660.workers.dev/?view=history>
 
 ## 完整数据流程
 
