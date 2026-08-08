@@ -1026,6 +1026,7 @@ td { font-size: 12px; }
 .history-method b { font-size: 11px; }
 .history-score { color: var(--purple-deep); font: 15px var(--font-geist-mono), monospace; font-weight: 700; }
 .history-detail td { padding: 12px 18px 12px 63px; color: var(--muted); background: #fbf9fd; text-align: left !important; font-size: 11px; line-height: 1.55; }
+.history-empty-row { padding: 34px 20px !important; color: var(--muted); text-align: center !important; font-size: 11px; line-height: 1.55; }
 .history-chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin: 0 0 78px; border: 1px solid var(--line-strong); background: var(--line-strong); }
 .history-chart-panel { min-width: 0; padding: 24px 24px 18px; background: #fff; }
 .history-chart-panel header { min-height: 70px; }
@@ -1073,6 +1074,10 @@ td { font-size: 12px; }
   .history-controls select { width: 100%; }
   .history-section-title { grid-template-columns: 1fr; gap: 8px; }
   .history-section-title h2 { margin-top: 0; }
+  .history-ranking table { min-width: 560px; }
+  .history-ranking th:nth-child(5), .history-ranking td:nth-child(5),
+  .history-ranking th:nth-child(7), .history-ranking td:nth-child(7),
+  .history-ranking th:nth-child(8), .history-ranking td:nth-child(8) { display: none; }
   .history-chart-panel { padding: 18px 12px 14px; }
   .history-event-list article { grid-template-columns: 1fr; gap: 9px; }
   .history-event-list footer { grid-column: auto; flex-wrap: wrap; justify-content: flex-start; }

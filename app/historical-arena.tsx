@@ -136,7 +136,7 @@ export function HistoricalArena() {
             <div className="history-table-scroll">
               <table>
                 <thead><tr><th>Rank</th><th>Aggregation method</th><th>1 − Brier</th><th>Brier</th><th>ECE</th><th>Events</th><th>Coverage</th><th>Avg K</th></tr></thead>
-                <tbody>{analysis.ranking.map((row, index) => (
+                <tbody>{analysis.ranking.length ? analysis.ranking.map((row, index) => (
                   <Fragment key={row.id}>
                     <tr className={index === 0 ? "history-winner" : ""} onClick={() => setExpanded(expanded === row.id ? null : row.id)}>
                       <td><span className={`history-rank rank-${index + 1}`}>{index + 1}</span></td>
@@ -145,7 +145,7 @@ export function HistoricalArena() {
                     </tr>
                     {expanded === row.id && <tr className="history-detail"><td colSpan={8}>{METHODS.find((method) => method.id === row.id)?.rule}</td></tr>}
                   </Fragment>
-                ))}</tbody>
+                )) : <tr><td className="history-empty-row" colSpan={8}>No events satisfy this model selection and coverage rule. Turn off complete cases or choose models with overlapping forecast rounds.</td></tr>}</tbody>
               </table>
             </div>
           </section>
@@ -215,6 +215,8 @@ function analyze(events: HistoricalEvent[], selected: string[], completeCases: b
       history.set(id, prior);
     }
   }
+
+  if (!scored.length) return emptyAnalysis(base.length);
 
   const ranking = makeRanking(scored, base.length);
   const dates = Array.from(new Set(scored.map((item) => item.event.date))).sort();

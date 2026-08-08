@@ -96,6 +96,8 @@ def main() -> None:
     with FORECAST_SOURCE.open("r", newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             raw_rows += 1
+            if row["event_id"].lstrip().startswith("["):
+                continue
             display_model = row["model_name"].strip()
             organization = provider_for(display_model)
             if not organization:
@@ -107,6 +109,7 @@ def main() -> None:
             model_id = slug(f"{organization}-{model_name}")
             target_id = f"{row['date']}|{row['event_id']}"
             question_text = question_lookup.get((row["date"], row["event_id"]), f"ForecastBench event {row['event_id']}")
+            question_text = question_text.replace("{forecast_due_date}", row["date"]).replace("{resolution_date}", "the resolution date")
             category = {
                 "金融": "Economics & Finance", "冲突与地缘政治": "Conflict & Geopolitics",
                 "政治与地缘政治": "Politics & Geopolitics", "天气与气候": "Climate & Weather",
@@ -148,7 +151,7 @@ def main() -> None:
     payload = {
         "meta": {
             "dataset": "ForecastBench full raw resolved multi-provider panel", "generated": "2026-08-08",
-            "questionSource": str(QUESTION_ROOT), "forecastSource": str(FORECAST_SOURCE), "license": "CC BY-SA 4.0",
+            "questionSource": "ForecastBench datasets/question_sets", "forecastSource": "resolved_only_dataset/period_type_predictions_long.csv", "license": "CC BY-SA 4.0",
             "rawSourceRows": raw_rows, "matchedForecastRows": matched_rows,
             "events": len(events), "models": len(model_rows), "providers": len(providers), "providerNames": providers,
             "rounds": len(dates), "firstRound": dates[0], "lastRound": dates[-1],

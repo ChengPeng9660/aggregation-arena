@@ -140,7 +140,7 @@ Cloudflare Worker 版本：
 
 公开网站导航中的 **Historical Arena** 是独立于 Polymarket 实时榜的历史聚合回测页：
 
-- 数据来自完整 ForecastBench resolved marginal panel 快照：4,541,879 条可用预测记录、13,660 个已结算事件、81 个基础模型、11 家模型提供方、25 个预测轮次。除 OpenAI / Anthropic 外，还包括 Google、Meta、DeepSeek、Mistral、Qwen、Moonshot、xAI、Z.ai 和 Minimax。
+- 数据来自完整 ForecastBench resolved marginal panel 的公开二元事件轨道：1,233,050 条可用预测记录、8,620 个已结算事件、81 个基础模型、11 家模型提供方、25 个预测轮次。除 OpenAI / Anthropic 外，还包括 Google、Meta、DeepSeek、Mistral、Qwen、Moonshot、xAI、Z.ai 和 Minimax。联合信息结构 targets 不混入此公开榜单。
 - 用户可以自由勾选要聚合的基础模型；模型集合和模型数 `K` 都是聚合器输入，选择变化后六种方法、排名和全部图表会立即重算。
 - 默认使用 available-case aggregation：一道题只要至少两个已选模型有预测就进入聚合；不会强制所有模型处于共同覆盖区间。
 - 页面显示 Events、Coverage 与平均实际 `K`，覆盖差异不会被隐藏；需要严格共同样本时可打开 **Complete cases only**。
