@@ -477,10 +477,9 @@ tbody tr.top-row { background: linear-gradient(90deg, rgba(138,97,255,.05), tran
 .methodology-band span { color: var(--gold); font: 8px var(--font-geist-mono), monospace; }
 .methodology-band h3 { margin: 11px 0 6px; font-size: 11px; }
 .methodology-band p { margin: 0; color: var(--quiet); font-size: 9px; line-height: 1.55; }
-.formula-panel { display: grid; grid-template-columns: 150px 1fr 1fr; gap: 25px; align-items: center; margin-top: 34px; padding: 25px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.formula-panel { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 25px; align-items: center; margin-top: 34px; padding: 25px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .formula-panel .eyebrow { margin-bottom: 6px; }
 .formula-panel h2 { margin: 0; font-size: 19px; }
-.formula-panel code { color: var(--gold); font: 16px var(--font-geist-mono), monospace; }
 .formula-panel p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.6; }
 
 .activity-list { border-top: 1px solid var(--line); }
@@ -927,7 +926,6 @@ td { font-size: 12px; }
   .methodology-band div, .methodology-band div + div { padding: 17px 0; border-left: 0; border-top: 1px solid var(--line); }
   .methodology-band div:first-child { border-top: 0; }
   .formula-panel { grid-template-columns: 1fr; }
-  .formula-panel code { font-size: 12px; }
   .activity-list article { grid-template-columns: 12px 1fr; padding: 12px 0; }
   .activity-list time { grid-column: 2; text-align: left; }
   .dialog-backdrop { padding: 0; align-items: end; }
@@ -986,7 +984,15 @@ td { font-size: 12px; }
 .picker-heading { display: flex; justify-content: space-between; align-items: end; gap: 16px; }
 .picker-heading span, .history-controls span, .history-section-title > span, .history-chart-panel header > span { color: var(--gold); font: 9px var(--font-geist-mono), monospace; letter-spacing: .14em; }
 .picker-heading h2 { margin: 6px 0 0; font-size: 21px; letter-spacing: -.035em; }
-.picker-heading strong { color: var(--purple-deep); font: 15px var(--font-geist-mono), monospace; }
+.k-control { display: grid; justify-items: end; gap: 5px; }
+.k-control > span:first-child { color: var(--quiet); font-size: 8px; letter-spacing: .08em; }
+.k-stepper { display: grid; grid-template-columns: 27px 40px 27px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #fff; }
+.k-stepper button, .k-stepper input { min-width: 0; height: 29px; border: 0; background: #fff; color: var(--purple-deep); font: 12px var(--font-geist-mono), monospace; text-align: center; }
+.k-stepper button { cursor: pointer; }
+.k-stepper button:hover:not(:disabled) { background: var(--purple-soft); }
+.k-stepper button:disabled { color: var(--line-strong); cursor: default; }
+.k-stepper input { border-inline: 1px solid var(--line); appearance: textfield; }
+.k-stepper input::-webkit-inner-spin-button, .k-stepper input::-webkit-outer-spin-button { appearance: none; margin: 0; }
 .model-picker > p { margin: 13px 0 16px; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .model-presets { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .model-presets button { min-height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer; color: var(--muted); font-size: 10px; }

@@ -232,7 +232,6 @@ type Dialog =
   | null;
 
 const ACTION_LABELS: Record<string, string> = {
-  "benchmark.seeded": "Demo season initialized",
   "event.created": "Event created",
   "event.resolved": "Event resolved",
   "event.reopened": "Event reopened",
@@ -658,7 +657,7 @@ function LeaderboardView({
         <section className="leaderboard-panel public-ranking-table">
           <div className="table-caption">
             <div><b>Official standings</b><span>Minimum {snapshot.methodology.minimumResolved} resolved event{snapshot.methodology.minimumResolved === 1 ? "" : "s"} to be ranked</span></div>
-            <span className="metric-definition">{snapshot.methodology.displayMetric}</span>
+            <span className="metric-definition">Event Brier · lower is better</span>
           </div>
           <div className="table-scroll">
             <table>
@@ -1016,8 +1015,7 @@ function MethodsView({ snapshot }: { snapshot: Snapshot }) {
       </section>
       <section className="formula-panel">
         <div><span className="eyebrow">PRIMARY SCORE</span><h2>Prophet Event Brier</h2></div>
-        <code>Event Brier = (1 / K) × Σ(pₖ − yₖ)²</code>
-        <p>Squared error is averaged over all K mutually exclusive outcomes, then averaged across events. Lower is better.</p>
+        <p>Squared error is averaged over all M mutually exclusive outcomes, then averaged across events. Here M is the number of outcomes—not the number of selected forecasting models. Lower is better.</p>
       </section>
     </div>
   );

@@ -72,9 +72,18 @@ export function HistoricalArena() {
   if (error) return <section className="history-page"><div className="history-error">{error}</div></section>;
   if (!data || !analysis) return <section className="history-page history-loading"><span />Loading ForecastBench history…</section>;
 
+  const setModelCount = (requestedCount: number) => {
+    const count = Math.min(data.models.length, Math.max(2, Math.round(requestedCount)));
+    setSelected((current) => {
+      const retained = data.models.filter((model) => current.includes(model.id)).slice(0, count).map((model) => model.id);
+      if (retained.length === count) return retained;
+      return [...retained, ...data.models.filter((model) => !retained.includes(model.id)).slice(0, count - retained.length).map((model) => model.id)];
+    });
+  };
   const setPreset = (preset: "diverse" | "top" | "all" | "openai") => {
-    const models = preset === "diverse" ? diverseModels(data.models, 8)
-      : preset === "top" ? data.models.slice(0, 8)
+    const count = Math.max(2, selected.length);
+    const models = preset === "diverse" ? diverseModels(data.models, count)
+      : preset === "top" ? data.models.slice(0, count)
       : preset === "all" ? data.models
       : data.models.filter((model) => model.organization.toLowerCase() === preset);
     setSelected(models.map((model) => model.id));
@@ -101,12 +110,19 @@ export function HistoricalArena() {
         <aside className="model-picker">
           <div className="picker-heading">
             <div><span>INPUT 01</span><h2>Base forecasters</h2></div>
-            <strong>K = {selected.length}</strong>
+            <label className="k-control" aria-label="Number of selected models">
+              <span>MODEL COUNT</span>
+              <span className="k-stepper">
+                <button type="button" onClick={() => setModelCount(selected.length - 1)} disabled={selected.length <= 2} aria-label="Select one fewer model">−</button>
+                <input type="number" min="2" max={data.models.length} value={selected.length} onChange={(event) => setModelCount(Number(event.target.value))} />
+                <button type="button" onClick={() => setModelCount(selected.length + 1)} disabled={selected.length >= data.models.length} aria-label="Select one more model">+</button>
+              </span>
+            </label>
           </div>
-          <p>Select at least two models. Missing forecasts are handled event by event.</p>
+          <p>Choose any K from 2 to {data.models.length}, then change individual models below. Missing forecasts are handled event by event.</p>
           <div className="model-presets">
-            <button onClick={() => setPreset("diverse")}>Diverse 8</button>
-            <button onClick={() => setPreset("top")}>Top coverage</button>
+            <button onClick={() => setPreset("diverse")}>Cross-provider</button>
+            <button onClick={() => setPreset("top")}>Top by coverage</button>
             <button onClick={() => setPreset("openai")}>OpenAI</button>
             <button onClick={() => setPreset("all")}>All</button>
           </div>
@@ -141,7 +157,7 @@ export function HistoricalArena() {
                     <tr className={index === 0 ? "history-winner" : ""} onClick={() => setExpanded(expanded === row.id ? null : row.id)}>
                       <td><span className={`history-rank rank-${index + 1}`}>{index + 1}</span></td>
                       <td><span className="history-method"><i style={{ background: row.color }} /><b>{row.name}</b></span></td>
-                      <td className="history-score">{(row.score * 100).toFixed(2)}</td><td>{row.brier.toFixed(4)}</td><td>{row.ece.toFixed(4)}</td><td>{row.events.toLocaleString()}</td><td>{row.coverage.toFixed(1)}%</td><td>{row.avgK.toFixed(1)}</td>
+                      <td className="history-score">{row.score.toFixed(4)}</td><td>{row.brier.toFixed(4)}</td><td>{row.ece.toFixed(4)}</td><td>{row.events.toLocaleString()}</td><td>{row.coverage.toFixed(1)}%</td><td>{row.avgK.toFixed(1)}</td>
                     </tr>
                     {expanded === row.id && <tr className="history-detail"><td colSpan={8}>{METHODS.find((method) => method.id === row.id)?.rule}</td></tr>}
                   </Fragment>
@@ -152,10 +168,10 @@ export function HistoricalArena() {
 
           <div className="history-chart-grid">
             <ChartPanel number="OUTPUT 02" title="Cumulative performance" subtitle="1 − Brier after each ForecastBench round">
-              <LineChart series={analysis.cumulative} yFormat={(value) => `${(value * 100).toFixed(0)}`} />
+              <LineChart series={analysis.cumulative} yFormat={(value) => value.toFixed(3)} />
             </ChartPanel>
             <ChartPanel number="OUTPUT 03" title="Performance vs model count" subtitle="How each method behaves at the event-level available K">
-              <LineChart series={analysis.byK} xFormat={(value) => `K${value}`} yFormat={(value) => `${(value * 100).toFixed(0)}`} />
+              <LineChart series={analysis.byK} xFormat={(value) => `K${Math.round(value)}`} yFormat={(value) => value.toFixed(3)} />
             </ChartPanel>
             <ChartPanel number="OUTPUT 04" title="Rank history" subtitle="Cumulative rank as resolved rounds are added">
               <LineChart series={analysis.rankHistory} yReverse yFormat={(value) => `#${Math.round(value)}`} />
@@ -289,7 +305,8 @@ function diverseModels(models: HistoricalModel[], count: number) {
     seen.add(model.organization);
     return true;
   });
-  return diverse.slice(0, count);
+  const selected = diverse.slice(0, count);
+  return [...selected, ...models.filter((model) => !selected.some((item) => item.id === model.id)).slice(0, count - selected.length)];
 }
 
 function ece(rows: ScoredEvent[], method: MethodId) {

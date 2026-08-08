@@ -69,14 +69,6 @@ export const AGGREGATE_METHODS: AggregateDefinition[] = [
   },
 ];
 
-const DEFAULT_PARTICIPANTS = [
-  ["model-a", "Model A", "Frontier Lab", "#8a61ff"],
-  ["model-b", "Model B", "Frontier Lab", "#4f7cff"],
-  ["model-c", "Model C", "Independent", "#29b7a6"],
-  ["model-d", "Model D", "Open Model", "#efab02"],
-  ["crowd-median", "Crowd Median", "Human Baseline", "#f06f56"],
-] as const;
-
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS participants (
     id TEXT PRIMARY KEY,
@@ -179,19 +171,18 @@ export async function ensureArenaReady() {
     await db.batch(SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)));
     schemaReady = true;
   }
-  await seedDemoIfEmpty();
 }
 
 export async function getArenaSnapshot(filters: ArenaFilters = {}) {
   await ensureArenaReady();
   const db = getD1();
   const [eventRows, participantRows, predictionRows, predictionOutcomeRows, eventOutcomeRows, auditRows, curation] = await Promise.all([
-    db.prepare("SELECT * FROM events ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC").all(),
+    db.prepare("SELECT * FROM events WHERE id NOT LIKE 'demo-%' AND season <> 'Demo Season' ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC").all(),
     db.prepare("SELECT * FROM participants WHERE status = 'active' ORDER BY created_at, name").all(),
-    db.prepare("SELECT * FROM predictions ORDER BY event_id, CASE kind WHEN 'aggregate' THEN 1 ELSE 0 END, participant_name").all(),
-    db.prepare("SELECT * FROM prediction_outcomes ORDER BY event_id, participant_id, outcome_key").all(),
-    db.prepare("SELECT * FROM event_outcomes ORDER BY event_id, display_order").all(),
-    db.prepare("SELECT * FROM audit_log ORDER BY id DESC LIMIT 18").all(),
+    db.prepare("SELECT * FROM predictions WHERE event_id NOT LIKE 'demo-%' ORDER BY event_id, CASE kind WHEN 'aggregate' THEN 1 ELSE 0 END, participant_name").all(),
+    db.prepare("SELECT * FROM prediction_outcomes WHERE event_id NOT LIKE 'demo-%' ORDER BY event_id, participant_id, outcome_key").all(),
+    db.prepare("SELECT * FROM event_outcomes WHERE event_id NOT LIKE 'demo-%' ORDER BY event_id, display_order").all(),
+    db.prepare("SELECT * FROM audit_log WHERE action <> 'benchmark.seeded' ORDER BY id DESC LIMIT 18").all(),
     getCurationSnapshot(db),
   ]);
 
@@ -308,7 +299,7 @@ export async function getArenaSnapshot(filters: ArenaFilters = {}) {
     })),
     methodology: {
       primaryMetric: "Prophet Event Brier Score",
-      displayMetric: "Event Brier = (1 / K) × Σ(pₖ − yₖ)² · lower is better",
+      displayMetric: "Event Brier over mutually exclusive outcomes · lower is better",
       minimumResolved: 5,
       coverageRule: "participant forecasts / eligible resolved events",
       weightingRule: "performance weights use resolved history available before the open event is locked",
@@ -881,66 +872,6 @@ async function writeAudit(
     INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `).bind(action, entityType, entityId, JSON.stringify(detail), actor, new Date().toISOString()).run();
-}
-
-async function seedDemoIfEmpty() {
-  const db = getD1();
-  const count = await db.prepare("SELECT COUNT(*) AS count FROM events").first<{ count: number }>();
-  if (Number(count?.count || 0) > 0) return;
-  const now = Date.now();
-  for (const [id, name, organization, color] of DEFAULT_PARTICIPANTS) {
-    await db.prepare(`
-      INSERT OR IGNORE INTO participants (id, name, organization, color, status, created_at)
-      VALUES (?, ?, ?, ?, 'active', ?)
-    `).bind(id, name, organization, color, new Date(now - 80 * 86400000).toISOString()).run();
-  }
-  const demo = [
-    ["Will the monthly inflation print exceed consensus?", "Economics", 1, [0.62, 0.55, 0.71, 0.48, 0.58]],
-    ["Will the central bank hold its policy rate?", "Economics", 1, [0.76, 0.68, 0.81, 0.64, 0.72]],
-    ["Will the incumbent coalition retain a majority?", "Politics", 0, [0.44, 0.39, 0.51, 0.47, 0.42]],
-    ["Will the benchmark index close the week higher?", "Economics", 1, [0.57, 0.63, 0.54, 0.69, 0.59]],
-    ["Will the launch occur before the stated deadline?", "Science", 0, [0.73, 0.61, 0.67, 0.58, 0.64]],
-    ["Will the home team win the series?", "Sports", 1, [0.66, 0.59, 0.74, 0.71, 0.68]],
-    ["Will the quarterly revenue beat guidance?", "Economics", 1, [0.69, 0.77, 0.65, 0.72, 0.70]],
-    ["Will the proposed regulation pass this session?", "Politics", 0, [0.36, 0.43, 0.31, 0.49, 0.39]],
-    ["Will the next inflation release fall below 3%?", "Economics", null, [0.48, 0.56, 0.51, 0.44, 0.52]],
-    ["Will the AI safety bill advance to a final vote?", "Politics", null, [0.61, 0.53, 0.66, 0.57, 0.59]],
-  ] as const;
-  for (let index = 0; index < demo.length; index += 1) {
-    const [title, category, resolution, values] = demo[index];
-    const id = `demo-${String(index + 1).padStart(2, "0")}`;
-    const createdAt = new Date(now - (70 - index * 6) * 86400000).toISOString();
-    const closeTime = new Date(now + (resolution === null ? 21 + index : -60 + index * 7) * 86400000).toISOString();
-    await db.prepare(`
-      INSERT OR IGNORE INTO events (
-        id, title, description, category, season, close_time, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'Demo Season', ?, 'open', ?, ?)
-    `).bind(id, title, "Seeded example event. Replace or extend it with your own benchmark questions.", category, closeTime, createdAt, createdAt).run();
-    for (let participantIndex = 0; participantIndex < DEFAULT_PARTICIPANTS.length; participantIndex += 1) {
-      const [participantId, participantName] = DEFAULT_PARTICIPANTS[participantIndex];
-      await upsertPrediction(
-        id,
-        {
-          participantId,
-          participantName,
-          probability: values[participantIndex],
-          rationale: null,
-        },
-        "forecaster",
-        "demo-v1",
-        null,
-      );
-    }
-    await syncAggregates(id);
-    if (resolution !== null) {
-      const resolvedAt = new Date(now - (58 - index * 7) * 86400000).toISOString();
-      await db.prepare(`
-        UPDATE events SET status = 'resolved', resolution = ?, resolution_note = 'Seeded demo resolution',
-          resolved_at = ?, updated_at = ? WHERE id = ?
-      `).bind(resolution, resolvedAt, resolvedAt, id).run();
-    }
-  }
-  await writeAudit("benchmark.seeded", "benchmark", "demo-season", { events: demo.length }, "system");
 }
 
 function brier(probability: number, resolution: number) {

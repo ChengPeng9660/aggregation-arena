@@ -4,6 +4,8 @@ import test from "node:test";
 
 const datasetPath = new URL("../public/forecastbench/history.json", import.meta.url);
 const dataset = JSON.parse(await readFile(datasetPath, "utf8"));
+const historicalSource = await readFile(new URL("../app/historical-arena.tsx", import.meta.url), "utf8");
+const arenaSource = await readFile(new URL("../lib/arena.ts", import.meta.url), "utf8");
 
 test("historical arena publishes a multi-provider resolved binary panel", () => {
   assert.equal(dataset.events.length, dataset.meta.events);
@@ -49,4 +51,20 @@ test("default diverse model selection has a usable available-case sample", () =>
   const eligible = availableCounts.filter((count) => count >= 2);
   assert.ok(eligible.length >= 5_000);
   assert.ok(eligible.every((count) => count >= 2 && count <= selected.length));
+});
+
+test("historical leaderboard keeps 1 minus Brier on its documented zero-to-one scale", () => {
+  assert.match(historicalSource, /row\.score\.toFixed\(4\)/);
+  assert.doesNotMatch(historicalSource, /row\.score\s*\*\s*100/);
+});
+
+test("historical model count is user-adjustable across the published model panel", () => {
+  assert.match(historicalSource, /className="k-stepper"/);
+  assert.match(historicalSource, /min="2" max=\{data\.models\.length\}/);
+  assert.match(historicalSource, /setModelCount/);
+});
+
+test("production arena cannot seed or display synthetic demo events", () => {
+  assert.doesNotMatch(arenaSource, /seedDemoIfEmpty|Demo Season initialized|Seeded example event/);
+  assert.match(arenaSource, /id NOT LIKE 'demo-%'/);
 });
