@@ -14,12 +14,14 @@ from __future__ import annotations
 import csv
 import json
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
+from datetime import date
 from pathlib import Path
 
 
 ROOT = Path("/Users/pcc/Desktop/forecast dependence/forecastbench_downloads_2026-04-15")
 FORECAST_SOURCE = ROOT / "output/resolved_only_dataset/period_type_predictions_long.csv"
+EVENT_SOURCE = ROOT / "output/resolved_only_dataset/resolved_events_classified.csv"
 QUESTION_ROOT = Path("/Users/pcc/Desktop/forecast dependence/forecastbench_downloads_2026-06-25/repo/forecastbench-datasets/datasets/question_sets")
 OUTPUT = Path(__file__).resolve().parents[1] / "public/forecastbench/history.json"
 
@@ -28,6 +30,14 @@ ALLOWED_PROVIDERS = {
     "Mistral AI", "Qwen", "Moonshot", "xAI", "Z.ai", "Minimax",
 }
 MIN_MODEL_EVENTS = 250
+DATASET_SOURCES = {"acled", "dbnomics", "fred", "wikipedia", "yfinance"}
+MARKET_SOURCES = {"infer", "manifold", "metaculus", "polymarket"}
+SOURCE_LABELS = {
+    "acled": "ACLED", "dbnomics": "DBnomics", "fred": "FRED",
+    "wikipedia": "Wikipedia", "yfinance": "Yahoo Finance",
+    "infer": "INFER", "manifold": "Manifold", "metaculus": "Metaculus",
+    "polymarket": "Polymarket",
+}
 
 def slug(value: str) -> str:
     return re.sub(r"-+", "-", "".join(ch.lower() if ch.isalnum() else "-" for ch in value)).strip("-")
@@ -40,37 +50,44 @@ def base_model(organization: str, display_model: str) -> tuple[str, str]:
     return organization, model
 
 
-def category_for(source: str, question: str) -> str:
-    text = question.lower()
-    if source in {"yfinance", "fred", "dbnomics"} or any(word in text for word in ("stock price", "inflation", "gdp", "interest rate", "unemployment", "recession")):
-        return "Economics & Finance"
-    if source == "acled" or any(word in text for word in ("war", "ceasefire", "military", "conflict", "sanction", "invasion")):
-        return "Conflict & Geopolitics"
-    if any(word in text for word in ("election", "president", "parliament", "prime minister", "government", "congress")):
-        return "Politics & Geopolitics"
-    if any(word in text for word in ("temperature", "rainfall", "hurricane", "climate", "weather", "wildfire")):
-        return "Climate & Weather"
-    if any(word in text for word in ("championship", "tournament", "league", "world cup", "nba", "nfl", "mlb", "goal", "match")):
-        return "Sports"
-    if any(word in text for word in ("ai model", "artificial intelligence", "spacex", "launch", "technology", "openai")):
-        return "AI & Technology"
-    if any(word in text for word in ("disease", "vaccine", "health", "virus", "cancer", "fda", "clinical trial")):
-        return "Health & Science"
-    if any(word in text for word in ("film", "movie", "album", "award", "oscar", "grammy", "celebrity")):
-        return "Entertainment & Culture"
-    return "Other"
+def question_type(source: str) -> str:
+    if source in DATASET_SOURCES:
+        return "Dataset"
+    if source in MARKET_SOURCES:
+        return "Market"
+    raise ValueError(f"Unknown official ForecastBench source: {source}")
 
 
-def load_questions() -> dict[tuple[str, str], str]:
-    lookup: dict[tuple[str, str], str] = {}
+def load_questions() -> dict[tuple[str, str, str], str]:
+    """Index official questions by date + source + id.
+
+    ForecastBench documents IDs as unique only within source. Including source
+    prevents collisions such as Metaculus 1585 and INFER 1585 in the same round.
+    """
+    lookup: dict[tuple[str, str, str], str] = {}
     for path in sorted(QUESTION_ROOT.glob("*-llm.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
         for question in payload["questions"]:
             if isinstance(question.get("id"), list):
                 for component in question.get("combination_of") or []:
-                    lookup[(payload["forecast_due_date"], str(component.get("id")))] = str(component.get("question") or "").strip()
+                    source = str(component.get("source") or question.get("source") or "").strip().lower()
+                    lookup[(payload["forecast_due_date"], source, str(component.get("id")))] = str(component.get("question") or "").strip()
             else:
-                lookup[(payload["forecast_due_date"], str(question.get("id")))] = str(question.get("question") or "").strip()
+                source = str(question.get("source") or "").strip().lower()
+                lookup[(payload["forecast_due_date"], source, str(question.get("id")))] = str(question.get("question") or "").strip()
+    return lookup
+
+
+def load_event_sources() -> dict[tuple[str, str, str, str, str], tuple[str, str]]:
+    """Restore the official source omitted from the long prediction export."""
+    lookup: dict[tuple[str, str, str, str, str], tuple[str, str]] = {}
+    with EVENT_SOURCE.open("r", newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            key = (row["date"], row["event_id"], row["event_type_main"], row["event_type_sub"], row["outcome"])
+            value = (row["source"].strip().lower(), row["question_text"].strip())
+            if key in lookup and lookup[key] != value:
+                raise ValueError(f"Ambiguous event provenance for {key}")
+            lookup[key] = value
     return lookup
 
 
@@ -88,6 +105,7 @@ def provider_for(model: str) -> str | None:
 
 def main() -> None:
     question_lookup = load_questions()
+    event_lookup = load_event_sources()
     targets: dict[str, dict] = {}
     values: dict[tuple[str, str], list[float | int]] = defaultdict(lambda: [0.0, 0])
     model_info: dict[str, dict] = {}
@@ -107,19 +125,23 @@ def main() -> None:
                 continue
             organization, model_name = base_model(organization, display_model)
             model_id = slug(f"{organization}-{model_name}")
-            target_id = f"{row['date']}|{row['event_id']}"
-            question_text = question_lookup.get((row["date"], row["event_id"]), f"ForecastBench event {row['event_id']}")
+            event_key = (row["date"], row["event_id"], row["event_type_main"], row["event_type_sub"], row["outcome"])
+            if event_key not in event_lookup:
+                raise ValueError(f"Prediction row has no event provenance: {event_key}")
+            official_source, classified_question = event_lookup[event_key]
+            official_key = (row["date"], official_source, row["event_id"])
+            if official_key not in question_lookup:
+                raise ValueError(f"Event has no official ForecastBench question: {official_key}")
+            question_text = question_lookup[official_key]
+            if classified_question != question_text:
+                raise ValueError(f"Official question text mismatch: {official_key}")
             question_text = question_text.replace("{forecast_due_date}", row["date"]).replace("{resolution_date}", "the resolution date")
-            category = {
-                "金融": "Economics & Finance", "冲突与地缘政治": "Conflict & Geopolitics",
-                "政治与地缘政治": "Politics & Geopolitics", "天气与气候": "Climate & Weather",
-                "医疗与生物": "Health & Biology", "医疗与科学": "Health & Science",
-                "体育": "Sports", "AI与科技": "AI & Technology", "娱乐与文化": "Entertainment & Culture",
-                "其他": "Other",
-            }.get(row["event_type_main"], row["event_type_main"] or "Other")
+            target_id = f"{row['date']}|{official_source}|{row['event_id']}"
+            type_name = question_type(official_source)
             targets.setdefault(target_id, {
-                "id": target_id, "date": row["date"], "source": "ForecastBench",
-                "category": category, "question": question_text,
+                "id": target_id, "date": row["date"], "source": SOURCE_LABELS[official_source],
+                "sourceKey": official_source, "questionType": type_name, "category": type_name,
+                "question": question_text,
                 "outcome": int(float(row["outcome"])), "forecasts": {},
             })
             accumulator = values[(target_id, model_id)]
@@ -148,14 +170,19 @@ def main() -> None:
     model_rows.sort(key=lambda model: (-model["n"], model["organization"], model["name"]))
     dates = sorted({event["date"] for event in events})
     providers = sorted({model["organization"] for model in model_rows})
+    source_counts = dict(sorted(Counter(event["source"] for event in events).items()))
+    type_counts = dict(sorted(Counter(event["questionType"] for event in events).items()))
     payload = {
         "meta": {
-            "dataset": "ForecastBench full raw resolved multi-provider panel", "generated": "2026-08-08",
+            "dataset": "ForecastBench full raw resolved multi-provider panel", "generated": date.today().isoformat(),
             "questionSource": "ForecastBench datasets/question_sets", "forecastSource": "resolved_only_dataset/period_type_predictions_long.csv", "license": "CC BY-SA 4.0",
             "rawSourceRows": raw_rows, "matchedForecastRows": matched_rows,
             "events": len(events), "models": len(model_rows), "providers": len(providers), "providerNames": providers,
+            "questionTypes": type_counts, "sourceCounts": source_counts,
             "rounds": len(dates), "firstRound": dates[0], "lastRound": dates[-1],
             "rule": "Available-case aggregation; prompt variants averaged within each provider base model.",
+            "joinKey": "forecast_due_date + official source + event_id",
+            "officialQuestionMatches": len(events), "missingOfficialQuestions": 0,
         },
         "models": model_rows,
         "events": events,

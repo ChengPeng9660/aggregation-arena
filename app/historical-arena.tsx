@@ -7,13 +7,15 @@ type HistoricalEvent = {
   id: string;
   date: string;
   source: string;
-  category: string;
+  sourceKey: string;
+  questionType: "Dataset" | "Market";
+  category: "Dataset" | "Market";
   question: string;
   outcome: 0 | 1;
   forecasts: Record<string, number>;
 };
 type HistoricalData = {
-  meta: { dataset: string; generated: string; rawSourceRows: number; matchedForecastRows: number; events: number; models: number; providers: number; providerNames: string[]; rounds: number; firstRound: string; lastRound: string; rule: string };
+  meta: { dataset: string; generated: string; rawSourceRows: number; matchedForecastRows: number; events: number; models: number; providers: number; providerNames: string[]; questionTypes: Record<"Dataset" | "Market", number>; sourceCounts: Record<string, number>; rounds: number; firstRound: string; lastRound: string; rule: string; joinKey: string; officialQuestionMatches: number; missingOfficialQuestions: number };
   models: HistoricalModel[];
   events: HistoricalEvent[];
 };
@@ -27,6 +29,8 @@ const METHODS = [
   { id: "weighted", name: "Past-performance Pool", short: "Weighted", color: "#9A5A2F", rule: "Inverse-Brier weights learned only from earlier forecast rounds." },
 ] as const;
 
+const HISTORY_DATA_VERSION = "2026-08-09-source-aware";
+
 type MethodId = (typeof METHODS)[number]["id"];
 type ScoredEvent = { event: HistoricalEvent; k: number; values: Record<MethodId, number> };
 type RankingRow = { id: MethodId; name: string; color: string; brier: number; score: number; ece: number; events: number; coverage: number; avgK: number };
@@ -37,12 +41,13 @@ export function HistoricalArena() {
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [completeCases, setCompleteCases] = useState(false);
-  const [category, setCategory] = useState("all");
+  const [questionType, setQuestionType] = useState("all");
+  const [source, setSource] = useState("all");
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<MethodId | null>(null);
 
   useEffect(() => {
-    fetch("/forecastbench/history.json")
+    fetch(`/forecastbench/history.json?v=${HISTORY_DATA_VERSION}`, { cache: "no-store" })
       .then((response) => {
         if (!response.ok) throw new Error("Historical dataset could not be loaded.");
         return response.json() as Promise<HistoricalData>;
@@ -64,8 +69,12 @@ export function HistoricalArena() {
     window.history.replaceState({}, "", url);
   }, [selected]);
 
-  const categories = useMemo(() => data ? Array.from(new Set(data.events.map((event) => event.category))).sort() : [], [data]);
-  const filteredEvents = useMemo(() => data?.events.filter((event) => category === "all" || event.category === category) ?? [], [data, category]);
+  const sources = useMemo(() => data ? Array.from(new Set(data.events
+    .filter((event) => questionType === "all" || event.questionType === questionType)
+    .map((event) => event.source))).sort() : [], [data, questionType]);
+  const filteredEvents = useMemo(() => data?.events.filter((event) =>
+    (questionType === "all" || event.questionType === questionType) && (source === "all" || event.source === source)
+  ) ?? [], [data, questionType, source]);
   const analysis = useMemo(() => data ? analyze(filteredEvents, selected, completeCases) : null, [data, filteredEvents, selected, completeCases]);
   const visibleModels = useMemo(() => data?.models.filter((model) => `${model.organization} ${model.name}`.toLowerCase().includes(search.toLowerCase())) ?? [], [data, search]);
 
@@ -101,7 +110,7 @@ export function HistoricalArena() {
         <dl className="history-meta">
           <div><dt>Resolved events</dt><dd>{data.meta.events.toLocaleString()}</dd></div>
           <div><dt>Models / providers</dt><dd>{data.meta.models} / {data.meta.providers}</dd></div>
-          <div><dt>Forecast rounds</dt><dd>{data.meta.rounds}</dd></div>
+          <div><dt>Dataset / market</dt><dd>{data.meta.questionTypes.Dataset.toLocaleString()} / {data.meta.questionTypes.Market.toLocaleString()}</dd></div>
           <div><dt>Coverage</dt><dd>{data.meta.firstRound.slice(0, 7)} — {data.meta.lastRound.slice(0, 7)}</dd></div>
         </dl>
       </header>
@@ -144,7 +153,10 @@ export function HistoricalArena() {
         <main className="history-results">
           <div className="history-controls">
             <div><span>INPUT 02</span><b>{selected.length < 2 ? "Select at least two forecasters" : `${analysis.eligible.toLocaleString()} events can be aggregated`}</b></div>
-            <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option value="all">All categories</option>{categories.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <div className="history-filter-row">
+              <label>Question type<select value={questionType} onChange={(event) => { setQuestionType(event.target.value); setSource("all"); }}><option value="all">Dataset + market</option><option>Dataset</option><option>Market</option></select></label>
+              <label>Official source<select key={questionType} value={source} onChange={(event) => setSource(event.target.value)}><option value="all">All sources</option>{sources.map((item) => <option key={item}>{item}</option>)}</select></label>
+            </div>
           </div>
 
           <section className="history-ranking" aria-label="Historical aggregation leaderboard">
@@ -185,7 +197,7 @@ export function HistoricalArena() {
             <div className="history-section-title"><span>EVENT AUDIT</span><div><h2>What entered the score</h2><p>Recent resolved examples make the model-to-aggregation path inspectable.</p></div></div>
             <div className="history-event-list">{representativeAudit(analysis.scored).map((item) => (
               <article key={item.event.id}>
-                <div><span>{item.event.category}</span><time>{item.event.date}</time></div>
+                <div><span>{item.event.questionType} · {item.event.source}</span><time>{item.event.date}</time></div>
                 <h3>{item.event.question}</h3>
                 <footer><b>Outcome {item.event.outcome === 1 ? "YES" : "NO"}</b><span>{item.k} of {selected.length} selected models available</span><span>Mean {Math.round(item.values.mean * 100)}%</span></footer>
               </article>
@@ -194,7 +206,7 @@ export function HistoricalArena() {
 
           <footer className="history-provenance">
             <div><b>Evaluation rule</b><p>Available-case aggregation is the default. An event is scored when at least two selected models forecast it. Complete-case mode is optional.</p></div>
-            <div><b>Data provenance</b><p>{data.meta.matchedForecastRows.toLocaleString()} resolved marginal prediction rows · {data.meta.providers} model providers · CC BY-SA 4.0 · snapshot generated {data.meta.generated}.</p></div>
+            <div><b>Data provenance</b><p>{data.meta.officialQuestionMatches.toLocaleString()} / {data.meta.events.toLocaleString()} events matched to official ForecastBench questions by date + source + ID · {data.meta.matchedForecastRows.toLocaleString()} resolved marginal prediction rows · snapshot generated {data.meta.generated}.</p></div>
           </footer>
         </main>
       </div>
@@ -294,7 +306,7 @@ function calibrationBins(rows: ScoredEvent[], method: MethodId) {
 
 function representativeAudit(rows: ScoredEvent[]) {
   const latestByCategory = new Map<string, ScoredEvent>();
-  for (const row of rows) latestByCategory.set(row.event.category, row);
+  for (const row of rows) latestByCategory.set(row.event.source, row);
   return Array.from(latestByCategory.values()).sort((a, b) => b.event.date.localeCompare(a.event.date)).slice(0, 8);
 }
 

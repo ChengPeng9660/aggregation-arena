@@ -145,6 +145,8 @@ Cloudflare Worker 版本：
 - 默认使用 available-case aggregation：一道题只要至少两个已选模型有预测就进入聚合；不会强制所有模型处于共同覆盖区间。
 - 页面显示 Events、Coverage 与平均实际 `K`，覆盖差异不会被隐藏；需要严格共同样本时可打开 **Complete cases only**。
 - Past-performance Pool 的权重只使用更早预测轮次的历史 Brier，避免用当前题目的结果训练当前题目。
+- 分类严格沿用 ForecastBench 官方结构：先分为 **Dataset questions** 与 **Market questions**，再按 question set 的官方 `source` 筛选（ACLED、DBnomics、FRED、Wikipedia、Yahoo Finance、Manifold、Metaculus、Polymarket、INFER）。页面不再把本地规则生成的 topic 标签呈现为 ForecastBench 官方分类。
+- 每个事件使用 `forecast_due_date + official source + event_id` 连接 question set、resolution 与预测。`event_id` 只在同一 source 内唯一，因此 source 不能从连接键中省略。
 - 提供累计表现、表现随 `K` 变化、历史排名与校准曲线，以及实际进入评分的事件审计列表。
 - 当前快照生成脚本为 `scripts/build_forecastbench_history.py`，浏览器数据为 `public/forecastbench/history.json`。重新生成需要本机对应 ForecastBench 研究数据路径。
 

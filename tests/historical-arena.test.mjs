@@ -18,12 +18,34 @@ test("historical arena publishes a multi-provider resolved binary panel", () => 
 
 test("historical public track excludes composite and unfinished event text", () => {
   for (const event of dataset.events) {
-    const eventIdentity = event.id.split("|", 2)[1] ?? "";
+    const [forecastDueDate, sourceKey, eventIdentity] = event.id.split("|", 3);
+    assert.equal(forecastDueDate, event.date);
+    assert.equal(sourceKey, event.sourceKey);
     assert.equal(eventIdentity.trimStart().startsWith("["), false);
     assert.equal(event.question.startsWith("ForecastBench event "), false);
     assert.equal(/[{}]/.test(event.question), false);
     assert.ok(event.outcome === 0 || event.outcome === 1);
   }
+});
+
+test("historical classifications reproduce ForecastBench question type and official source", () => {
+  const datasetSources = new Set(["acled", "dbnomics", "fred", "wikipedia", "yfinance"]);
+  const marketSources = new Set(["infer", "manifold", "metaculus", "polymarket"]);
+  const observedTypes = { Dataset: 0, Market: 0 };
+  const observedSources = new Map();
+  for (const event of dataset.events) {
+    const expectedType = datasetSources.has(event.sourceKey) ? "Dataset" : marketSources.has(event.sourceKey) ? "Market" : null;
+    assert.ok(expectedType, `unknown official source ${event.sourceKey}`);
+    assert.equal(event.questionType, expectedType);
+    assert.equal(event.category, expectedType);
+    observedTypes[expectedType] += 1;
+    observedSources.set(event.source, (observedSources.get(event.source) ?? 0) + 1);
+  }
+  assert.deepEqual(observedTypes, dataset.meta.questionTypes);
+  assert.deepEqual(Object.fromEntries([...observedSources].sort()), dataset.meta.sourceCounts);
+  assert.equal(dataset.meta.officialQuestionMatches, dataset.events.length);
+  assert.equal(dataset.meta.missingOfficialQuestions, 0);
+  assert.equal(dataset.meta.joinKey, "forecast_due_date + official source + event_id");
 });
 
 test("every historical probability is valid and references a published model", () => {

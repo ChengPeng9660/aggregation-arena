@@ -1014,6 +1014,7 @@ td { font-size: 12px; }
 .history-controls div b { display: block; margin-top: 6px; font-size: 13px; }
 .history-controls label { color: var(--quiet); font: 9px var(--font-geist-mono), monospace; letter-spacing: .08em; text-transform: uppercase; }
 .history-controls select { display: block; min-width: 190px; margin-top: 6px; padding: 8px 28px 8px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: #fff; font: 11px var(--font-geist-sans), sans-serif; text-transform: none; }
+.history-filter-row { display: flex; gap: 10px; }
 .history-section-title { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 18px; align-items: start; margin-bottom: 18px; }
 .history-section-title h2 { margin: -5px 0 0; font-size: 28px; letter-spacing: -.045em; }
 .history-section-title p { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
@@ -1077,6 +1078,7 @@ td { font-size: 12px; }
   .model-picker { position: relative; top: auto; max-height: none; padding: 0 0 25px; border-right: 0; border-bottom: 1px solid var(--line-strong); }
   .model-options { max-height: 260px; }
   .history-controls { align-items: stretch; flex-direction: column; }
+  .history-filter-row { flex-direction: column; }
   .history-controls select { width: 100%; }
   .history-section-title { grid-template-columns: 1fr; gap: 8px; }
   .history-section-title h2 { margin-top: 0; }
