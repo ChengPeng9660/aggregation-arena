@@ -120,10 +120,11 @@ export function HistoricalArena() {
       </dl>
 
       <div className="history-workbench">
-        <aside className="model-picker">
+        <main className="history-results">
+        <section className="model-picker" aria-labelledby="base-forecasters-title">
           <div className="picker-heading">
             <span>INPUT 01</span>
-            <h2>Base forecasters</h2>
+            <h2 id="base-forecasters-title">Base forecasters</h2>
           </div>
           <p>Choose any K from 2 to {data.models.length}. An event enters the leaderboard only when every selected model forecast it.</p>
           <div className="picker-count-control" aria-label="Number of selected models">
@@ -152,9 +153,8 @@ export function HistoricalArena() {
               </label>
             ))}
           </div>
-        </aside>
+        </section>
 
-        <main className="history-results">
           <div className="history-controls">
             <div><span>INPUT 02</span><b>{selected.length < 2 ? "Select at least two forecasters" : `${analysis.eligible.toLocaleString()} events in the complete intersection`}</b></div>
             <div className="history-filter-row">

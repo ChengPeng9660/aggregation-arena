@@ -100,6 +100,9 @@ test("historical leaderboard keeps 1 minus Brier on its documented zero-to-one s
 });
 
 test("historical model count is user-adjustable across the published model panel", () => {
+  const resultsStart = historicalSource.indexOf('<main className="history-results">');
+  const inputOneStart = historicalSource.indexOf('<section className="model-picker"');
+  const inputTwoStart = historicalSource.indexOf('<div className="history-controls">');
   assert.match(historicalSource, /className="k-stepper"/);
   assert.match(historicalSource, /min="2" max=\{data\.models\.length\}/);
   assert.match(historicalSource, /setModelCount/);
@@ -107,6 +110,8 @@ test("historical model count is user-adjustable across the published model panel
   assert.match(historicalSource, /className="model-preset-block"/);
   assert.match(historicalSource, />Quick select<\/span>/);
   assert.doesNotMatch(historicalSource, /className="k-control"/);
+  assert.doesNotMatch(historicalSource, /<aside className="model-picker">/);
+  assert.ok(resultsStart >= 0 && resultsStart < inputOneStart && inputOneStart < inputTwoStart);
 });
 
 test("production arena cannot seed or display synthetic demo events", () => {
