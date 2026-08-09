@@ -92,10 +92,14 @@ test("production arena cannot seed or display synthetic demo events", () => {
   assert.match(arenaSource, /id NOT LIKE 'demo-%'/);
 });
 
-test("public leaderboard presents aggregation methods without redundant controls or metadata", () => {
+test("public leaderboard keeps compact method and individual model standings", () => {
   assert.doesNotMatch(publicArenaSource, /public-hero-signal|LIVE SCORE|Method \/ Forecaster/);
-  assert.doesNotMatch(publicArenaSource, /onSeason|Individual models|const \[season, setSeason\] = useState\("all"\)/);
+  assert.doesNotMatch(publicArenaSource, /onSeason|const \[season, setSeason\] = useState\("all"\)|View a live event/);
   assert.doesNotMatch(publicArenaSource, /row\.organization|row\.version/);
-  assert.match(publicArenaSource, /<th>Method<\/th>/);
-  assert.match(publicArenaSource, /track: "aggregators"/);
+  assert.match(publicArenaSource, /Forecast Aggregation<\/span><small>Leaderboard/);
+  assert.match(publicArenaSource, /Submit your aggregation method/);
+  assert.match(publicArenaSource, /Aggregation Methods/);
+  assert.match(publicArenaSource, /Individual Models/);
+  assert.match(publicArenaSource, /track: leaderboardTrack/);
+  assert.match(publicArenaSource, /onTrack\("forecasters"\)/);
 });
