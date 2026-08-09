@@ -5,6 +5,7 @@ import test from "node:test";
 const datasetPath = new URL("../public/forecastbench/history.json", import.meta.url);
 const dataset = JSON.parse(await readFile(datasetPath, "utf8"));
 const historicalSource = await readFile(new URL("../app/historical-arena.tsx", import.meta.url), "utf8");
+const publicArenaSource = await readFile(new URL("../app/arena-client.tsx", import.meta.url), "utf8");
 const arenaSource = await readFile(new URL("../lib/arena.ts", import.meta.url), "utf8");
 
 test("historical arena publishes a multi-provider resolved binary panel", () => {
@@ -89,4 +90,12 @@ test("historical model count is user-adjustable across the published model panel
 test("production arena cannot seed or display synthetic demo events", () => {
   assert.doesNotMatch(arenaSource, /seedDemoIfEmpty|Demo Season initialized|Seeded example event/);
   assert.match(arenaSource, /id NOT LIKE 'demo-%'/);
+});
+
+test("public leaderboard presents aggregation methods without redundant controls or metadata", () => {
+  assert.doesNotMatch(publicArenaSource, /public-hero-signal|LIVE SCORE|Method \/ Forecaster/);
+  assert.doesNotMatch(publicArenaSource, /onSeason|Individual models|const \[season, setSeason\] = useState\("all"\)/);
+  assert.doesNotMatch(publicArenaSource, /row\.organization|row\.version/);
+  assert.match(publicArenaSource, /<th>Method<\/th>/);
+  assert.match(publicArenaSource, /track: "aggregators"/);
 });

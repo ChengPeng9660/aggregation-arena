@@ -247,9 +247,7 @@ const ACTION_LABELS: Record<string, string> = {
 export function ArenaClient() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [view, setView] = useState<View>("leaderboard");
-  const [track, setTrack] = useState("aggregators");
   const [windowRange, setWindowRange] = useState("all");
-  const [season, setSeason] = useState("all");
   const [category, setCategory] = useState("all");
   const [dialog, setDialog] = useState<Dialog>(null);
   const [loading, setLoading] = useState(true);
@@ -276,7 +274,7 @@ export function ArenaClient() {
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     if (!silent) setError("");
-    const params = new URLSearchParams({ track, window: windowRange, season, category });
+    const params = new URLSearchParams({ track: "aggregators", window: windowRange, category });
     try {
       const response = await fetchWithTimeout(`/api/arena?${params}`, { cache: "no-store" }, 15000);
       const payload = await readApiResponse<Snapshot & { message?: string }>(response);
@@ -287,7 +285,7 @@ export function ArenaClient() {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [track, windowRange, season, category]);
+  }, [windowRange, category]);
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void load(), 0);
@@ -357,13 +355,9 @@ export function ArenaClient() {
             {view === "leaderboard" && (
               <LeaderboardView
                 snapshot={snapshot}
-                track={track}
                 windowRange={windowRange}
-                season={season}
                 category={category}
-                onTrack={setTrack}
                 onWindow={setWindowRange}
-                onSeason={setSeason}
                 onCategory={setCategory}
                 onOpenEvent={(event) => setDialog({ type: "event", event })}
               />
@@ -577,24 +571,16 @@ function predictionProbabilities(run: ForecastPipelineSnapshot["runs"][number] |
 
 function LeaderboardView({
   snapshot,
-  track,
   windowRange,
-  season,
   category,
-  onTrack,
   onWindow,
-  onSeason,
   onCategory,
   onOpenEvent,
 }: {
   snapshot: Snapshot;
-  track: string;
   windowRange: string;
-  season: string;
   category: string;
-  onTrack: (value: string) => void;
   onWindow: (value: string) => void;
-  onSeason: (value: string) => void;
   onCategory: (value: string) => void;
   onOpenEvent: (event: ArenaEvent) => void;
 }) {
@@ -613,13 +599,6 @@ function LeaderboardView({
             }} disabled={!snapshot.events.length}>View a live event →</button>
           </div>
         </div>
-        <div className="public-hero-signal" aria-label="Live benchmark signal">
-          <span>LIVE SCORE</span>
-          <strong>{snapshot.stats.leaderBrier === null ? "—" : snapshot.stats.leaderBrier.toFixed(4)}</strong>
-          <p>{snapshot.stats.leaderName || "Awaiting resolved events"}</p>
-          <i><em /></i>
-          <small>Lower Event Brier is better</small>
-        </div>
       </section>
 
       <section className="public-stat-line" aria-label="Benchmark summary">
@@ -633,7 +612,7 @@ function LeaderboardView({
       <section className="metric-explainer">
         <strong>Why Event Brier?</strong>
         <p>Each method is evaluated on the same resolved outcomes. Event Brier measures the squared distance between its probability distribution and what actually happened, averaged across all outcomes and events.</p>
-        <button onClick={() => onTrack("aggregators")}>Lower is better</button>
+        <span>Lower is better</span>
       </section>
 
       <section className="public-ranking-section" id="rankings">
@@ -642,14 +621,8 @@ function LeaderboardView({
           <button className="export-button" onClick={() => exportLeaderboard(snapshot)} disabled={!snapshot.leaderboard.length}>Export CSV ↓</button>
         </div>
         <div className="filters public-filters">
-          <div className="segmented">
-            <button className={track === "aggregators" ? "active" : ""} onClick={() => onTrack("aggregators")}>Aggregation methods</button>
-            <button className={track === "forecasters" ? "active" : ""} onClick={() => onTrack("forecasters")}>Individual models</button>
-            <button className={track === "all" ? "active" : ""} onClick={() => onTrack("all")}>All</button>
-          </div>
           <div className="select-row">
             <label>Window<select value={windowRange} onChange={(event) => onWindow(event.target.value)}><option value="all">All time</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option></select></label>
-            <label>Season<select value={season} onChange={(event) => onSeason(event.target.value)}><option value="all">All seasons</option>{snapshot.seasons.map((item) => <option key={item}>{item}</option>)}</select></label>
             <label>Category<select value={category} onChange={(event) => onCategory(event.target.value)}><option value="all">All categories</option>{snapshot.categories.map((item) => <option key={item}>{item}</option>)}</select></label>
           </div>
         </div>
@@ -661,7 +634,7 @@ function LeaderboardView({
           </div>
           <div className="table-scroll">
             <table>
-              <thead><tr><th>Rank</th><th>Method / Forecaster</th><th>Event Brier ↓</th><th>Resolved events</th><th>Coverage</th></tr></thead>
+              <thead><tr><th>Rank</th><th>Method</th><th>Event Brier ↓</th><th>Resolved events</th><th>Coverage</th></tr></thead>
               <tbody>
                 {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} />) : (
                   <tr><td colSpan={5} className="empty-cell">No resolved scores match the current filters.</td></tr>
@@ -691,7 +664,7 @@ function LeaderboardRowView({ row }: { row: LeaderboardRow }) {
   return (
     <tr className={row.rank <= 3 ? "top-row" : ""}>
       <td><span className={`rank rank-${row.rank}`}>{String(row.rank).padStart(2, "0")}</span></td>
-      <td><div className="method-cell"><i style={{ background: row.color }} /><div><b>{row.name}</b><small>{row.organization} · {row.version}</small></div>{row.status === "provisional" && <em>PROV</em>}</div></td>
+      <td><div className="method-cell"><i style={{ background: row.color }} /><div><b>{row.name}</b></div>{row.status === "provisional" && <em>PROV</em>}</div></td>
       <td><strong className="index-value">{row.brier.toFixed(4)}</strong></td>
       <td className="mono-number">{row.resolved}</td>
       <td><div className="coverage-cell"><span><i style={{ width: `${Math.min(100, row.coverage)}%` }} /></span><b>{row.coverage.toFixed(0)}%</b></div></td>

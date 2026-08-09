@@ -1158,10 +1158,8 @@ td { font-size: 12px; }
 
 .public-leaderboard { overflow: hidden; }
 .public-leaderboard-hero {
-  min-height: 390px;
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(280px, .65fr);
-  gap: 80px;
+  min-height: 340px;
+  display: flex;
   align-items: center;
   padding: 22px 0 62px;
 }
@@ -1173,15 +1171,6 @@ td { font-size: 12px; }
 .public-hero-actions .primary-button { min-height: 44px; padding-inline: 18px; }
 .text-button { padding: 8px 0; border: 0; color: var(--purple-deep); background: transparent; cursor: pointer; font-size: 13px; font-weight: 650; }
 .text-button:hover { text-decoration: underline; text-underline-offset: 4px; }
-.public-hero-signal { padding: 28px 0 28px 38px; border-left: 1px solid var(--line-strong); }
-.public-hero-signal > span, .public-hero-signal strong, .public-hero-signal p, .public-hero-signal small { display: block; }
-.public-hero-signal > span { color: var(--quiet); font: 10px var(--font-geist-mono), monospace; letter-spacing: .14em; }
-.public-hero-signal strong { margin-top: 18px; color: var(--purple-deep); font: 48px var(--font-geist-mono), monospace; letter-spacing: -.06em; }
-.public-hero-signal p { margin: 6px 0 0; font-size: 14px; font-weight: 700; }
-.public-hero-signal > i { display: block; height: 5px; margin: 28px 0 13px; overflow: hidden; border-radius: 99px; background: var(--surface-soft); }
-.public-hero-signal > i em { display: block; width: 68%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--gold), var(--purple-deep)); animation: bar-grow .8s cubic-bezier(.2,.8,.2,1) both; }
-.public-hero-signal small { color: var(--quiet); font-size: 11px; }
-
 .public-stat-line { display: grid; grid-template-columns: repeat(5, 1fr); border-block: 1px solid var(--line-strong); }
 .public-stat-line > div { min-height: 102px; padding: 25px 20px 21px 0; }
 .public-stat-line > div + div { padding-left: 20px; border-left: 1px solid var(--line); }
@@ -1201,7 +1190,7 @@ td { font-size: 12px; }
 }
 .metric-explainer strong { font-size: 13px; }
 .metric-explainer p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
-.metric-explainer button { padding: 0; border: 0; color: var(--purple-deep); background: transparent; font: 11px var(--font-geist-mono), monospace; white-space: nowrap; }
+.metric-explainer > span { color: var(--purple-deep); font: 11px var(--font-geist-mono), monospace; white-space: nowrap; }
 
 .public-ranking-section { scroll-margin-top: 90px; }
 .public-ranking-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; margin-bottom: 24px; }
@@ -1245,10 +1234,7 @@ td { font-size: 12px; }
   .public-header-inner { grid-template-columns: auto 1fr; gap: 24px; }
   .public-header nav { justify-content: flex-end; gap: 20px; }
   .public-live { display: none; }
-  .public-leaderboard-hero { grid-template-columns: 1fr; gap: 34px; padding-top: 8px; }
-  .public-hero-signal { display: grid; grid-template-columns: auto 1fr; column-gap: 22px; align-items: baseline; padding: 24px 0; border-left: 0; border-block: 1px solid var(--line); }
-  .public-hero-signal strong { margin-top: 0; }
-  .public-hero-signal > i, .public-hero-signal small { grid-column: 1 / -1; }
+  .public-leaderboard-hero { padding-top: 8px; }
   .public-stat-line { grid-template-columns: repeat(3, 1fr); }
   .public-stat-line > div:nth-child(4) { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
   .public-stat-line > div:nth-child(5) { border-top: 1px solid var(--line); }
@@ -1269,9 +1255,6 @@ td { font-size: 12px; }
   .public-hero-copy h1 { font-size: 46px; }
   .public-hero-copy p { font-size: 15px; }
   .public-hero-actions { align-items: flex-start; flex-direction: column; gap: 8px; }
-  .public-hero-signal { grid-template-columns: 1fr; }
-  .public-hero-signal strong { margin-top: 12px; font-size: 40px; }
-  .public-hero-signal > i, .public-hero-signal small { grid-column: auto; }
   .public-stat-line { grid-template-columns: 1fr 1fr; }
   .public-stat-line > div { min-height: 88px; padding-block: 20px; }
   .public-stat-line > div:nth-child(3), .public-stat-line > div:nth-child(5) { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
@@ -1280,6 +1263,8 @@ td { font-size: 12px; }
   .public-ranking-heading { align-items: flex-start; flex-direction: column; }
   .public-ranking-heading h2 { font-size: 30px; }
   .public-filters { padding-top: 12px; }
+  .public-filters .select-row { grid-template-columns: 1fr 1fr; }
+  .public-filters .select-row label:first-child { grid-column: auto; }
   .public-filters .segmented { overflow-x: auto; }
   .public-filters .segmented button { flex: 0 0 auto; }
   .public-footer { align-items: flex-start; flex-direction: column; }
