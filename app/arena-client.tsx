@@ -223,6 +223,7 @@ type Snapshot = {
 };
 
 type View = "pipeline" | "leaderboard" | "history" | "curation" | "forecasts" | "events" | "methods" | "activity";
+type LeaderboardTrack = "aggregators" | "forecasters";
 type Dialog =
   | { type: "create-event" }
   | { type: "create-participant" }
@@ -247,6 +248,7 @@ const ACTION_LABELS: Record<string, string> = {
 export function ArenaClient() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [view, setView] = useState<View>("leaderboard");
+  const [leaderboardTrack, setLeaderboardTrack] = useState<LeaderboardTrack>("aggregators");
   const [windowRange, setWindowRange] = useState("all");
   const [category, setCategory] = useState("all");
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -268,13 +270,16 @@ export function ArenaClient() {
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("view");
-    if (requested === "history") setView("history");
+    const initialView = window.setTimeout(() => {
+      if (requested === "history") setView("history");
+    }, 0);
+    return () => window.clearTimeout(initialView);
   }, []);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     if (!silent) setError("");
-    const params = new URLSearchParams({ track: "aggregators", window: windowRange, category });
+    const params = new URLSearchParams({ track: leaderboardTrack, window: windowRange, category });
     try {
       const response = await fetchWithTimeout(`/api/arena?${params}`, { cache: "no-store" }, 15000);
       const payload = await readApiResponse<Snapshot & { message?: string }>(response);
@@ -285,7 +290,7 @@ export function ArenaClient() {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [windowRange, category]);
+  }, [leaderboardTrack, windowRange, category]);
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void load(), 0);
@@ -357,9 +362,10 @@ export function ArenaClient() {
                 snapshot={snapshot}
                 windowRange={windowRange}
                 category={category}
+                track={leaderboardTrack}
                 onWindow={setWindowRange}
                 onCategory={setCategory}
-                onOpenEvent={(event) => setDialog({ type: "event", event })}
+                onTrack={setLeaderboardTrack}
               />
             )}
             {view === "events" && (
@@ -573,68 +579,68 @@ function LeaderboardView({
   snapshot,
   windowRange,
   category,
+  track,
   onWindow,
   onCategory,
-  onOpenEvent,
+  onTrack,
 }: {
   snapshot: Snapshot;
   windowRange: string;
   category: string;
+  track: LeaderboardTrack;
   onWindow: (value: string) => void;
   onCategory: (value: string) => void;
-  onOpenEvent: (event: ArenaEvent) => void;
+  onTrack: (value: LeaderboardTrack) => void;
 }) {
+  const isMethods = track === "aggregators";
+
   return (
     <div className="page-content public-leaderboard enter">
       <section className="public-leaderboard-hero">
         <div className="public-hero-copy">
           <span className="eyebrow">AGGREGATION ARENA · LIVE BENCHMARK</span>
-          <h1>Forecast Aggregation<br />Leaderboard</h1>
+          <h1 className="public-hero-title"><span>Forecast Aggregation</span><small>Leaderboard</small></h1>
           <p>Aggregation methods combine independent AI forecasts on real prediction markets and are scored in public when events resolve.</p>
           <div className="public-hero-actions">
-            <button className="primary-button" onClick={() => document.getElementById("rankings")?.scrollIntoView({ behavior: "smooth" })}>See the standings</button>
-            <button className="text-button" onClick={() => {
-              const event = snapshot.events.find((item) => item.status === "open") || snapshot.events[0];
-              if (event) onOpenEvent(event);
-            }} disabled={!snapshot.events.length}>View a live event →</button>
+            <a
+              className="submission-button"
+              href="https://github.com/ChengPeng9660/aggregation-arena/issues/new?title=Aggregation%20method%20submission"
+              target="_blank"
+              rel="noreferrer"
+            >Submit your aggregation method <span aria-hidden="true">↗</span></a>
           </div>
         </div>
       </section>
 
       <section className="public-stat-line" aria-label="Benchmark summary">
-        <div><strong>{snapshot.leaderboard.length}</strong><span>ranked methods</span></div>
-        <div><strong>{snapshot.stats.openEvents}</strong><span>open events</span></div>
-        <div><strong>{snapshot.stats.resolvedEvents}</strong><span>resolved events</span></div>
-        <div><strong>{snapshot.stats.totalForecasts}</strong><span>locked forecasts</span></div>
-        <div><strong>{formatTime(snapshot.generatedAt)}</strong><span>last computed</span></div>
-      </section>
-
-      <section className="metric-explainer">
-        <strong>Why Event Brier?</strong>
-        <p>Each method is evaluated on the same resolved outcomes. Event Brier measures the squared distance between its probability distribution and what actually happened, averaged across all outcomes and events.</p>
-        <span>Lower is better</span>
+        <div><strong>{snapshot.methods.length}</strong><span>Ranked methods</span></div>
+        <div><strong>{snapshot.stats.openEvents}</strong><span>Open events</span></div>
+        <div><strong>{snapshot.stats.resolvedEvents}</strong><span>Resolved</span></div>
+        <div><strong>{snapshot.stats.totalForecasts}</strong><span>Locked forecasts</span></div>
+        <div className="computed-stat"><span>Last computed</span><strong>{formatTime(snapshot.generatedAt)}</strong></div>
       </section>
 
       <section className="public-ranking-section" id="rankings">
-        <div className="public-ranking-heading">
-          <div><span className="eyebrow">CURRENT STANDINGS</span><h2>Rankings</h2><p>Scores update as selected Polymarket events resolve.</p></div>
-          <button className="export-button" onClick={() => exportLeaderboard(snapshot)} disabled={!snapshot.leaderboard.length}>Export CSV ↓</button>
-        </div>
-        <div className="filters public-filters">
+        <div className="public-ranking-toolbar">
+          <div className="leaderboard-tabs" role="tablist" aria-label="Leaderboard type">
+            <button role="tab" aria-selected={isMethods} className={isMethods ? "active" : ""} onClick={() => onTrack("aggregators")}>Aggregation Methods</button>
+            <button role="tab" aria-selected={!isMethods} className={!isMethods ? "active" : ""} onClick={() => onTrack("forecasters")}>Individual Models</button>
+          </div>
           <div className="select-row">
             <label>Window<select value={windowRange} onChange={(event) => onWindow(event.target.value)}><option value="all">All time</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option></select></label>
             <label>Category<select value={category} onChange={(event) => onCategory(event.target.value)}><option value="all">All categories</option>{snapshot.categories.map((item) => <option key={item}>{item}</option>)}</select></label>
           </div>
+          <button className="export-button" onClick={() => exportLeaderboard(snapshot)} disabled={!snapshot.leaderboard.length}>Export CSV ↓</button>
         </div>
 
         <section className="leaderboard-panel public-ranking-table">
           <div className="table-caption">
-            <div><b>Official standings</b><span>Minimum {snapshot.methodology.minimumResolved} resolved event{snapshot.methodology.minimumResolved === 1 ? "" : "s"} to be ranked</span></div>
+            <div><b>{isMethods ? "Aggregation method standings" : "Individual model standings"}</b><span>Minimum {snapshot.methodology.minimumResolved} resolved event{snapshot.methodology.minimumResolved === 1 ? "" : "s"} to be ranked · scores update as events resolve</span></div>
             <span className="metric-definition">Event Brier · lower is better</span>
           </div>
           <div className="table-scroll">
             <table>
-              <thead><tr><th>Rank</th><th>Method</th><th>Event Brier ↓</th><th>Resolved events</th><th>Coverage</th></tr></thead>
+              <thead><tr><th>Rank</th><th>{isMethods ? "Method" : "Model"}</th><th>Event Brier ↓</th><th>Resolved events</th><th>Coverage</th></tr></thead>
               <tbody>
                 {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} />) : (
                   <tr><td colSpan={5} className="empty-cell">No resolved scores match the current filters.</td></tr>
@@ -645,17 +651,6 @@ function LeaderboardView({
         </section>
       </section>
 
-      <section className="open-queue public-open-events">
-        <div className="section-title"><div><span className="eyebrow">LIVE TEST SET</span><h2>Open events</h2></div><span>{snapshot.stats.openEvents} open questions</span></div>
-        <div className="event-rail">
-          {snapshot.events.filter((event) => event.status === "open").slice(0, 4).map((event) => (
-            <button key={event.id} onClick={() => onOpenEvent(event)}>
-              <span>{event.category}</span><h3>{event.title}</h3>
-              <div><b>{event.forecasterCount} forecasts</b><small>{event.closeTime ? formatDate(event.closeTime) : "No deadline"}</small></div>
-            </button>
-          ))}
-        </div>
-      </section>
     </div>
   );
 }
