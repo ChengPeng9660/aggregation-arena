@@ -102,18 +102,20 @@ export function HistoricalArena() {
   return (
     <section className="history-page enter">
       <header className="history-hero">
-        <div>
+        <div className="history-hero-copy">
           <span className="eyebrow">ForecastBench · historical backtest</span>
-          <h1>Aggregation<br />Leaderboard</h1>
+          <h1>Historical Aggregation Leaderboard</h1>
           <p>Choose the forecasters. Every aggregation method is rebuilt on resolved questions using the models available for each event.</p>
         </div>
-        <dl className="history-meta">
-          <div><dt>Resolved events</dt><dd>{data.meta.events.toLocaleString()}</dd></div>
-          <div><dt>Models / providers</dt><dd>{data.meta.models} / {data.meta.providers}</dd></div>
-          <div><dt>Dataset / market</dt><dd>{data.meta.questionTypes.Dataset.toLocaleString()} / {data.meta.questionTypes.Market.toLocaleString()}</dd></div>
-          <div><dt>Coverage</dt><dd>{data.meta.firstRound.slice(0, 7)} — {data.meta.lastRound.slice(0, 7)}</dd></div>
-        </dl>
       </header>
+
+      <dl className="history-stat-line" aria-label="Historical benchmark summary">
+        <div><dd>{data.meta.events.toLocaleString()}</dd><dt>Resolved events</dt></div>
+        <div><dd>{data.meta.models}</dd><dt>Models</dt></div>
+        <div><dd>{data.meta.providers}</dd><dt>Providers</dt></div>
+        <div><dd>{data.meta.questionTypes.Dataset.toLocaleString()} / {data.meta.questionTypes.Market.toLocaleString()}</dd><dt>Dataset / market</dt></div>
+        <div className="history-range-stat"><dt>Coverage</dt><dd>{data.meta.firstRound.slice(0, 7)} — {data.meta.lastRound.slice(0, 7)}</dd></div>
+      </dl>
 
       <div className="history-workbench">
         <aside className="model-picker">

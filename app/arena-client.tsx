@@ -599,7 +599,7 @@ function LeaderboardView({
       <section className="public-leaderboard-hero">
         <div className="public-hero-copy">
           <span className="eyebrow">AGGREGATION ARENA · LIVE BENCHMARK</span>
-          <h1 className="public-hero-title"><span>Forecast Aggregation</span><small>Leaderboard</small></h1>
+          <h1 className="public-hero-title">Forecast Aggregation Leaderboard</h1>
           <p>Aggregation methods combine independent AI forecasts on real prediction markets and are scored in public when events resolve.</p>
           <div className="public-hero-actions">
             <a

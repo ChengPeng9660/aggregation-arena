@@ -96,10 +96,16 @@ test("public leaderboard keeps compact method and individual model standings", (
   assert.doesNotMatch(publicArenaSource, /public-hero-signal|LIVE SCORE|Method \/ Forecaster/);
   assert.doesNotMatch(publicArenaSource, /onSeason|const \[season, setSeason\] = useState\("all"\)|View a live event/);
   assert.doesNotMatch(publicArenaSource, /row\.organization|row\.version/);
-  assert.match(publicArenaSource, /Forecast Aggregation<\/span><small>Leaderboard/);
+  assert.match(publicArenaSource, /<h1 className="public-hero-title">Forecast Aggregation Leaderboard<\/h1>/);
   assert.match(publicArenaSource, /Submit your aggregation method/);
   assert.match(publicArenaSource, /Aggregation Methods/);
   assert.match(publicArenaSource, /Individual Models/);
   assert.match(publicArenaSource, /track: leaderboardTrack/);
   assert.match(publicArenaSource, /onTrack\("forecasters"\)/);
+});
+
+test("historical arena uses the compact benchmark information hierarchy", () => {
+  assert.match(historicalSource, /Historical Aggregation Leaderboard/);
+  assert.match(historicalSource, /className="history-stat-line"/);
+  assert.doesNotMatch(historicalSource, /Aggregation<br \/>Leaderboard/);
 });
