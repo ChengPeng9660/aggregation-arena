@@ -24,3 +24,11 @@ test("the benchmark implements six deterministic aggregation methods", async () 
   assert.match(source, /prediction_history/);
   assert.match(source, /audit_log/);
 });
+
+test("the leaderboard registers blind and evidence-aware agent harness methods separately", async () => {
+  const source = await readFile(new URL("../lib/arena.ts", import.meta.url), "utf8");
+  assert.match(source, /agg-agent-harness-blind-v1/);
+  assert.match(source, /agg-agent-harness-evidence-v1/);
+  assert.match(source, /informationSet: "blind"/);
+  assert.match(source, /informationSet: "evidence-aware"/);
+});

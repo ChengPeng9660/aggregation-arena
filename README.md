@@ -142,12 +142,13 @@ Cloudflare Worker 版本：
 
 - 数据来自完整 ForecastBench resolved marginal panel 的公开二元事件轨道：1,233,050 条可用预测记录、8,620 个已结算事件、81 个基础模型、11 家模型提供方、25 个预测轮次。除 OpenAI / Anthropic 外，还包括 Google、Meta、DeepSeek、Mistral、Qwen、Moonshot、xAI、Z.ai 和 Minimax。联合信息结构 targets 不混入此公开榜单。
 - 用户可以自由勾选要聚合的基础模型；模型集合和模型数 `K` 都是聚合器输入，选择变化后六种方法、排名和全部图表会立即重算。
-- 默认使用 available-case aggregation：一道题只要至少两个已选模型有预测就进入聚合；不会强制所有模型处于共同覆盖区间。
-- 页面显示 Events、Coverage 与平均实际 `K`，覆盖差异不会被隐藏；需要严格共同样本时可打开 **Complete cases only**。
+- 默认且唯一使用 strict-intersection aggregation：只有每个已选模型都提交过预测的事件才进入聚合，所有方法始终共享同一个完整共同样本。
+- 历史榜单可在“只看 aggregation methods”和“aggregation methods + 当前所选 individual models”之间切换；两种视图中的每个条目都使用同一严格交集事件集评分。
+- 页面显示共同样本的 Events；Coverage、Avg K、available-case 开关以及按实际 K 分组的图表已移除，避免把样本构成差异误读成模型数量效应。
 - Past-performance Pool 的权重只使用更早预测轮次的历史 Brier，避免用当前题目的结果训练当前题目。
 - 分类严格沿用 ForecastBench 官方结构：先分为 **Dataset questions** 与 **Market questions**，再按 question set 的官方 `source` 筛选（ACLED、DBnomics、FRED、Wikipedia、Yahoo Finance、Manifold、Metaculus、Polymarket、INFER）。页面不再把本地规则生成的 topic 标签呈现为 ForecastBench 官方分类。
 - 每个事件使用 `forecast_due_date + official source + event_id` 连接 question set、resolution 与预测。`event_id` 只在同一 source 内唯一，因此 source 不能从连接键中省略。
-- 提供累计表现、表现随 `K` 变化、历史排名与校准曲线，以及实际进入评分的事件审计列表。
+- 提供 Prophet Arena 风格的全宽 Performance History，可在累计排名与累计 `1 − Brier` 数值之间切换。
 - 当前快照生成脚本为 `scripts/build_forecastbench_history.py`，浏览器数据为 `public/forecastbench/history.json`。重新生成需要本机对应 ForecastBench 研究数据路径。
 
 直接打开：

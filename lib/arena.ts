@@ -22,6 +22,9 @@ type AggregateDefinition = {
   shortName: string;
   description: string;
   color: string;
+  organization?: string;
+  experimental?: boolean;
+  informationSet?: "blind" | "evidence-aware";
 };
 
 export const AGGREGATE_METHODS: AggregateDefinition[] = [
@@ -66,6 +69,26 @@ export const AGGREGATE_METHODS: AggregateDefinition[] = [
     shortName: "Perf. Weighted",
     description: "Dynamically weights forecasters using shrunk Brier performance on previously resolved events.",
     color: "#f06f56",
+  },
+  {
+    id: "agg-agent-harness-blind-v1",
+    name: "Blind Agent Harness",
+    shortName: "Blind Harness",
+    description: "Experimental agentic pool using only anonymous probability vectors and strictly pre-event performance history.",
+    color: "#4F207F",
+    organization: "Agent Harness · Qwen",
+    experimental: true,
+    informationSet: "blind",
+  },
+  {
+    id: "agg-agent-harness-evidence-v1",
+    name: "Evidence-Aware Agent Harness",
+    shortName: "Evidence Harness",
+    description: "Experimental agentic pool using the event's frozen pre-event evidence and forecaster rationales in addition to probabilities and prior performance.",
+    color: "#EFAB02",
+    organization: "Agent Harness · Qwen",
+    experimental: true,
+    informationSet: "evidence-aware",
   },
 ];
 
@@ -564,7 +587,7 @@ async function buildLeaderboard(
         id,
         name: String(method?.name || group[0].participantName),
         shortName: method?.shortName || String(group[0].participantName),
-        organization: method ? "Arena Baseline" : String(participant?.organization || "Independent"),
+        organization: method ? method.organization || "Arena Baseline" : String(participant?.organization || "Independent"),
         kind: group[0].kind,
         color: method?.color || String(participant?.color || "#7c4dff"),
         brier: averageBrier,
@@ -741,6 +764,71 @@ export async function recordAutomatedEventForecast(payload: {
     aggregateCount: aggregates.length,
   }, "forecast-cron");
   return { eventId: payload.eventId, probabilities, aggregates };
+}
+
+export async function recordAggregateForecast(payload: {
+  eventId: string;
+  participantId: string;
+  participantName: string;
+  probability: number;
+  rationale: string | null;
+  version: string;
+  components: Record<string, unknown>;
+}) {
+  await ensureArenaReady();
+  const probability = Number(payload.probability);
+  if (!Number.isFinite(probability) || probability < 0 || probability > 1) {
+    throw new ArenaError(400, "Aggregate probability must be between 0 and 1");
+  }
+  const event = await getD1().prepare("SELECT id FROM events WHERE id=? AND status IN ('open','resolved')")
+    .bind(payload.eventId).first();
+  if (!event) throw new ArenaError(404, "Open or resolved event not found");
+  await upsertPrediction(
+    payload.eventId,
+    {
+      participantId: payload.participantId,
+      participantName: payload.participantName,
+      probability,
+      rationale: payload.rationale,
+    },
+    "aggregate",
+    payload.version,
+    JSON.stringify(payload.components),
+  );
+  return { eventId: payload.eventId, probability };
+}
+
+export async function recordAggregateEventForecast(payload: {
+  eventId: string;
+  participantId: string;
+  participantName: string;
+  probabilities: Record<string, number>;
+  rationale: string | null;
+  version: string;
+  components: Record<string, unknown>;
+}) {
+  await ensureArenaReady();
+  const db = getD1();
+  const event = await db.prepare("SELECT event_type FROM events WHERE id=? AND status IN ('open','resolved')")
+    .bind(payload.eventId).first<{ event_type: string }>();
+  if (!event) throw new ArenaError(404, "Open or resolved event not found");
+  if (event.event_type !== "categorical") throw new ArenaError(400, "Event is not categorical");
+  const outcomes = await db.prepare(
+    "SELECT outcome_key FROM event_outcomes WHERE event_id=? ORDER BY display_order",
+  ).bind(payload.eventId).all<{ outcome_key: string }>();
+  const keys = outcomes.results.map((row) => row.outcome_key);
+  const probabilities = normalizeDistribution(payload.probabilities, keys);
+  await upsertPredictionOutcomes(
+    payload.eventId,
+    payload.participantId,
+    payload.participantName,
+    probabilities,
+    payload.rationale,
+    "aggregate",
+    payload.version,
+    JSON.stringify(payload.components),
+  );
+  return { eventId: payload.eventId, probabilities };
 }
 
 async function getPerformanceWeights(participantIds: string[]) {

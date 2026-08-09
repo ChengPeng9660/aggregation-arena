@@ -3,6 +3,7 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 import { runPolymarketScheduled } from "../lib/polymarket";
 import { runForecastBatch } from "../lib/forecasting";
+import { runAgentHarnessBatch } from "../lib/agent-aggregation";
 
 interface Env {
   ASSETS: Fetcher;
@@ -54,6 +55,8 @@ const worker = {
       task = runPolymarketScheduled(env, controller);
     } else if (controller.cron === "20 * * * *") {
       task = runForecastBatch(env);
+    } else if (controller.cron === "30 * * * *") {
+      task = runAgentHarnessBatch(env, { eventLimit: 3 });
     } else {
       console.warn(`Ignoring unknown cron schedule: ${controller.cron}`);
       return;

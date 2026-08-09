@@ -203,6 +203,37 @@ export const modelForecastRuns = sqliteTable(
   (table) => [uniqueIndex("model_forecast_context_participant_unique").on(table.contextId, table.participantId)],
 );
 
+export const aggregationHarnessRuns = sqliteTable(
+  "aggregation_harness_runs",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id").notNull(),
+    methodId: text("method_id").notNull(),
+    methodVersion: text("method_version").notNull(),
+    informationSet: text("information_set").notNull(),
+    inputAsOfTime: text("input_as_of_time").notNull(),
+    inputSnapshotJson: text("input_snapshot_json").notNull(),
+    inputHash: text("input_hash").notNull(),
+    componentMapJson: text("component_map_json").notNull(),
+    modelId: text("model_id").notNull(),
+    promptVersion: text("prompt_version").notNull(),
+    status: text("status").notNull(),
+    weightsJson: text("weights_json"),
+    finalWeightsJson: text("final_weights_json"),
+    probabilitiesJson: text("probabilities_json"),
+    rationale: text("rationale"),
+    rawResponse: text("raw_response"),
+    fallbackReason: text("fallback_reason"),
+    latencyMs: integer("latency_ms"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    completedAt: text("completed_at"),
+  },
+  (table) => [
+    uniqueIndex("aggregation_harness_event_method_version_unique")
+      .on(table.eventId, table.methodId, table.methodVersion),
+  ],
+);
+
 export const eventOutcomes = sqliteTable(
   "event_outcomes",
   {

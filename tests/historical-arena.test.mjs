@@ -62,18 +62,36 @@ test("every historical probability is valid and references a published model", (
   for (const model of dataset.models) assert.equal(observedCoverage.get(model.id), model.n);
 });
 
-test("default diverse model selection has a usable available-case sample", () => {
-  const organizations = new Set();
-  const selected = dataset.models.filter((model) => {
-    if (organizations.has(model.organization) || organizations.size >= 8) return false;
-    organizations.add(model.organization);
-    return true;
-  });
-  assert.equal(selected.length, 8);
-  const availableCounts = dataset.events.map((event) => selected.filter((model) => event.forecasts[model.id] !== undefined).length);
-  const eligible = availableCounts.filter((count) => count >= 2);
-  assert.ok(eligible.length >= 5_000);
-  assert.ok(eligible.every((count) => count >= 2 && count <= selected.length));
+test("historical leaderboard uses the strict selected-model intersection", () => {
+  assert.match(historicalSource, /available\.length !== selected\.length/);
+  assert.match(historicalSource, /ids\.every\(\(id\) => event\.forecasts\[id\] !== undefined\)/);
+  assert.doesNotMatch(historicalSource, /completeCases|setCompleteCases|byK|Performance vs model count/);
+  assert.doesNotMatch(historicalSource, /row\.coverage|row\.avgK|<th>Coverage<\/th>|<th>Avg K<\/th>/);
+});
+
+test("historical leaderboard can rank methods alone or with selected individual models", () => {
+  assert.match(historicalSource, /leaderboardView/);
+  assert.match(historicalSource, />Aggregation methods<\/button>/);
+  assert.match(historicalSource, />Methods \+ individual models<\/button>/);
+  assert.match(historicalSource, /makeIndividualRanking\(scored, selected, models\)/);
+  assert.match(historicalSource, /row\.event\.forecasts\[modelId\]/);
+  assert.match(historicalSource, /combinedRanking = \[\.\.\.ranking, \.\.\.individualRanking\]\.sort\(compareRankingRows\)/);
+  assert.doesNotMatch(historicalSource, /history-provenance|<b>Evaluation rule<\/b>|<b>Data provenance<\/b>/);
+});
+
+test("historical diagnostics use one large Prophet-style performance history", () => {
+  const performancePanelSource = historicalSource.slice(historicalSource.indexOf("function PerformanceHistory("), historicalSource.indexOf("function PerformanceHistoryChart("));
+  assert.match(historicalSource, /OUTPUT 02/);
+  assert.match(historicalSource, /Performance History/);
+  assert.match(historicalSource, />Rank<\/button>/);
+  assert.match(historicalSource, />Values<\/button>/);
+  assert.match(historicalSource, /Rank by/);
+  assert.match(performancePanelSource, /<b>1 − Brier<\/b>/);
+  assert.match(historicalSource, /Last 12 runs/);
+  assert.match(historicalSource, /const width = 1000, height = 460/);
+  assert.doesNotMatch(historicalSource, /OUTPUT 03|OUTPUT 04|Cumulative performance|Rank history|title="Calibration"/);
+  assert.doesNotMatch(performancePanelSource, /Edge over market|Avg return|ECE/);
+  assert.doesNotMatch(historicalSource, /EVENT AUDIT|What entered the score|representativeAudit|history-audit|history-event-list/);
 });
 
 test("historical leaderboard keeps 1 minus Brier on its documented zero-to-one scale", () => {
@@ -85,6 +103,10 @@ test("historical model count is user-adjustable across the published model panel
   assert.match(historicalSource, /className="k-stepper"/);
   assert.match(historicalSource, /min="2" max=\{data\.models\.length\}/);
   assert.match(historicalSource, /setModelCount/);
+  assert.match(historicalSource, /className="picker-count-control"/);
+  assert.match(historicalSource, /className="model-preset-block"/);
+  assert.match(historicalSource, />Quick select<\/span>/);
+  assert.doesNotMatch(historicalSource, /className="k-control"/);
 });
 
 test("production arena cannot seed or display synthetic demo events", () => {

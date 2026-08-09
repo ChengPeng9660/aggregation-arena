@@ -7,6 +7,7 @@ import {
   resolveEvent,
   submitForecasts,
 } from "@/lib/arena";
+import { runAgentHarnessBatch } from "@/lib/agent-aggregation";
 import { getForecastPipelineSnapshot, runForecastBatch } from "@/lib/forecasting";
 import { runPolymarketScheduled, selectDailyBalancedSlate } from "@/lib/polymarket";
 import { env } from "cloudflare:workers";
@@ -44,7 +45,7 @@ export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as Record<string, unknown>;
     const action = String(payload.action || "");
-    const actor = action === "run_daily_forecast_batch" || action === "run_pipeline_sync"
+    const actor = action === "run_daily_forecast_batch" || action === "run_pipeline_sync" || action === "run_agent_harness_backfill"
       ? pipelineActor(request)
       : writeActor(request);
     let result: unknown;
@@ -100,6 +101,12 @@ export async function POST(request: Request) {
     } else if (action === "run_pipeline_sync") {
       const runtime = env as unknown as Parameters<typeof runForecastBatch>[0];
       result = await runPolymarketScheduled(runtime, { cron: "0 * * * *" });
+    } else if (action === "run_agent_harness_backfill") {
+      const runtime = env as unknown as Parameters<typeof runAgentHarnessBatch>[0];
+      result = await runAgentHarnessBatch(runtime, {
+        resolvedOnly: true,
+        eventLimit: Math.max(1, Math.min(10, Number(payload.eventLimit || 3))),
+      });
     } else {
       throw new ArenaError(400, "Unknown operation");
     }
@@ -111,6 +118,10 @@ export async function POST(request: Request) {
 }
 
 function pipelineActor(request: Request) {
+  const url = new URL(request.url);
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+    return "local-pipeline-admin";
+  }
   const configured = (env as unknown as { PIPELINE_ADMIN_TOKEN?: string }).PIPELINE_ADMIN_TOKEN;
   const authorization = request.headers.get("authorization") || "";
   const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";

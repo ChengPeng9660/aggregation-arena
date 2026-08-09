@@ -32,19 +32,20 @@ const METHODS = [
 const HISTORY_DATA_VERSION = "2026-08-09-source-aware";
 
 type MethodId = (typeof METHODS)[number]["id"];
-type ScoredEvent = { event: HistoricalEvent; k: number; values: Record<MethodId, number> };
-type RankingRow = { id: MethodId; name: string; color: string; brier: number; score: number; ece: number; events: number; coverage: number; avgK: number };
-type Series = { name: string; color: string; values: { x: number; y: number; label?: string }[] };
+type ScoredEvent = { event: HistoricalEvent; values: Record<MethodId, number> };
+type RankingRow = { id: string; kind: "aggregation" | "model"; name: string; organization?: string; color: string; brier: number; score: number; ece: number; events: number };
+type HistoryPoint = { x: number; date: string; score: number; rank: number; events: number };
+type HistorySeries = { id: MethodId; name: string; short: string; color: string; values: HistoryPoint[] };
 
 export function HistoricalArena() {
   const [data, setData] = useState<HistoricalData | null>(null);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
-  const [completeCases, setCompleteCases] = useState(false);
   const [questionType, setQuestionType] = useState("all");
   const [source, setSource] = useState("all");
   const [search, setSearch] = useState("");
-  const [expanded, setExpanded] = useState<MethodId | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [leaderboardView, setLeaderboardView] = useState<"methods" | "combined">("methods");
 
   useEffect(() => {
     fetch(`/forecastbench/history.json?v=${HISTORY_DATA_VERSION}`, { cache: "no-store" })
@@ -56,7 +57,7 @@ export function HistoricalArena() {
         setData(payload);
         const params = new URLSearchParams(window.location.search);
         const requested = params.get("models")?.split(",").filter((id) => payload.models.some((model) => model.id === id));
-        setSelected(requested?.length ? requested : diverseModels(payload.models, 8).map((model) => model.id));
+        setSelected(requested?.length ? requested : commonCoverageModels(payload, 6).map((model) => model.id));
       })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Historical dataset could not be loaded."));
   }, []);
@@ -75,7 +76,7 @@ export function HistoricalArena() {
   const filteredEvents = useMemo(() => data?.events.filter((event) =>
     (questionType === "all" || event.questionType === questionType) && (source === "all" || event.source === source)
   ) ?? [], [data, questionType, source]);
-  const analysis = useMemo(() => data ? analyze(filteredEvents, selected, completeCases) : null, [data, filteredEvents, selected, completeCases]);
+  const analysis = useMemo(() => data ? analyze(filteredEvents, selected, data.models) : null, [data, filteredEvents, selected]);
   const visibleModels = useMemo(() => data?.models.filter((model) => `${model.organization} ${model.name}`.toLowerCase().includes(search.toLowerCase())) ?? [], [data, search]);
 
   if (error) return <section className="history-page"><div className="history-error">{error}</div></section>;
@@ -91,13 +92,14 @@ export function HistoricalArena() {
   };
   const setPreset = (preset: "diverse" | "top" | "all" | "openai") => {
     const count = Math.max(2, selected.length);
-    const models = preset === "diverse" ? diverseModels(data.models, count)
+    const models = preset === "diverse" ? commonCoverageModels(data, count)
       : preset === "top" ? data.models.slice(0, count)
       : preset === "all" ? data.models
       : data.models.filter((model) => model.organization.toLowerCase() === preset);
     setSelected(models.map((model) => model.id));
   };
   const toggleModel = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const visibleRanking = leaderboardView === "combined" ? analysis.combinedRanking : analysis.ranking;
 
   return (
     <section className="history-page enter">
@@ -105,7 +107,7 @@ export function HistoricalArena() {
         <div className="history-hero-copy">
           <span className="eyebrow">ForecastBench · historical backtest</span>
           <h1>Historical Aggregation Leaderboard</h1>
-          <p>Choose the forecasters. Every aggregation method is rebuilt on resolved questions using the models available for each event.</p>
+          <p>Choose the forecasters. Every aggregation method is rebuilt on the strict intersection of resolved questions forecast by every selected model.</p>
         </div>
       </header>
 
@@ -114,28 +116,32 @@ export function HistoricalArena() {
         <div><dd>{data.meta.models}</dd><dt>Models</dt></div>
         <div><dd>{data.meta.providers}</dd><dt>Providers</dt></div>
         <div><dd>{data.meta.questionTypes.Dataset.toLocaleString()} / {data.meta.questionTypes.Market.toLocaleString()}</dd><dt>Dataset / market</dt></div>
-        <div className="history-range-stat"><dt>Coverage</dt><dd>{data.meta.firstRound.slice(0, 7)} — {data.meta.lastRound.slice(0, 7)}</dd></div>
+        <div className="history-range-stat"><dt>Date range</dt><dd>{data.meta.firstRound.slice(0, 7)} — {data.meta.lastRound.slice(0, 7)}</dd></div>
       </dl>
 
       <div className="history-workbench">
         <aside className="model-picker">
           <div className="picker-heading">
-            <div><span>INPUT 01</span><h2>Base forecasters</h2></div>
-            <label className="k-control" aria-label="Number of selected models">
-              <span>MODEL COUNT</span>
-              <span className="k-stepper">
-                <button type="button" onClick={() => setModelCount(selected.length - 1)} disabled={selected.length <= 2} aria-label="Select one fewer model">−</button>
-                <input type="number" min="2" max={data.models.length} value={selected.length} onChange={(event) => setModelCount(Number(event.target.value))} />
-                <button type="button" onClick={() => setModelCount(selected.length + 1)} disabled={selected.length >= data.models.length} aria-label="Select one more model">+</button>
-              </span>
-            </label>
+            <span>INPUT 01</span>
+            <h2>Base forecasters</h2>
           </div>
-          <p>Choose any K from 2 to {data.models.length}, then change individual models below. Missing forecasts are handled event by event.</p>
-          <div className="model-presets">
-            <button onClick={() => setPreset("diverse")}>Cross-provider</button>
-            <button onClick={() => setPreset("top")}>Top by coverage</button>
-            <button onClick={() => setPreset("openai")}>OpenAI</button>
-            <button onClick={() => setPreset("all")}>All</button>
+          <p>Choose any K from 2 to {data.models.length}. An event enters the leaderboard only when every selected model forecast it.</p>
+          <div className="picker-count-control" aria-label="Number of selected models">
+            <div><span>Selected models</span><b>{selected.length} forecasters</b></div>
+            <span className="k-stepper">
+              <button type="button" onClick={() => setModelCount(selected.length - 1)} disabled={selected.length <= 2} aria-label="Select one fewer model">−</button>
+              <input aria-label="Selected model count" type="number" min="2" max={data.models.length} value={selected.length} onChange={(event) => setModelCount(Number(event.target.value))} />
+              <button type="button" onClick={() => setModelCount(selected.length + 1)} disabled={selected.length >= data.models.length} aria-label="Select one more model">+</button>
+            </span>
+          </div>
+          <div className="model-preset-block">
+            <span>Quick select</span>
+            <div className="model-presets">
+              <button onClick={() => setPreset("diverse")}>Cross-provider</button>
+              <button onClick={() => setPreset("top")}>Top by coverage</button>
+              <button onClick={() => setPreset("openai")}>OpenAI</button>
+              <button onClick={() => setPreset("all")}>All models</button>
+            </div>
           </div>
           <input className="model-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search models" aria-label="Search models" />
           <div className="model-options">
@@ -146,15 +152,11 @@ export function HistoricalArena() {
               </label>
             ))}
           </div>
-          <label className="complete-toggle">
-            <input type="checkbox" checked={completeCases} onChange={(event) => setCompleteCases(event.target.checked)} />
-            <span><b>Complete cases only</b><small>Require every selected model on every scored event.</small></span>
-          </label>
         </aside>
 
         <main className="history-results">
           <div className="history-controls">
-            <div><span>INPUT 02</span><b>{selected.length < 2 ? "Select at least two forecasters" : `${analysis.eligible.toLocaleString()} events can be aggregated`}</b></div>
+            <div><span>INPUT 02</span><b>{selected.length < 2 ? "Select at least two forecasters" : `${analysis.eligible.toLocaleString()} events in the complete intersection`}</b></div>
             <div className="history-filter-row">
               <label>Question type<select value={questionType} onChange={(event) => { setQuestionType(event.target.value); setSource("all"); }}><option value="all">Dataset + market</option><option>Dataset</option><option>Market</option></select></label>
               <label>Official source<select key={questionType} value={source} onChange={(event) => setSource(event.target.value)}><option value="all">All sources</option>{sources.map((item) => <option key={item}>{item}</option>)}</select></label>
@@ -162,65 +164,39 @@ export function HistoricalArena() {
           </div>
 
           <section className="history-ranking" aria-label="Historical aggregation leaderboard">
-            <div className="history-section-title"><span>OUTPUT 01</span><div><h2>Leaderboard</h2><p>Lower Brier is better. All methods share the same selected-model event set.</p></div></div>
+            <div className="history-section-title history-leaderboard-heading"><span>OUTPUT 01</span><div><h2>Leaderboard</h2><p>Lower Brier is better. Every entry is scored on the same complete-intersection event sample.</p></div></div>
+            <div className="leaderboard-view-tabs" role="tablist" aria-label="Leaderboard entries">
+              <button type="button" role="tab" aria-selected={leaderboardView === "methods"} className={leaderboardView === "methods" ? "active" : ""} onClick={() => { setLeaderboardView("methods"); setExpanded(null); }}>Aggregation methods</button>
+              <button type="button" role="tab" aria-selected={leaderboardView === "combined"} className={leaderboardView === "combined" ? "active" : ""} onClick={() => { setLeaderboardView("combined"); setExpanded(null); }}>Methods + individual models</button>
+            </div>
             <div className="history-table-scroll">
               <table>
-                <thead><tr><th>Rank</th><th>Aggregation method</th><th>1 − Brier</th><th>Brier</th><th>ECE</th><th>Events</th><th>Coverage</th><th>Avg K</th></tr></thead>
-                <tbody>{analysis.ranking.length ? analysis.ranking.map((row, index) => (
+                <thead><tr><th>Rank</th><th>{leaderboardView === "combined" ? "Method / model" : "Aggregation method"}</th><th>1 − Brier</th><th>Brier</th><th>ECE</th><th>Events</th></tr></thead>
+                <tbody>{visibleRanking.length ? visibleRanking.map((row, index) => (
                   <Fragment key={row.id}>
-                    <tr className={index === 0 ? "history-winner" : ""} onClick={() => setExpanded(expanded === row.id ? null : row.id)}>
+                    <tr className={`${index === 0 ? "history-winner " : ""}${row.kind === "aggregation" ? "history-clickable" : ""}`} onClick={() => row.kind === "aggregation" && setExpanded(expanded === row.id ? null : row.id)}>
                       <td><span className={`history-rank rank-${index + 1}`}>{index + 1}</span></td>
-                      <td><span className="history-method"><i style={{ background: row.color }} /><b>{row.name}</b></span></td>
-                      <td className="history-score">{row.score.toFixed(4)}</td><td>{row.brier.toFixed(4)}</td><td>{row.ece.toFixed(4)}</td><td>{row.events.toLocaleString()}</td><td>{row.coverage.toFixed(1)}%</td><td>{row.avgK.toFixed(1)}</td>
+                      <td><span className="history-method"><i style={{ background: row.color }} /><span><b>{row.name}</b>{leaderboardView === "combined" && <small>{row.kind === "aggregation" ? "Aggregation method" : `${row.organization} · Individual model`}</small>}</span></span></td>
+                      <td className="history-score">{row.score.toFixed(4)}</td><td>{row.brier.toFixed(4)}</td><td>{row.ece.toFixed(4)}</td><td>{row.events.toLocaleString()}</td>
                     </tr>
-                    {expanded === row.id && <tr className="history-detail"><td colSpan={8}>{METHODS.find((method) => method.id === row.id)?.rule}</td></tr>}
+                    {row.kind === "aggregation" && expanded === row.id && <tr className="history-detail"><td colSpan={6}>{METHODS.find((method) => method.id === row.id)?.rule}</td></tr>}
                   </Fragment>
-                )) : <tr><td className="history-empty-row" colSpan={8}>No events satisfy this model selection and coverage rule. Turn off complete cases or choose models with overlapping forecast rounds.</td></tr>}</tbody>
+                )) : <tr><td className="history-empty-row" colSpan={6}>No resolved events contain forecasts from every selected model. Choose models with overlapping forecast rounds.</td></tr>}</tbody>
               </table>
             </div>
           </section>
 
-          <div className="history-chart-grid">
-            <ChartPanel number="OUTPUT 02" title="Cumulative performance" subtitle="1 − Brier after each ForecastBench round">
-              <LineChart series={analysis.cumulative} yFormat={(value) => value.toFixed(3)} />
-            </ChartPanel>
-            <ChartPanel number="OUTPUT 03" title="Performance vs model count" subtitle="How each method behaves at the event-level available K">
-              <LineChart series={analysis.byK} xFormat={(value) => `K${Math.round(value)}`} yFormat={(value) => value.toFixed(3)} />
-            </ChartPanel>
-            <ChartPanel number="OUTPUT 04" title="Rank history" subtitle="Cumulative rank as resolved rounds are added">
-              <LineChart series={analysis.rankHistory} yReverse yFormat={(value) => `#${Math.round(value)}`} />
-            </ChartPanel>
-            <ChartPanel number="OUTPUT 05" title="Calibration" subtitle="Observed frequency against predicted probability">
-              <LineChart series={analysis.calibration} xFormat={(value) => `${Math.round(value * 100)}%`} yFormat={(value) => `${Math.round(value * 100)}%`} diagonal />
-            </ChartPanel>
-          </div>
-
-          <section className="history-audit">
-            <div className="history-section-title"><span>EVENT AUDIT</span><div><h2>What entered the score</h2><p>Recent resolved examples make the model-to-aggregation path inspectable.</p></div></div>
-            <div className="history-event-list">{representativeAudit(analysis.scored).map((item) => (
-              <article key={item.event.id}>
-                <div><span>{item.event.questionType} · {item.event.source}</span><time>{item.event.date}</time></div>
-                <h3>{item.event.question}</h3>
-                <footer><b>Outcome {item.event.outcome === 1 ? "YES" : "NO"}</b><span>{item.k} of {selected.length} selected models available</span><span>Mean {Math.round(item.values.mean * 100)}%</span></footer>
-              </article>
-            ))}</div>
-          </section>
-
-          <footer className="history-provenance">
-            <div><b>Evaluation rule</b><p>Available-case aggregation is the default. An event is scored when at least two selected models forecast it. Complete-case mode is optional.</p></div>
-            <div><b>Data provenance</b><p>{data.meta.officialQuestionMatches.toLocaleString()} / {data.meta.events.toLocaleString()} events matched to official ForecastBench questions by date + source + ID · {data.meta.matchedForecastRows.toLocaleString()} resolved marginal prediction rows · snapshot generated {data.meta.generated}.</p></div>
-          </footer>
+          <PerformanceHistory series={analysis.performanceHistory} ranking={analysis.ranking} />
         </main>
       </div>
     </section>
   );
 }
 
-function analyze(events: HistoricalEvent[], selected: string[], completeCases: boolean) {
-  const base = events.filter((event) => selected.some((id) => event.forecasts[id] !== undefined));
-  if (selected.length < 2) return emptyAnalysis(base.length);
+function analyze(events: HistoricalEvent[], selected: string[], models: HistoricalModel[]) {
+  if (selected.length < 2) return emptyAnalysis();
   const byDate = new Map<string, HistoricalEvent[]>();
-  for (const event of base) byDate.set(event.date, [...(byDate.get(event.date) ?? []), event]);
+  for (const event of events) byDate.set(event.date, [...(byDate.get(event.date) ?? []), event]);
   const history = new Map<string, { loss: number; n: number }>();
   const scored: ScoredEvent[] = [];
 
@@ -228,13 +204,13 @@ function analyze(events: HistoricalEvent[], selected: string[], completeCases: b
     const round = byDate.get(date) ?? [];
     for (const event of round) {
       const available = selected.filter((id) => event.forecasts[id] !== undefined);
-      if (available.length < 2 || (completeCases && available.length !== selected.length)) continue;
+      if (available.length !== selected.length) continue;
       const probabilities = available.map((id) => event.forecasts[id]);
       const weights = available.map((id) => {
         const prior = history.get(id);
         return prior?.n ? 1 / (0.02 + prior.loss / prior.n) : 1;
       });
-      scored.push({ event, k: available.length, values: aggregate(probabilities, weights) });
+      scored.push({ event, values: aggregate(probabilities, weights) });
     }
     for (const event of round) for (const id of selected) {
       const probability = event.forecasts[id];
@@ -246,30 +222,41 @@ function analyze(events: HistoricalEvent[], selected: string[], completeCases: b
     }
   }
 
-  if (!scored.length) return emptyAnalysis(base.length);
+  if (!scored.length) return emptyAnalysis();
 
-  const ranking = makeRanking(scored, base.length);
+  const ranking = makeRanking(scored);
+  const individualRanking = makeIndividualRanking(scored, selected, models);
+  const combinedRanking = [...ranking, ...individualRanking].sort(compareRankingRows);
   const dates = Array.from(new Set(scored.map((item) => item.event.date))).sort();
-  const cumulative: Series[] = METHODS.map((method) => ({ name: method.short, color: method.color, values: dates.map((date, index) => {
+  const runs = dates.map((date, index) => {
     const rows = scored.filter((item) => item.event.date <= date);
-    return { x: index, y: 1 - mean(rows.map((item) => brier(item.values[method.id], item.event.outcome))), label: date };
-  }) }));
-  const ks = Array.from(new Set(scored.map((item) => item.k)).values()).sort((a, b) => a - b);
-  const byK: Series[] = METHODS.map((method) => ({ name: method.short, color: method.color, values: ks.map((k) => {
-    const rows = scored.filter((item) => item.k === k);
-    return { x: k, y: 1 - mean(rows.map((item) => brier(item.values[method.id], item.event.outcome))), label: `${rows.length.toLocaleString()} events` };
-  }) }));
-  const rankHistory: Series[] = METHODS.map((method) => ({ name: method.short, color: method.color, values: dates.map((date, index) => {
-    const rows = scored.filter((item) => item.event.date <= date);
-    const ordered = METHODS.map((candidate) => ({ id: candidate.id, loss: mean(rows.map((item) => brier(item.values[candidate.id], item.event.outcome))) })).sort((a, b) => a.loss - b.loss);
-    return { x: index, y: ordered.findIndex((item) => item.id === method.id) + 1, label: date };
-  }) }));
-  const calibration: Series[] = ranking.slice(0, 3).map((row) => ({ name: METHODS.find((method) => method.id === row.id)?.short ?? row.name, color: row.color, values: calibrationBins(scored, row.id) }));
-  return { base: base.length, eligible: scored.length, scored, ranking, cumulative, byK, rankHistory, calibration };
+    const ordered = METHODS.map((method) => ({
+      id: method.id,
+      score: 1 - mean(rows.map((item) => brier(item.values[method.id], item.event.outcome))),
+    })).sort((a, b) => b.score - a.score);
+    return { date, index, events: rows.length, ordered };
+  });
+  const performanceHistory: HistorySeries[] = METHODS.map((method) => ({
+    id: method.id,
+    name: method.name,
+    short: method.short,
+    color: method.color,
+    values: runs.map((run) => {
+      const result = run.ordered.find((item) => item.id === method.id);
+      return {
+        x: run.index,
+        date: run.date,
+        score: result?.score ?? 0,
+        rank: run.ordered.findIndex((item) => item.id === method.id) + 1,
+        events: run.events,
+      };
+    }),
+  }));
+  return { eligible: scored.length, scored, ranking, individualRanking, combinedRanking, performanceHistory };
 }
 
-function emptyAnalysis(base: number) {
-  return { base, eligible: 0, scored: [] as ScoredEvent[], ranking: [] as RankingRow[], cumulative: [] as Series[], byK: [] as Series[], rankHistory: [] as Series[], calibration: [] as Series[] };
+function emptyAnalysis() {
+  return { eligible: 0, scored: [] as ScoredEvent[], ranking: [] as RankingRow[], individualRanking: [] as RankingRow[], combinedRanking: [] as RankingRow[], performanceHistory: [] as HistorySeries[] };
 }
 
 function aggregate(values: number[], weights: number[]): Record<MethodId, number> {
@@ -290,26 +277,37 @@ function aggregate(values: number[], weights: number[]): Record<MethodId, number
   };
 }
 
-function makeRanking(rows: ScoredEvent[], baseCount: number): RankingRow[] {
+function makeRanking(rows: ScoredEvent[]): RankingRow[] {
   return METHODS.map((method) => {
     const losses = rows.map((row) => brier(row.values[method.id], row.event.outcome));
     const loss = mean(losses);
-    return { id: method.id, name: method.name, color: method.color, brier: loss, score: 1 - loss, ece: ece(rows, method.id), events: rows.length, coverage: baseCount ? rows.length / baseCount * 100 : 0, avgK: mean(rows.map((row) => row.k)) };
-  }).sort((a, b) => a.brier - b.brier);
+    return { id: method.id, kind: "aggregation" as const, name: method.name, color: method.color, brier: loss, score: 1 - loss, ece: ece(rows, (row) => row.values[method.id]), events: rows.length };
+  }).sort(compareRankingRows);
 }
 
-function calibrationBins(rows: ScoredEvent[], method: MethodId) {
-  return Array.from({ length: 10 }, (_, index) => {
-    const low = index / 10, high = (index + 1) / 10;
-    const bin = rows.filter((row) => row.values[method] >= low && (index === 9 ? row.values[method] <= high : row.values[method] < high));
-    return bin.length ? { x: mean(bin.map((row) => row.values[method])), y: mean(bin.map((row) => row.event.outcome)), label: `${bin.length.toLocaleString()} events` } : null;
-  }).filter((value): value is { x: number; y: number; label: string } => value !== null);
+function makeIndividualRanking(rows: ScoredEvent[], selected: string[], models: HistoricalModel[]): RankingRow[] {
+  const modelsById = new Map(models.map((model) => [model.id, model]));
+  return selected.flatMap((modelId) => {
+    const model = modelsById.get(modelId);
+    if (!model) return [];
+    const losses = rows.map((row) => brier(row.event.forecasts[modelId], row.event.outcome));
+    const loss = mean(losses);
+    return [{
+      id: `model:${modelId}`,
+      kind: "model" as const,
+      name: model.name,
+      organization: model.organization,
+      color: "#302A33",
+      brier: loss,
+      score: 1 - loss,
+      ece: ece(rows, (row) => row.event.forecasts[modelId]),
+      events: rows.length,
+    }];
+  }).sort(compareRankingRows);
 }
 
-function representativeAudit(rows: ScoredEvent[]) {
-  const latestByCategory = new Map<string, ScoredEvent>();
-  for (const row of rows) latestByCategory.set(row.event.source, row);
-  return Array.from(latestByCategory.values()).sort((a, b) => b.event.date.localeCompare(a.event.date)).slice(0, 8);
+function compareRankingRows(a: RankingRow, b: RankingRow) {
+  return a.brier - b.brier || (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "aggregation" ? -1 : 1);
 }
 
 function diverseModels(models: HistoricalModel[], count: number) {
@@ -323,48 +321,158 @@ function diverseModels(models: HistoricalModel[], count: number) {
   return [...selected, ...models.filter((model) => !selected.some((item) => item.id === model.id)).slice(0, count - selected.length)];
 }
 
-function ece(rows: ScoredEvent[], method: MethodId) {
-  const bins = calibrationBins(rows, method);
-  return bins.reduce((total, bin) => {
-    const count = rows.filter((row) => Math.floor(Math.min(row.values[method], .9999) * 10) === Math.floor(Math.min(bin.x, .9999) * 10)).length;
-    return total + Math.abs(bin.x - bin.y) * count / Math.max(rows.length, 1);
-  }, 0);
+function commonCoverageModels(data: HistoricalData, count: number) {
+  const target = Math.min(data.models.length, Math.max(2, count));
+  const candidates = new Map<string, string[]>();
+  for (const event of data.events) {
+    const organizations = new Set<string>();
+    const ids: string[] = [];
+    for (const model of data.models) {
+      if (event.forecasts[model.id] === undefined || organizations.has(model.organization)) continue;
+      organizations.add(model.organization);
+      ids.push(model.id);
+      if (ids.length === target) break;
+    }
+    if (ids.length === target) candidates.set(ids.join("|"), ids);
+  }
+  let bestIds: string[] = [];
+  let bestOverlap = -1;
+  for (const ids of candidates.values()) {
+    const overlap = data.events.filter((event) => ids.every((id) => event.forecasts[id] !== undefined)).length;
+    if (overlap > bestOverlap) {
+      bestIds = ids;
+      bestOverlap = overlap;
+    }
+  }
+  const selected = bestIds.map((id) => data.models.find((model) => model.id === id)).filter((model): model is HistoricalModel => Boolean(model));
+  return selected.length === target ? selected : diverseModels(data.models, target);
 }
 
-function ChartPanel({ number, title, subtitle, children }: { number: string; title: string; subtitle: string; children: React.ReactNode }) {
-  return <section className="history-chart-panel"><header><span>{number}</span><h2>{title}</h2><p>{subtitle}</p></header>{children}</section>;
+function ece(rows: ScoredEvent[], probabilityFor: (row: ScoredEvent) => number) {
+  return Array.from({ length: 10 }, (_, index) => {
+    const low = index / 10, high = (index + 1) / 10;
+    const bin = rows.filter((row) => {
+      const probability = probabilityFor(row);
+      return probability >= low && (index === 9 ? probability <= high : probability < high);
+    });
+    if (!bin.length) return 0;
+    const confidence = mean(bin.map(probabilityFor));
+    const frequency = mean(bin.map((row) => row.event.outcome));
+    return Math.abs(confidence - frequency) * bin.length / Math.max(rows.length, 1);
+  }).reduce((total, value) => total + value, 0);
 }
 
-function LineChart({ series, yReverse = false, diagonal = false, xFormat, yFormat = (value) => value.toFixed(2) }: { series: Series[]; yReverse?: boolean; diagonal?: boolean; xFormat?: (value: number) => string; yFormat?: (value: number) => string }) {
-  const width = 620, height = 285, left = 52, right = 18, top = 18, bottom = 42;
+function PerformanceHistory({ series, ranking }: { series: HistorySeries[]; ranking: RankingRow[] }) {
+  const [mode, setMode] = useState<"rank" | "values">("rank");
+  const [methodCount, setMethodCount] = useState(METHODS.length);
+  const [runWindow, setRunWindow] = useState<"6" | "12" | "all">("12");
+  const totalRuns = series[0]?.values.length ?? 0;
+  const visibleIds = new Set(ranking.slice(0, methodCount).map((row) => row.id));
+  const firstRun = runWindow === "all" ? 0 : Math.max(0, totalRuns - Number(runWindow));
+  const visibleSeries = series
+    .filter((item) => visibleIds.has(item.id))
+    .map((item) => ({ ...item, values: item.values.slice(firstRun) }));
+
+  return <section className="performance-history" aria-labelledby="performance-history-title">
+    <div className="history-section-title performance-history-title">
+      <span>OUTPUT 02</span>
+      <div>
+        <h2 id="performance-history-title">Performance History</h2>
+        <p>Where aggregation methods stood across scoring runs, and the scores behind those positions — resolved binary events only, matching the table&apos;s filters.</p>
+      </div>
+    </div>
+    <div className="performance-toolbar">
+      <div className="performance-view-tabs" role="group" aria-label="Performance history view">
+        <button type="button" className={mode === "rank" ? "active" : ""} aria-pressed={mode === "rank"} onClick={() => setMode("rank")}>Rank</button>
+        <button type="button" className={mode === "values" ? "active" : ""} aria-pressed={mode === "values"} onClick={() => setMode("values")}>Values</button>
+      </div>
+      <div className="performance-metric" aria-label="Performance metric">
+        <span>{mode === "rank" ? "Rank by" : "Value"}</span>
+        <b>1 − Brier</b>
+      </div>
+      <div className="performance-selectors">
+        <label><span>Methods</span><select aria-label="Visible aggregation methods" value={methodCount} onChange={(event) => setMethodCount(Number(event.target.value))}>
+          {METHODS.map((_, index) => index + 1).filter((count) => count >= 3).map((count) => <option key={count} value={count}>{count} of {METHODS.length} methods</option>)}
+        </select></label>
+        <label><span>Scoring runs</span><select aria-label="Performance history window" value={runWindow} onChange={(event) => setRunWindow(event.target.value as "6" | "12" | "all")}>
+          <option value="6">Last 6 runs</option>
+          <option value="12">Last 12 runs</option>
+          <option value="all">All {totalRuns} runs</option>
+        </select></label>
+      </div>
+    </div>
+    <p className="performance-axis-note">{mode === "rank" ? "y: board position — #1 (top) is best" : "y: cumulative 1 − Brier — higher is better"} · x: scoring runs</p>
+    <PerformanceHistoryChart series={visibleSeries} mode={mode} />
+  </section>;
+}
+
+function PerformanceHistoryChart({ series, mode }: { series: HistorySeries[]; mode: "rank" | "values" }) {
+  const [hovered, setHovered] = useState<{ item: HistorySeries; point: HistoryPoint } | null>(null);
+  const width = 1000, height = 460, left = 72, right = 28, top = 34, bottom = 62;
   const points = series.flatMap((item) => item.values);
-  if (!points.length) return <div className="chart-empty">Select at least two models to calculate this chart.</div>;
-  const xMin = Math.min(...points.map((point) => point.x)), xMax = Math.max(...points.map((point) => point.x));
-  const rawMin = diagonal ? 0 : Math.min(...points.map((point) => point.y));
-  const rawMax = diagonal ? 1 : Math.max(...points.map((point) => point.y));
-  const padding = Math.max((rawMax - rawMin) * .12, .015);
-  const yMin = diagonal ? 0 : yReverse ? 1 : Math.max(0, rawMin - padding);
-  const yMax = diagonal ? 1 : yReverse ? series.length : rawMax + padding;
+  if (!points.length) return <div className="chart-empty">Select at least two models to calculate performance history.</div>;
+  const xMin = Math.min(...points.map((point) => point.x));
+  const xMax = Math.max(...points.map((point) => point.x));
+  const values = points.map((point) => mode === "rank" ? point.rank : point.score);
+  const rawMin = Math.min(...values), rawMax = Math.max(...values);
+  const valuePadding = Math.max((rawMax - rawMin) * .18, .0025);
+  const yMin = mode === "rank" ? 1 : Math.max(0, rawMin - valuePadding);
+  const yMax = mode === "rank" ? METHODS.length : Math.min(1, rawMax + valuePadding);
   const x = (value: number) => left + (value - xMin) / Math.max(xMax - xMin, 1) * (width - left - right);
-  const y = (value: number) => top + (yReverse ? (value - yMin) : (yMax - value)) / Math.max(yMax - yMin, .0001) * (height - top - bottom);
-  const yTicks = Array.from({ length: 5 }, (_, index) => yMin + (yMax - yMin) * index / 4);
-  const xTicks = Array.from(new Set([xMin, xMin + (xMax - xMin) / 2, xMax]));
-  return <div className="history-chart">
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={series.map((item) => item.name).join(", ")}>
-      {yTicks.map((tick) => <g key={tick}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} className="chart-grid" /><text x={left - 9} y={y(tick) + 4} textAnchor="end">{yFormat(tick)}</text></g>)}
-      {xTicks.map((tick) => {
-        const nearest = points.reduce((best, point) => Math.abs(point.x - tick) < Math.abs(best.x - tick) ? point : best, points[0]);
-        const label = xFormat ? xFormat(tick) : nearest.label?.slice(0, 7) ?? String(Math.round(tick));
-        return <text key={tick} x={x(tick)} y={height - 13} textAnchor="middle">{label}</text>;
-      })}
-      {diagonal && <line x1={x(0)} y1={y(0)} x2={x(1)} y2={y(1)} className="chart-diagonal" />}
-      {series.map((item) => <g key={item.name}>
-        <polyline points={item.values.map((point) => `${x(point.x)},${y(point.y)}`).join(" ")} fill="none" stroke={item.color} strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" />
-        {item.values.map((point, index) => <circle key={index} cx={x(point.x)} cy={y(point.y)} r="2.6" fill="#fff" stroke={item.color} strokeWidth="1.7"><title>{item.name}: {yFormat(point.y)}{point.label ? ` · ${point.label}` : ""}</title></circle>)}
+  const y = (value: number) => top + (mode === "rank" ? value - yMin : yMax - value) / Math.max(yMax - yMin, .0001) * (height - top - bottom);
+  const yTicks = mode === "rank"
+    ? Array.from({ length: METHODS.length }, (_, index) => index + 1)
+    : Array.from({ length: 5 }, (_, index) => yMin + (yMax - yMin) * index / 4);
+  const runPoints = series[0]?.values ?? [];
+  const tickCount = Math.min(6, runPoints.length);
+  const xTicks = Array.from(new Set(Array.from({ length: tickCount }, (_, index) => runPoints[Math.round(index * (runPoints.length - 1) / Math.max(tickCount - 1, 1))])));
+  const yValue = (point: HistoryPoint) => mode === "rank" ? point.rank : point.score;
+  const yLabel = (value: number) => mode === "rank" ? `#${Math.round(value)}` : value.toFixed(3);
+  const hoverX = hovered ? x(hovered.point.x) : 0;
+  const hoverY = hovered ? y(yValue(hovered.point)) : 0;
+  const tooltipX = hoverX > width - 230 ? hoverX - 202 : hoverX + 12;
+  const tooltipY = Math.max(8, Math.min(height - bottom - 82, hoverY - 38));
+
+  return <div className="history-chart performance-history-chart" onMouseLeave={() => setHovered(null)}>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${mode === "rank" ? "Rank" : "1 minus Brier"} history for ${series.map((item) => item.name).join(", ")}`}>
+      {yTicks.map((tick) => <g key={tick}><line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} className="chart-grid" /><text x={left - 10} y={y(tick) + 4} textAnchor="end">{yLabel(tick)}</text></g>)}
+      {xTicks.map((point, index) => <text key={`${point.date}-${index}`} x={x(point.x)} y={height - 17} textAnchor={index === 0 ? "start" : index === xTicks.length - 1 ? "end" : "middle"}>{formatRunDate(point.date)}</text>)}
+      {hovered && <line x1={hoverX} x2={hoverX} y1={top} y2={height - bottom} className="performance-hover-line" />}
+      {series.map((item) => <g key={item.id}>
+        <polyline points={item.values.map((point) => `${x(point.x)},${y(yValue(point))}`).join(" ")} fill="none" stroke={item.color} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+        {item.values.map((point) => <circle
+          key={point.date}
+          cx={x(point.x)}
+          cy={y(yValue(point))}
+          r={hovered?.item.id === item.id && hovered.point.date === point.date ? 6 : 3.5}
+          fill="#fff"
+          stroke={item.color}
+          strokeWidth="2.2"
+          tabIndex={0}
+          role="img"
+          aria-label={`${item.name}, ${point.date}, rank ${point.rank}, 1 minus Brier ${point.score.toFixed(4)}`}
+          onMouseEnter={() => setHovered({ item, point })}
+          onFocus={() => setHovered({ item, point })}
+          onBlur={() => setHovered(null)}
+        />)}
       </g>)}
+      {hovered && <g className="performance-tooltip" pointerEvents="none">
+        <rect x={tooltipX} y={tooltipY} width="190" height="72" rx="7" />
+        <circle cx={tooltipX + 14} cy={tooltipY + 17} r="4" fill={hovered.item.color} />
+        <text x={tooltipX + 25} y={tooltipY + 21} className="performance-tooltip-title">{hovered.item.name}</text>
+        <text x={tooltipX + 14} y={tooltipY + 41}>{formatRunDate(hovered.point.date)} · #{hovered.point.rank}</text>
+        <text x={tooltipX + 14} y={tooltipY + 60}>1 − Brier {hovered.point.score.toFixed(4)} · {hovered.point.events.toLocaleString()} events</text>
+      </g>}
     </svg>
-    <div className="chart-legend">{series.map((item) => <span key={item.name}><i style={{ background: item.color }} />{item.name}</span>)}</div>
+    <div className="performance-legend">{series.map((item) => {
+      const latest = item.values[item.values.length - 1];
+      return <span key={item.id}><i style={{ background: item.color }} /><b>{item.name}</b><small>{mode === "rank" ? `#${latest?.rank ?? "—"}` : latest?.score.toFixed(4) ?? "—"}</small></span>;
+    })}</div>
   </div>;
+}
+
+function formatRunDate(value: string) {
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 }
 
 function mean(values: number[]) { return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0; }
