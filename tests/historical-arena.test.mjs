@@ -151,6 +151,10 @@ test("public leaderboard keeps compact method and individual model standings", (
   assert.match(publicArenaSource, /onTrack\("forecasters"\)/);
 });
 
+test("live benchmark clears a transient load error after a successful retry", () => {
+  assert.match(publicArenaSource, /setSnapshot\(payload\);\s*setError\(""\);/);
+});
+
 test("historical arena uses the compact benchmark information hierarchy", () => {
   assert.match(historicalSource, /Historical Aggregation Leaderboard/);
   assert.match(historicalSource, /className="history-stat-line"/);
