@@ -2,9 +2,9 @@
 
 ![Aggregation Arena](public/og.png)
 
-一个支持 Polymarket 自动选题、共享信息检索、LLM 自动预测、手工概率录入、自动聚合、结果结算、实时排名和审计追踪的预测聚合 Benchmark 平台。
+一个支持 Polymarket + Kalshi 自动选题、共享信息检索、LLM 自动预测、手工概率录入、自动聚合、结果结算、实时排名和审计追踪的预测聚合 Benchmark 平台。
 
-系统每小时从 Polymarket Gamma API 同步活跃市场，先做成交量、流动性、截止窗口、概率区间和规则完整性筛选，再按五个固定类别均衡发布每日题集。与 Prophet Arena 一样，Polymarket 的互斥 `negRisk` Event 会保留全部具名 Market 作为 outcomes；模型对同一 Event 输出完整概率分布，结算后以 Event Brier Score 实时更新 Leaderboard。旧的 Yes / No 题目继续兼容。
+系统每小时从 Polymarket Gamma API 和 Kalshi 公开 Market API 同步活跃市场，应用平台对应的成交活跃度、截止窗口、概率区间和规则完整性筛选。每天只在两个平台都能提供足够多样的合格题时发布一个严格的 20 题批次：Polymarket 10 题、Kalshi 10 题。系统在平台内部、跨平台和最近 7 天历史之间去除同一现实事件及高度相似题目，并按五个固定类别维持软均衡。结算后以 Event Brier Score 实时更新 Leaderboard。
 
 Cloudflare Worker 版本：
 
@@ -31,30 +31,32 @@ Cloudflare Worker 版本：
 
 ## 已经实现的功能
 
-### Polymarket 自动选题
+### Polymarket + Kalshi 自动选题
 
-- 每小时 `00` 分从 Gamma API 拉取按 24 小时成交量排序的活跃事件，最多读取前 800 个（每页 100 个、最多 8 页，末页不足 100 个时提前停止）。
+- 每小时 `00` 分同时同步 Polymarket Gamma 活跃事件和 Kalshi 公开开放事件；外部请求有 15 秒超时和单页 8 MiB 响应上限。
+- Polymarket 最多通过 keyset cursor 读取前 800 个事件（每页 50 个）；Kalshi 最多读取 2,000 个事件并使用官方 cursor 分页，无需 Kalshi API key。
 - 候选 Market 仍先通过严格的 `Yes / No` 质量筛选；入选时按 `source_event_id` 合并为 Event。
-- 最低总成交量 `$35,000`。
-- 最低 24 小时成交量 `$7,500`。
-- 最低流动性 `$7,500`。
-- 截止时间距离同步时刻必须在 `48 小时–90 天`。
+- Polymarket 门槛：总成交量至少 `$35,000`、24 小时成交量至少 `$7,500`、流动性至少 `$7,500`，截止时间为 `48 小时–90 天`。
+- Kalshi 门槛：总成交量至少 `250` contracts、24 小时成交量至少 `25` contracts，截止时间为 `48 小时–180 天`；由于公开字段的显示 liquidity 常为 0，使用 open interest / quoted size 作为排序深度，不设伪造的 liquidity 硬门槛。
 - Yes 概率必须位于 `0.05–0.95`，避免接近确定的题目。
 - 有开始时间时，市场至少存在 6 小时。
 - 题目说明与结算依据必须有足够文字。
 - 与 Prophet Arena 的公开研究设计一致，固定为五类：Politics、Economics、Science、Sports、Entertainment。
-- 每日 `00:10 UTC` 生成不可变批次，默认每类最多 3 题、总计最多 15 题。
-- 若某类没有足够高质量题目，保留空位，不用低质量题补齐。
+- 每日 `00:10 UTC` 生成不可变批次，严格要求 Polymarket 10 题 + Kalshi 10 题。
+- 五类的全局软目标为每类 4 题、每个平台每类先取 2 题；若某类不足，可由同平台其他类别补齐，但平台 10 + 10 配额不变。
+- 如果任一平台无法提供 10 道符合质量和 diversity 约束的题目，当日批次标记为 `incomplete` 并保持未发布，不会从另一平台借题补位。
+- `incomplete` 或中断在 `running` 的当日批次会在后续成功的整点同步后自动重试，仍使用同一个不可变 run ID。
 - 一个 Polymarket Event 每个批次最多入选一次；若它是 `negRisk` 互斥 Event，则保留全部活跃、具名 outcomes，而不是只保留代表 Market。
 - 自动忽略 `Company A`、`Person X` 等尚未具名的 augmented negRisk 占位 Market。
-- 标题高度相似的市场自动去重。
+- 标题高度相似的市场自动跨平台去重；同一 Kalshi event 下的多个日期或阈值 market 最多入选一个。
+- 最近 7 天出现过的同事件或高度相似题目会被拦截。
 - 已经入选过的 market 永久不重复选择。
 - 入选时保存价格、成交量、流动性、选题分数、类别和批次 ID。
 - Curation 页面每 30 秒刷新，显示最近同步、筛选后数量、类别配额和最新题集。
 - Pipeline 页面显示自动化健康状态、最后成功同步时间和最近一次运行状态。
 - 每轮仍以完整 800 个 Event / 全部 Market 计算门槛和类别统计，但 D1 只持久化至少含一个合格 Market 的 Event，并保留其全部 outcomes，避免无意义的大规模小时写入。
 - 超过 20 分钟仍未完成的同步会在下一轮自动标记为 `failed`，不会永久停在 `running`。
-- 临近截止的已选题会检查 Polymarket 最终状态；明确结算后自动写回 Arena 事件。
+- 临近截止的已选题会分别检查 Polymarket 和 Kalshi 最终状态；明确结算后自动写回 Arena 事件。
 
 ### 事件管理
 
@@ -79,16 +81,16 @@ Cloudflare Worker 版本：
 
 - 使用 Tavily Basic Search 为每道入选题目检索最多 10 个近期来源。
 - 在 Forecast Pipeline 中直接展示全部冻结来源、域名、发布日期、引用状态和原文链接。
-- 一道题只检索一次；新闻来源、检索时间，以及 Polymarket 入选时和预测前的价格、成交量、流动性双快照冻结到 `research_contexts`。
+- 一道题只检索一次；新闻来源、检索时间，以及来源市场入选时和预测前的价格、成交量、深度双快照冻结到 `research_contexts`。
 - 所有当前和未来模型复用完全相同的 Context，避免检索差异污染模型比较。
-- 当前接入两个不同模型家族：Meta `@cf/meta/llama-3.2-3b-instruct` 与 Google `@cf/google/gemma-4-26b-a4b-it`。
+- 当前注册 Prophet Arena Fixed Context 的 18 个模型，通过私有 OpenAI-compatible Gateway 调用；不使用相近型号静默替代。
 - Prompt 仿照 Prophet Arena：明确题目、结算规则、截止时间、共享来源和市场快照。
 - 模型必须为 Event 的每个 outcome key 输出概率、最多三句话的理由和所引用的 Source Rank。
 - 系统解析 Prophet 风格的 outcome 数组并归一化到概率 simplex；缺少任何 outcome 时自动重试一次。
 - 每次运行完整保存模型、Prompt 版本、原始响应、延迟、引用来源和失败原因。
 - 二元预测写入 `predictions`；多 outcome 预测写入 `prediction_outcomes` 和不可变 `prediction_outcome_history`，随后进入 Aggregation 和 Leaderboard。
 - Forecasts 页面显示流水线配置、待处理数量、预测结果、理由和冻结证据。
-- 每小时 `20` 分独立补跑最多 3 个 model-event 任务；即使整点 Polymarket 同步失败，模型队列仍会继续处理已有题目。同一 Event 的两个模型复用同一个 Frozen Context，不会重复调用 Tavily。管理员也可以手工触发下一个任务。
+- 每小时 `20` 分独立补跑最多 16 个 model-event 任务；即使整点市场同步失败，模型队列仍会继续处理已有题目。同一 Event 的 18 个模型复用同一个 Frozen Context，不会重复调用 Tavily。管理员也可以手工触发下一个任务。
 
 ### 聚合计算
 
@@ -138,14 +140,15 @@ Cloudflare Worker 版本：
 
 ## ForecastBench Historical Arena
 
-公开网站导航中的 **Historical Arena** 是独立于 Polymarket 实时榜的历史聚合回测页：
+公开网站导航中的 **Historical Arena** 是独立于 Polymarket + Kalshi 实时榜的历史聚合回测页：
 
 - 数据来自完整 ForecastBench resolved marginal panel 的公开二元事件轨道：1,233,050 条可用预测记录、8,620 个已结算事件、81 个基础模型、11 家模型提供方、25 个预测轮次。除 OpenAI / Anthropic 外，还包括 Google、Meta、DeepSeek、Mistral、Qwen、Moonshot、xAI、Z.ai 和 Minimax。联合信息结构 targets 不混入此公开榜单。
-- 用户可以自由勾选要聚合的基础模型；模型集合和模型数 `K` 都是聚合器输入，选择变化后六种方法、排名和全部图表会立即重算。
+- 用户可以自由勾选要聚合的基础模型；模型集合和模型数 `K` 都是聚合器输入，选择变化后聚合方法、排名和 Performance History 会立即重算。
 - 默认且唯一使用 strict-intersection aggregation：只有每个已选模型都提交过预测的事件才进入聚合，所有方法始终共享同一个完整共同样本。
 - 历史榜单可在“只看 aggregation methods”和“aggregation methods + 当前所选 individual models”之间切换；两种视图中的每个条目都使用同一严格交集事件集评分。
 - 页面显示共同样本的 Events；Coverage、Avg K、available-case 开关以及按实际 K 分组的图表已移除，避免把样本构成差异误读成模型数量效应。
 - Past-performance Pool 的权重只使用更早预测轮次的历史 Brier，避免用当前题目的结果训练当前题目。
+- 当且仅当选择两个模型时，历史榜增加 **CPTEC**：`p = sigmoid(w × logit(p₁) + (1 − w) × logit(p₂))`。`w` 是第一个已选模型的权重，可在 `0` 到 `1` 间输入，默认 `0.56`；第二个模型自动使用 `1 − w`。该参数同步到 URL 的 `cptec_w`，因此同一回测设置可以直接分享。
 - 分类严格沿用 ForecastBench 官方结构：先分为 **Dataset questions** 与 **Market questions**，再按 question set 的官方 `source` 筛选（ACLED、DBnomics、FRED、Wikipedia、Yahoo Finance、Manifold、Metaculus、Polymarket、INFER）。页面不再把本地规则生成的 topic 标签呈现为 ForecastBench 官方分类。
 - 每个事件使用 `forecast_due_date + official source + event_id` 连接 question set、resolution 与预测。`event_id` 只在同一 source 内唯一，因此 source 不能从连接键中省略。
 - 提供 Prophet Arena 风格的全宽 Performance History，可在累计排名与累计 `1 − Brier` 数值之间切换。
@@ -180,19 +183,19 @@ Cloudflare Worker 版本：
 自动选题的数据流：
 
 ```text
-Polymarket Gamma API
+Polymarket Gamma API + Kalshi Market API
       ↓ 每小时同步
-硬筛选：二元 / 成交量 / 流动性 / 截止时间 / 价格 / 规则
+平台对应硬筛选：二元 / 成交活跃度 / 截止时间 / 价格 / 规则
       ↓
 Prophet Arena 五领域分类 + 综合质量分数排序
       ↓ 每日 00:10 UTC
-每类最多 3 题 + event 去重 + 近重复去重 + 永久去重
+严格 10 Polymarket + 10 Kalshi + event-family 去重 + 跨平台语义去重 + 7 天重复拦截
       ↓
-不可变 selection run，例如 poly-2026-07-29-v1
+不可变 selection run，例如 live-2026-08-10-v1
       ↓
 写入 Arena events，进入统一预测和聚合流程
       ↓
-Polymarket 明确结算后自动同步结果
+来源市场明确结算后自动同步结果
       ↓
 实时更新 Leaderboard
 ```
@@ -200,38 +203,48 @@ Polymarket 明确结算后自动同步结果
 ## LLM 自动预测流水线
 
 ```text
-Daily balanced Polymarket release
+Daily balanced dual-market release
       ↓
 Tavily Basic Search（每道题一次，最多 10 个来源）
       ↓
 冻结 Research Context
   ├─ Sources + rank + URL + summary
   ├─ Search query + as-of time
-  └─ Polymarket price / volume / liquidity snapshot
+  └─ Source-market price / volume / depth snapshot
       ↓
 同一份 Context 分发给所有模型
       ↓
-并行模型注册表
-  ├─ Meta Llama 3.2 3B
-  └─ Google Gemma 4 26B A4B
+Prophet Arena Fixed Context 模型注册表（18 个模型）
+  ├─ OpenAI / Anthropic / Google / xAI
+  ├─ Moonshot / Zhipu / DeepSeek / Qwen / MiniMax
+  └─ Meta / Thinking Machines / Lightning Rod Labs
+      ↓
+OpenAI-compatible Gateway（LiteLLM 或等价实现）
       ↓
 严格 JSON 解析 + 概率归一化 + 一次格式重试
       ↓
-Prediction History → Aggregators → Brier Leaderboard
+18 个基础预测完成
+  ├─ Blind Harness：匿名概率 + 严格 pre-event 历史
+  └─ Evidence-Aware Harness：冻结证据 + 概率 + rationale
+      ↓（同一个 Gateway，失败可重试）
+Prediction History → Deterministic + Harness Aggregators → Brier Leaderboard
 ```
 
 这个实现保留了 Prophet Arena 最重要的实验控制：同一事件的模型必须看到同样的信息来源与市场快照。模型注册表按 Event × Model 生成任务，已有 `context_id` 时直接复用，不能重新搜索。
 
-### 免费额度估算
+模型面板固定为 2026-08-10 Prophet Arena 公共 scoring API 中 `is_live=true` 的 18 个 Fixed Context 模型：Gemini 3.6 Flash、Claude Fable 5、Gemini 3.1 Pro、GPT-5.6 Sol、GPT-5.5、Claude Opus 4.8、Kimi K3、Inkling、Claude Sonnet 4.6、Grok 4.5、GLM-5.2、DeepSeek V4 Pro、Muse Spark 1.1、Qwen 3.6 Plus、Grok 4.3、Inkling Small、MiniMax M2.7 和 Foresight V3。Market baseline 和 Agentic predictors 不进入这个模型注册表。
+
+### 调用量
 
 - Tavily 免费账户每月 1,000 API Credits；Basic Search 每次 1 Credit。
-- 默认每日最多 15 题，每题搜索一次，30 天约使用 `15 × 30 = 450 Credits`。
-- 两个 Cloudflare Workers AI 模型共享同一份每日免费 Neurons 配额；实际消耗取决于 Prompt 来源长度和输出长度。
-- 为减少消耗，当前每小时最多处理 3 个 model-event 任务、每个来源摘要最多 1,800 字符、模型最多输出 700 tokens。
+- 每日发布 20 题，每题搜索一次，30 天约使用 `20 × 30 = 600 Credits`。
+- 18 个模型每天最多产生 `20 × 18 = 360` 个 model-event forecasts。
+- 预测 Cron 每小时最多处理 16 个 model-event jobs；正常输出每个 job 只调用一次模型，只有 JSON 无法解析时才做一次格式重试。
+- 每个来源摘要最多 1,800 字符，模型输出最多 700 tokens。模型费用由 Gateway 后面的实际供应商和 deployment alias 决定。
 
 ### 配置 API 密钥
 
-先在 <https://app.tavily.com> 免费注册并复制 `tvly-...` API Key。不要把 Key 写入 `wrangler.jsonc`、README、Git commit 或前端代码。
+先在 <https://app.tavily.com> 获取 Tavily Key，并准备一个 OpenAI Chat Completions-compatible Gateway。推荐使用私有 LiteLLM Gateway：它可以把稳定的 Prophet slug 映射到不同供应商的真实 deployment，并在 Worker 侧保留一套统一请求协议。不要把任何 Key 写入 `wrangler.jsonc`、README、Git commit 或前端代码。
 
 在正确的 Cloudflare 账户登录后执行：
 
@@ -239,26 +252,36 @@ Prediction History → Aggregators → Brier Leaderboard
 npx wrangler login
 npx wrangler whoami
 npx wrangler secret put TAVILY_API_KEY
+npx wrangler secret put PROPHET_MODEL_GATEWAY_URL
+npx wrangler secret put PROPHET_MODEL_GATEWAY_API_KEY
 ```
 
-最后一条命令会提示粘贴 Key。项目已经在 `wrangler.jsonc` 中声明 Workers AI binding：
+`PROPHET_MODEL_GATEWAY_URL` 必须是完整 endpoint，例如：
+
+```text
+https://models.example.com/v1/chat/completions
+```
+
+18 个基础预测模型、Blind Harness 和 Evidence-Aware Harness 共用这一个 Gateway 和 API Key；Harness 默认调用 `qwen-3.6-plus`。默认情况下，请让 Gateway 直接暴露 Prophet slug（例如 `gpt-5.6-sol` 和 `qwen-3.6-plus`），此时不需要设置 `PROPHET_MODEL_ID_MAP`。某个供应商 deployment 名不同时，再把这个可选变量设置为单行 JSON 映射：
 
 ```json
-"ai": {
-  "binding": "AI"
-}
+{"gpt-5.6-sol":"openai/gpt-5.6-sol-prod","claude-fable-5":"anthropic/claude-fable-5-prod"}
 ```
 
-部署后打开网站的 `Pipeline` 页面查看 `AUTOMATION` 状态，也可以在 `Forecasts` 页面检查模型任务。配置正常时可等待每小时 `:20` 的预测 Cron，或登录后点击 `Run next event`。
+没有公开 provider endpoint 的模型也必须由这个私有 Gateway 提供对应 alias；应用不会用相近型号静默替代。若 Gateway 不支持某个 alias，该 model-event 会记录为 `failed`，其他模型继续运行。
 
-生产环境若需要立即发布当日题集并生成首批 3 条预测，可由维护者使用仅存于
+两种 Harness 会在同一个事件的 18 个基础模型均完成后自动运行。Gateway 的网络错误、超时或上游错误会记录为可重试的 `failed`，不会永久替换为聚合结果；只有两次成功请求都返回无法解析的权重 JSON 时，才会记录 equal-mean fallback。已解决事件的维护者回填允许从至少两个完整基础预测开始。
+
+本地开发先复制 [`.dev.vars.example`](.dev.vars.example) 为 `.dev.vars` 再填入真实值；`.dev.vars` 已被 Git 忽略。部署后打开网站的 `Pipeline` 页面查看配置状态，也可以在 `Forecasts` 页面检查模型任务。配置正常时可等待每小时 `:20` 的预测 Cron，或登录后点击 `Run next forecast`。
+
+生产环境若需要立即发布当日题集并生成首批 16 条预测，可由维护者使用仅存于
 Cloudflare Secret 的 `PIPELINE_ADMIN_TOKEN` 调用 `run_daily_forecast_batch`。
 该操作会复用当天不可变 selection run，多次调用不会重复发布题目。
 同一密钥还可以调用 `run_pipeline_sync`，用于运维人员立即执行一次与整点 Cron 相同的同步和结算检查。
 
 ### 本地测试限制
 
-Cloudflare Workers AI 不能在纯本地环境执行模型推理。本地测试覆盖 Query、Source 去重、Prompt、JSON 解析和概率校验；真实搜索与模型端到端测试需要使用 Cloudflare 远程运行环境，并设置 Tavily Secret。
+单元测试覆盖模型面板、Gateway payload、Model ID override、Query、Source 去重、Prompt、JSON 解析和概率校验。真实搜索与模型端到端测试需要配置 Tavily 与 Gateway，并会产生外部 API 费用，因此不会在普通 `npm test` 中自动执行。
 
 选题配置在 [`lib/curation-core.js`](lib/curation-core.js)，数据同步和定时任务在 [`lib/polymarket.ts`](lib/polymarket.ts)。修改门槛时应同时升级 `configVersion`，这样历史批次仍然可以解释。
 
@@ -769,7 +792,7 @@ npx wrangler deploy
 
 - `0 * * * *`：每小时同步候选市场并检查结算。
 - `10 0 * * *`：每日发布新的均衡题集。
-- `20 * * * *`：每小时独立处理最多 3 个 model-event 预测任务。
+- `20 * * * *`：每小时独立处理最多 16 个 model-event 预测任务。
 
 必须先检查 `wrangler whoami` 的账号和目标 D1 ID。当前生产目标是 ChengPeng 账户与 `aggregation-arena-production`。
 
@@ -888,17 +911,17 @@ aggregation-benchmark-platform/
 | `prediction_outcomes` | 多 outcome Event 的当前概率向量 |
 | `prediction_outcome_history` | 多 outcome 概率向量的不可变历史 |
 | `audit_log` | 操作审计记录 |
-| `polymarket_candidates` | 候选市场、筛选结果和淘汰原因 |
+| `polymarket_candidates` | Polymarket + Kalshi 统一候选存储、来源、diversity group、筛选结果和淘汰原因（保留旧表名兼容现有 D1） |
 | `market_snapshots` | 合格市场的小时级价格和流动性快照 |
-| `curation_sync_runs` | 每次 Polymarket 同步的运行记录 |
+| `curation_sync_runs` | 每次双市场同步及分来源健康状态的运行记录 |
 | `selection_runs` | 不可变的每日选题批次 |
 | `selection_items` | 批次内题目及入选时快照 |
 
 ## 当前限制
 
-- 手工创建和手工概率录入界面目前仍以 Yes / No 为主；Polymarket 自动流水线支持多 outcome Event。
-- 当前自动 Predictor 包含 Llama 3.2 3B 与 Gemma 4 26B A4B；模型共享 Evidence，但两次独立推理。六种 aggregation 会在同一 Event 收齐两个底层预测后产生有意义的组合结果。
-- 自动结算要求 Polymarket 已关闭，并且 Event 中恰有一个 outcome Market 的 Yes 价格达到 `≥0.999`。
+- 手工创建和手工概率录入界面目前仍以 Yes / No 为主；Polymarket 自动流水线支持多 outcome Event，Kalshi 当前按独立二元 Market 接入。
+- 当前 18 个自动 Predictor 共享同一份 frozen evidence，但分别独立推理；外部 Gateway 必须提供全部 Prophet model alias。
+- 自动结算分别读取 Polymarket 的最终 outcome 价格和 Kalshi 的官方 `result` 字段；只有明确结果才写入 Arena。
 - 固定分类器使用标签和关键词；低置信度的边界题仍可能需要后续人工审核。
 - 不支持连续结果或数值预测评分；多 outcome 必须互斥且穷尽。
 - 没有 difficulty-adjusted Brier 或事件固定效应。

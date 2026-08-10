@@ -12,9 +12,12 @@
   "images": {
     "binding": "IMAGES"
   },
-  "ai": {
-    "binding": "AI",
-    "remote": true
+  "secrets": {
+    "required": [
+      "TAVILY_API_KEY",
+      "PROPHET_MODEL_GATEWAY_URL",
+      "PROPHET_MODEL_GATEWAY_API_KEY"
+    ]
   },
   "triggers": {
     "crons": ["0 * * * *", "10 0 * * *", "20 * * * *", "30 * * * *"]

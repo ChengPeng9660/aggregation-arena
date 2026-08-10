@@ -114,6 +114,26 @@ test("historical model count is user-adjustable across the published model panel
   assert.ok(resultsStart >= 0 && resultsStart < inputOneStart && inputOneStart < inputTwoStart);
 });
 
+test("historical model picker ranks performance and disables incompatible additions", () => {
+  assert.match(historicalSource, /makeModelPickerRows\(data\.models, filteredEvents, selected\)/);
+  assert.match(historicalSource, /return b\.pickerScore - a\.pickerScore/);
+  assert.match(historicalSource, /1 − Brier \$\{model\.pickerScore\.toFixed\(4\)\}/);
+  assert.match(historicalSource, /!hasCompleteIntersection\(events, \[\.\.\.selected, model\.id\]\)/);
+  assert.match(historicalSource, /disabled=\{model\.unavailable\}/);
+  assert.match(historicalSource, /models with no common resolved events are shown in gray/);
+});
+
+test("historical leaderboard exposes CPTEC only for an exactly two-model selection", () => {
+  assert.match(historicalSource, /name: "CPTEC"/);
+  assert.match(historicalSource, /DEFAULT_CPTEC_WEIGHT/);
+  assert.match(historicalSource, /requestedWeightParam === null \? Number\.NaN/);
+  assert.match(historicalSource, /selected\.length === 2 \? METHODS : BASE_METHODS/);
+  assert.match(historicalSource, /cptecProbability\(values, cptecWeight\)/);
+  assert.match(historicalSource, /CPTEC w · \{firstSelectedModel\?\.name/);
+  assert.match(historicalSource, /1 − w = \{\(1 - cptecWeight\)\.toFixed\(2\)\}/);
+  assert.match(historicalSource, /url\.searchParams\.set\("cptec_w", cptecWeight\.toFixed\(2\)\)/);
+});
+
 test("production arena cannot seed or display synthetic demo events", () => {
   assert.doesNotMatch(arenaSource, /seedDemoIfEmpty|Demo Season initialized|Seeded example event/);
   assert.match(arenaSource, /id NOT LIKE 'demo-%'/);

@@ -37,7 +37,14 @@ test("production server renders the finished Aggregation Arena shell", async () 
     ],
     {
       cwd: new URL("..", import.meta.url),
-      env: { ...process.env, WRANGLER_LOG_PATH: ".wrangler/wrangler-test.log" },
+      env: {
+        ...process.env,
+        WRANGLER_LOG_PATH: ".wrangler/wrangler-test.log",
+        TAVILY_API_KEY: "test-only",
+        PROPHET_MODEL_GATEWAY_URL: "https://models.example.invalid/v1/chat/completions",
+        PROPHET_MODEL_GATEWAY_API_KEY: "test-only",
+        PROPHET_MODEL_ID_MAP: "{}",
+      },
       stdio: "ignore",
     },
   );

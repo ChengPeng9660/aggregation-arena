@@ -4,10 +4,14 @@ import {
   CANONICAL_CATEGORIES,
   CURATION_CONFIG,
   classifyMarket,
+  diversityAnchors,
   evaluateHardEligibility,
+  normalizeKalshiMarket,
   rankCandidates,
   selectPersistenceCandidates,
   selectBalancedCandidates,
+  selectDiverseSourceBalancedCandidates,
+  titleSimilarity,
 } from "../lib/curation-core.js";
 
 const now = new Date("2026-07-29T00:00:00.000Z");
@@ -30,12 +34,18 @@ test("uses the relaxed market activity thresholds", () => {
   assert.equal(CURATION_CONFIG.minimumVolume24h, 7_500);
   assert.equal(CURATION_CONFIG.minimumTotalVolume, 35_000);
   assert.equal(CURATION_CONFIG.minimumLiquidity, 7_500);
+  assert.deepEqual(CURATION_CONFIG.sourceQuotas, { polymarket: 10, kalshi: 10 });
+  assert.equal(CURATION_CONFIG.dailyTotal, 20);
+  assert.equal(CURATION_CONFIG.kalshiMinimumVolume24h, 25);
+  assert.equal(CURATION_CONFIG.kalshiMinimumTotalVolume, 250);
 });
 
 function candidate(overrides = {}) {
   return {
+    sourcePlatform: "polymarket",
     marketId: crypto.randomUUID(),
     sourceEventId: crypto.randomUUID(),
+    diversityGroupId: crypto.randomUUID(),
     title: "Will a well specified event happen before October 2026?",
     description: "This resolves Yes according to the official source by the stated deadline.",
     rules: "Official source is authoritative.",
@@ -65,6 +75,34 @@ test("hard filters reject low-volume and non-binary markets", () => {
   const multiOutcome = evaluateHardEligibility(candidate({ outcomes: ["A", "B", "C"] }), now);
   assert.equal(multiOutcome.eligible, false);
   assert.ok(multiOutcome.reasons.includes("not_binary_yes_no"));
+});
+
+test("normalizes Kalshi's public market schema without requiring display liquidity", () => {
+  const normalized = normalizeKalshiMarket({
+    event_ticker: "KXOPENAIIPO-26",
+    series_ticker: "KXOPENAIIPO",
+    category: "Companies",
+    title: "OpenAI IPO timing",
+  }, {
+    ticker: "KXOPENAIIPO-26-DEC31",
+    event_ticker: "KXOPENAIIPO-26",
+    title: "Will OpenAI complete an IPO before 2027?",
+    status: "active",
+    open_time: "2026-07-01T00:00:00Z",
+    close_time: "2026-12-15T00:00:00Z",
+    last_price_dollars: "0.4200",
+    volume_24h_fp: "40.00",
+    volume_fp: "500.00",
+    open_interest_fp: "120.00",
+    liquidity_dollars: "0.0000",
+    rules_primary: "Resolves Yes if OpenAI completes a public listing before the close time.",
+  }, now);
+  assert.equal(normalized.sourcePlatform, "kalshi");
+  assert.equal(normalized.category, "Economics");
+  assert.equal(normalized.sourceEventId, "kalshi:KXOPENAIIPO-26-DEC31");
+  assert.equal(normalized.diversityGroupId, "kalshi-event:KXOPENAIIPO-26");
+  assert.equal(normalized.yesPrice, 0.42);
+  assert.equal(evaluateHardEligibility(normalized, now).eligible, true);
 });
 
 test("category percentile ranks candidates but is not an eligibility gate", () => {
@@ -121,4 +159,56 @@ test("selector deduplicates source events and never fills weak empty slots", () 
   ];
   const selected = selectBalancedCandidates(candidates, { targetPerCategory: 3 });
   assert.deepEqual(selected.map((item) => item.marketId), ["one", "three"]);
+});
+
+test("dual-market selector publishes exactly 10 plus 10 with cross-source diversity", () => {
+  const uniqueTerms = [
+    "albatross", "banyan", "cobalt", "dahlia", "ember", "fjord",
+    "garnet", "harbor", "indigo", "juniper", "keystone", "lantern",
+    "monsoon", "nectar", "orchid",
+    "prairie", "quartz", "redwood", "saffron", "tundra", "upland",
+    "velvet", "willow", "xenon", "yarrow", "zephyr", "aurora",
+    "bramble", "citadel", "drizzle",
+  ];
+  const candidates = ["polymarket", "kalshi"].flatMap((sourcePlatform, sourceIndex) =>
+    CANONICAL_CATEGORIES.flatMap((category, categoryIndex) =>
+      Array.from({ length: 3 }, (_, index) => {
+        const term = uniqueTerms[sourceIndex * 15 + categoryIndex * 3 + index];
+        return candidate({
+          sourcePlatform,
+          marketId: `${sourcePlatform}-${category}-${index}`,
+          sourceEventId: `${sourcePlatform}-${category}-${index}`,
+          diversityGroupId: `${sourcePlatform}-group-${category}-${index}`,
+          title: `Will ${term} decide the ${category.toLowerCase()} outcome?`,
+          category,
+          selectionScore: 1 - index / 100,
+        });
+      }),
+    ),
+  );
+  // The strongest Kalshi candidate mirrors a Polymarket question and must be
+  // replaced, while a sibling strike from the same Kalshi event is also blocked.
+  const mirrored = candidates.find((item) => item.marketId === "kalshi-Politics-0");
+  mirrored.title = "Will albatross decide the politics outcome?";
+  const firstStrike = candidates.find((item) => item.marketId === "kalshi-Economics-0");
+  const siblingStrike = candidates.find((item) => item.marketId === "kalshi-Economics-1");
+  firstStrike.diversityGroupId = "kalshi-shared-event";
+  siblingStrike.diversityGroupId = "kalshi-shared-event";
+
+  const selected = selectDiverseSourceBalancedCandidates(candidates);
+  assert.equal(selected.length, 20);
+  assert.equal(selected.filter((item) => item.sourcePlatform === "polymarket").length, 10);
+  assert.equal(selected.filter((item) => item.sourcePlatform === "kalshi").length, 10);
+  assert.equal(new Set(selected.map((item) => item.diversityGroupId)).size, 20);
+  for (let left = 0; left < selected.length; left += 1) {
+    for (let right = left + 1; right < selected.length; right += 1) {
+      assert.ok(titleSimilarity(selected[left].title, selected[right].title) < CURATION_CONFIG.titleSimilarityThreshold);
+    }
+  }
+});
+
+test("diversity anchors normalize named entities and possessives", () => {
+  assert.ok(diversityAnchors("Will Trump leave office?").includes("trump"));
+  assert.ok(diversityAnchors("Will Trump's Cabinet change?").includes("trump"));
+  assert.ok(!diversityAnchors("Will the United States change policy?").includes("united"));
 });

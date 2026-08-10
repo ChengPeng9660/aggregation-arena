@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
+import { DEFAULT_CPTEC_WEIGHT, cptecProbability } from "@/lib/cptec-core.js";
 
 type HistoricalModel = { id: string; name: string; organization: string; n: number; variants: number };
 type HistoricalEvent = {
@@ -20,7 +21,7 @@ type HistoricalData = {
   events: HistoricalEvent[];
 };
 
-const METHODS = [
+const BASE_METHODS = [
   { id: "mean", name: "Equal Mean", short: "Mean", color: "#4F207F", rule: "Arithmetic mean of every available selected forecast." },
   { id: "median", name: "Median Pool", short: "Median", color: "#EFAB02", rule: "Median probability; robust to a single extreme forecast." },
   { id: "trimmed", name: "Trimmed Mean", short: "Trimmed", color: "#168368", rule: "20% trimmed mean for K ≥ 5; equal mean fallback for smaller K." },
@@ -29,11 +30,22 @@ const METHODS = [
   { id: "weighted", name: "Past-performance Pool", short: "Weighted", color: "#9A5A2F", rule: "Inverse-Brier weights learned only from earlier forecast rounds." },
 ] as const;
 
+const CPTEC_METHOD = {
+  id: "cptec",
+  name: "CPTEC",
+  short: "CPTEC",
+  color: "#302A33",
+  rule: "Available only for two selected models. CPTEC computes sigmoid(w × logit(p₁) + (1 − w) × logit(p₂)); w applies to the first selected model.",
+} as const;
+
+const METHODS = [...BASE_METHODS, CPTEC_METHOD] as const;
+
 const HISTORY_DATA_VERSION = "2026-08-09-source-aware";
 
 type MethodId = (typeof METHODS)[number]["id"];
 type ScoredEvent = { event: HistoricalEvent; values: Record<MethodId, number> };
 type RankingRow = { id: string; kind: "aggregation" | "model"; name: string; organization?: string; color: string; brier: number; score: number; ece: number; events: number };
+type ModelPickerRow = HistoricalModel & { pickerScore: number | null; pickerEvents: number; unavailable: boolean };
 type HistoryPoint = { x: number; date: string; score: number; rank: number; events: number };
 type HistorySeries = { id: MethodId; name: string; short: string; color: string; values: HistoryPoint[] };
 
@@ -46,6 +58,7 @@ export function HistoricalArena() {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [leaderboardView, setLeaderboardView] = useState<"methods" | "combined">("methods");
+  const [cptecWeight, setCptecWeight] = useState(DEFAULT_CPTEC_WEIGHT);
 
   useEffect(() => {
     fetch(`/forecastbench/history.json?v=${HISTORY_DATA_VERSION}`, { cache: "no-store" })
@@ -57,6 +70,9 @@ export function HistoricalArena() {
         setData(payload);
         const params = new URLSearchParams(window.location.search);
         const requested = params.get("models")?.split(",").filter((id) => payload.models.some((model) => model.id === id));
+        const requestedWeightParam = params.get("cptec_w");
+        const requestedWeight = requestedWeightParam === null ? Number.NaN : Number(requestedWeightParam);
+        if (Number.isFinite(requestedWeight) && requestedWeight >= 0 && requestedWeight <= 1) setCptecWeight(requestedWeight);
         setSelected(requested?.length ? requested : commonCoverageModels(payload, 6).map((model) => model.id));
       })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Historical dataset could not be loaded."));
@@ -67,8 +83,10 @@ export function HistoricalArena() {
     const url = new URL(window.location.href);
     url.searchParams.set("view", "history");
     url.searchParams.set("models", selected.join(","));
+    if (selected.length === 2) url.searchParams.set("cptec_w", cptecWeight.toFixed(2));
+    else url.searchParams.delete("cptec_w");
     window.history.replaceState({}, "", url);
-  }, [selected]);
+  }, [selected, cptecWeight]);
 
   const sources = useMemo(() => data ? Array.from(new Set(data.events
     .filter((event) => questionType === "all" || event.questionType === questionType)
@@ -76,8 +94,9 @@ export function HistoricalArena() {
   const filteredEvents = useMemo(() => data?.events.filter((event) =>
     (questionType === "all" || event.questionType === questionType) && (source === "all" || event.source === source)
   ) ?? [], [data, questionType, source]);
-  const analysis = useMemo(() => data ? analyze(filteredEvents, selected, data.models) : null, [data, filteredEvents, selected]);
-  const visibleModels = useMemo(() => data?.models.filter((model) => `${model.organization} ${model.name}`.toLowerCase().includes(search.toLowerCase())) ?? [], [data, search]);
+  const analysis = useMemo(() => data ? analyze(filteredEvents, selected, data.models, cptecWeight) : null, [data, filteredEvents, selected, cptecWeight]);
+  const modelPickerRows = useMemo(() => data ? makeModelPickerRows(data.models, filteredEvents, selected) : [], [data, filteredEvents, selected]);
+  const visibleModels = useMemo(() => modelPickerRows.filter((model) => `${model.organization} ${model.name}`.toLowerCase().includes(search.toLowerCase())), [modelPickerRows, search]);
 
   if (error) return <section className="history-page"><div className="history-error">{error}</div></section>;
   if (!data || !analysis) return <section className="history-page history-loading"><span />Loading ForecastBench history…</section>;
@@ -85,9 +104,9 @@ export function HistoricalArena() {
   const setModelCount = (requestedCount: number) => {
     const count = Math.min(data.models.length, Math.max(2, Math.round(requestedCount)));
     setSelected((current) => {
-      const retained = data.models.filter((model) => current.includes(model.id)).slice(0, count).map((model) => model.id);
+      const retained = current.slice(0, count);
       if (retained.length === count) return retained;
-      return [...retained, ...data.models.filter((model) => !retained.includes(model.id)).slice(0, count - retained.length).map((model) => model.id)];
+      return extendCompatibleSelection(retained, modelPickerRows, filteredEvents, count);
     });
   };
   const setPreset = (preset: "diverse" | "top" | "all" | "openai") => {
@@ -96,10 +115,20 @@ export function HistoricalArena() {
       : preset === "top" ? data.models.slice(0, count)
       : preset === "all" ? data.models
       : data.models.filter((model) => model.organization.toLowerCase() === preset);
-    setSelected(models.map((model) => model.id));
+    setSelected(extendCompatibleSelection([], models, filteredEvents, models.length));
   };
-  const toggleModel = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const toggleModel = (id: string) => {
+    const row = modelPickerRows.find((model) => model.id === id);
+    if (row?.unavailable) return;
+    setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  };
+  const hasCompatibleCandidate = modelPickerRows.some((model) => !selected.includes(model.id) && !model.unavailable);
   const visibleRanking = leaderboardView === "combined" ? analysis.combinedRanking : analysis.ranking;
+  const firstSelectedModel = data.models.find((model) => model.id === selected[0]);
+  const secondSelectedModel = data.models.find((model) => model.id === selected[1]);
+  const updateCptecWeight = (value: number) => {
+    if (Number.isFinite(value)) setCptecWeight(Math.min(1, Math.max(0, value)));
+  };
 
   return (
     <section className="history-page enter">
@@ -126,13 +155,13 @@ export function HistoricalArena() {
             <span>INPUT 01</span>
             <h2 id="base-forecasters-title">Base forecasters</h2>
           </div>
-          <p>Choose any K from 2 to {data.models.length}. An event enters the leaderboard only when every selected model forecast it.</p>
+          <p>Models are ordered by individual 1 − Brier within the active filters. An event enters the leaderboard only when every selected model forecast it; models with no common resolved events are shown in gray.</p>
           <div className="picker-count-control" aria-label="Number of selected models">
-            <div><span>Selected models</span><b>{selected.length} forecasters</b></div>
+            <div><span>Selected models</span><b>{selected.length} {selected.length === 1 ? "forecaster" : "forecasters"}</b></div>
             <span className="k-stepper">
               <button type="button" onClick={() => setModelCount(selected.length - 1)} disabled={selected.length <= 2} aria-label="Select one fewer model">−</button>
               <input aria-label="Selected model count" type="number" min="2" max={data.models.length} value={selected.length} onChange={(event) => setModelCount(Number(event.target.value))} />
-              <button type="button" onClick={() => setModelCount(selected.length + 1)} disabled={selected.length >= data.models.length} aria-label="Select one more model">+</button>
+              <button type="button" onClick={() => setModelCount(selected.length + 1)} disabled={!hasCompatibleCandidate} aria-label="Select one more compatible model">+</button>
             </span>
           </div>
           <div className="model-preset-block">
@@ -147,9 +176,14 @@ export function HistoricalArena() {
           <input className="model-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search models" aria-label="Search models" />
           <div className="model-options">
             {visibleModels.map((model) => (
-              <label key={model.id} className={selected.includes(model.id) ? "selected" : ""}>
-                <input type="checkbox" checked={selected.includes(model.id)} onChange={() => toggleModel(model.id)} />
-                <span><b>{model.name}</b><small>{model.organization} · {model.n.toLocaleString()} events</small></span>
+              <label
+                key={model.id}
+                className={`${selected.includes(model.id) ? "selected" : ""}${model.unavailable ? " unavailable" : ""}`.trim()}
+                aria-disabled={model.unavailable}
+                title={model.unavailable ? "No resolved events in common with every selected model under the active filters." : undefined}
+              >
+                <input type="checkbox" checked={selected.includes(model.id)} disabled={model.unavailable} onChange={() => toggleModel(model.id)} />
+                <span><b>{model.name}</b><small>{model.organization} · {model.pickerScore === null ? "No scored events" : `1 − Brier ${model.pickerScore.toFixed(4)} · ${model.pickerEvents.toLocaleString()} events`}</small></span>
               </label>
             ))}
           </div>
@@ -158,6 +192,13 @@ export function HistoricalArena() {
           <div className="history-controls">
             <div><span>INPUT 02</span><b>{selected.length < 2 ? "Select at least two forecasters" : `${analysis.eligible.toLocaleString()} events in the complete intersection`}</b></div>
             <div className="history-filter-row">
+              {selected.length === 2 && <label className="cptec-weight-field">CPTEC w · {firstSelectedModel?.name ?? "first model"}
+                <div className="cptec-weight-inputs">
+                  <input type="range" min="0" max="1" step="0.01" value={cptecWeight} aria-label={`CPTEC weight for ${firstSelectedModel?.name ?? "the first selected model"}`} onChange={(event) => updateCptecWeight(Number(event.target.value))} />
+                  <input type="number" min="0" max="1" step="0.01" value={cptecWeight} aria-label="CPTEC weight value" onChange={(event) => updateCptecWeight(Number(event.target.value))} />
+                </div>
+                <small>{secondSelectedModel?.name ?? "Second model"}: 1 − w = {(1 - cptecWeight).toFixed(2)}</small>
+              </label>}
               <label>Question type<select value={questionType} onChange={(event) => { setQuestionType(event.target.value); setSource("all"); }}><option value="all">Dataset + market</option><option>Dataset</option><option>Market</option></select></label>
               <label>Official source<select key={questionType} value={source} onChange={(event) => setSource(event.target.value)}><option value="all">All sources</option>{sources.map((item) => <option key={item}>{item}</option>)}</select></label>
             </div>
@@ -179,7 +220,7 @@ export function HistoricalArena() {
                       <td><span className="history-method"><i style={{ background: row.color }} /><span><b>{row.name}</b>{leaderboardView === "combined" && <small>{row.kind === "aggregation" ? "Aggregation method" : `${row.organization} · Individual model`}</small>}</span></span></td>
                       <td className="history-score">{row.score.toFixed(4)}</td><td>{row.brier.toFixed(4)}</td><td>{row.ece.toFixed(4)}</td><td>{row.events.toLocaleString()}</td>
                     </tr>
-                    {row.kind === "aggregation" && expanded === row.id && <tr className="history-detail"><td colSpan={6}>{METHODS.find((method) => method.id === row.id)?.rule}</td></tr>}
+                    {row.kind === "aggregation" && expanded === row.id && <tr className="history-detail"><td colSpan={6}>{analysis.methods.find((method) => method.id === row.id)?.rule}{row.id === "cptec" && ` Current weights: ${firstSelectedModel?.name ?? "first model"} ${cptecWeight.toFixed(2)}; ${secondSelectedModel?.name ?? "second model"} ${(1 - cptecWeight).toFixed(2)}.`}</td></tr>}
                   </Fragment>
                 )) : <tr><td className="history-empty-row" colSpan={6}>No resolved events contain forecasts from every selected model. Choose models with overlapping forecast rounds.</td></tr>}</tbody>
               </table>
@@ -193,8 +234,9 @@ export function HistoricalArena() {
   );
 }
 
-function analyze(events: HistoricalEvent[], selected: string[], models: HistoricalModel[]) {
+function analyze(events: HistoricalEvent[], selected: string[], models: HistoricalModel[], cptecWeight: number) {
   if (selected.length < 2) return emptyAnalysis();
+  const methods = selected.length === 2 ? METHODS : BASE_METHODS;
   const byDate = new Map<string, HistoricalEvent[]>();
   for (const event of events) byDate.set(event.date, [...(byDate.get(event.date) ?? []), event]);
   const history = new Map<string, { loss: number; n: number }>();
@@ -210,7 +252,7 @@ function analyze(events: HistoricalEvent[], selected: string[], models: Historic
         const prior = history.get(id);
         return prior?.n ? 1 / (0.02 + prior.loss / prior.n) : 1;
       });
-      scored.push({ event, values: aggregate(probabilities, weights) });
+      scored.push({ event, values: aggregate(probabilities, weights, cptecWeight) });
     }
     for (const event of round) for (const id of selected) {
       const probability = event.forecasts[id];
@@ -224,19 +266,19 @@ function analyze(events: HistoricalEvent[], selected: string[], models: Historic
 
   if (!scored.length) return emptyAnalysis();
 
-  const ranking = makeRanking(scored);
+  const ranking = makeRanking(scored, methods);
   const individualRanking = makeIndividualRanking(scored, selected, models);
   const combinedRanking = [...ranking, ...individualRanking].sort(compareRankingRows);
   const dates = Array.from(new Set(scored.map((item) => item.event.date))).sort();
   const runs = dates.map((date, index) => {
     const rows = scored.filter((item) => item.event.date <= date);
-    const ordered = METHODS.map((method) => ({
+    const ordered = methods.map((method) => ({
       id: method.id,
       score: 1 - mean(rows.map((item) => brier(item.values[method.id], item.event.outcome))),
     })).sort((a, b) => b.score - a.score);
     return { date, index, events: rows.length, ordered };
   });
-  const performanceHistory: HistorySeries[] = METHODS.map((method) => ({
+  const performanceHistory: HistorySeries[] = methods.map((method) => ({
     id: method.id,
     name: method.name,
     short: method.short,
@@ -252,14 +294,14 @@ function analyze(events: HistoricalEvent[], selected: string[], models: Historic
       };
     }),
   }));
-  return { eligible: scored.length, scored, ranking, individualRanking, combinedRanking, performanceHistory };
+  return { eligible: scored.length, scored, ranking, individualRanking, combinedRanking, performanceHistory, methods };
 }
 
 function emptyAnalysis() {
-  return { eligible: 0, scored: [] as ScoredEvent[], ranking: [] as RankingRow[], individualRanking: [] as RankingRow[], combinedRanking: [] as RankingRow[], performanceHistory: [] as HistorySeries[] };
+  return { eligible: 0, scored: [] as ScoredEvent[], ranking: [] as RankingRow[], individualRanking: [] as RankingRow[], combinedRanking: [] as RankingRow[], performanceHistory: [] as HistorySeries[], methods: [] as (typeof METHODS)[number][] };
 }
 
-function aggregate(values: number[], weights: number[]): Record<MethodId, number> {
+function aggregate(values: number[], weights: number[], cptecWeight: number): Record<MethodId, number> {
   const ordered = [...values].sort((a, b) => a - b);
   const arithmetic = mean(values);
   const trim = Math.floor(values.length * .2);
@@ -274,11 +316,12 @@ function aggregate(values: number[], weights: number[]): Record<MethodId, number
     logit: logitPool,
     extreme: logistic(logit(arithmetic) * 1.35),
     weighted: values.reduce((sum, value, index) => sum + value * weights[index], 0) / weightTotal,
+    cptec: values.length === 2 ? cptecProbability(values, cptecWeight) : logitPool,
   };
 }
 
-function makeRanking(rows: ScoredEvent[]): RankingRow[] {
-  return METHODS.map((method) => {
+function makeRanking(rows: ScoredEvent[], methods: readonly (typeof METHODS)[number][]): RankingRow[] {
+  return methods.map((method) => {
     const losses = rows.map((row) => brier(row.values[method.id], row.event.outcome));
     const loss = mean(losses);
     return { id: method.id, kind: "aggregation" as const, name: method.name, color: method.color, brier: loss, score: 1 - loss, ece: ece(rows, (row) => row.values[method.id]), events: rows.length };
@@ -308,6 +351,44 @@ function makeIndividualRanking(rows: ScoredEvent[], selected: string[], models: 
 
 function compareRankingRows(a: RankingRow, b: RankingRow) {
   return a.brier - b.brier || (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "aggregation" ? -1 : 1);
+}
+
+function makeModelPickerRows(models: HistoricalModel[], events: HistoricalEvent[], selected: string[]): ModelPickerRow[] {
+  return models.map((model) => {
+    const losses = events.flatMap((event) => {
+      const probability = event.forecasts[model.id];
+      return probability === undefined ? [] : [brier(probability, event.outcome)];
+    });
+    return {
+      ...model,
+      pickerScore: losses.length ? 1 - mean(losses) : null,
+      pickerEvents: losses.length,
+      unavailable: !selected.includes(model.id) && !hasCompleteIntersection(events, [...selected, model.id]),
+    };
+  }).sort((a, b) => {
+    if (a.pickerScore === null) return b.pickerScore === null ? a.name.localeCompare(b.name) : 1;
+    if (b.pickerScore === null) return -1;
+    return b.pickerScore - a.pickerScore || b.pickerEvents - a.pickerEvents || a.name.localeCompare(b.name);
+  });
+}
+
+function hasCompleteIntersection(events: HistoricalEvent[], modelIds: string[]) {
+  return events.some((event) => modelIds.every((id) => event.forecasts[id] !== undefined));
+}
+
+function extendCompatibleSelection(
+  initial: string[],
+  candidates: Array<Pick<HistoricalModel, "id">>,
+  events: HistoricalEvent[],
+  target: number,
+) {
+  const next = [...initial];
+  for (const model of candidates) {
+    if (next.length >= target) break;
+    if (next.includes(model.id) || !hasCompleteIntersection(events, [...next, model.id])) continue;
+    next.push(model.id);
+  }
+  return next;
 }
 
 function diverseModels(models: HistoricalModel[], count: number) {
@@ -364,8 +445,9 @@ function ece(rows: ScoredEvent[], probabilityFor: (row: ScoredEvent) => number) 
 
 function PerformanceHistory({ series, ranking }: { series: HistorySeries[]; ranking: RankingRow[] }) {
   const [mode, setMode] = useState<"rank" | "values">("rank");
-  const [methodCount, setMethodCount] = useState(METHODS.length);
+  const [requestedMethodCount, setRequestedMethodCount] = useState<number | null>(null);
   const [runWindow, setRunWindow] = useState<"6" | "12" | "all">("12");
+  const methodCount = Math.min(series.length, requestedMethodCount ?? series.length);
   const totalRuns = series[0]?.values.length ?? 0;
   const visibleIds = new Set(ranking.slice(0, methodCount).map((row) => row.id));
   const firstRun = runWindow === "all" ? 0 : Math.max(0, totalRuns - Number(runWindow));
@@ -391,8 +473,8 @@ function PerformanceHistory({ series, ranking }: { series: HistorySeries[]; rank
         <b>1 − Brier</b>
       </div>
       <div className="performance-selectors">
-        <label><span>Methods</span><select aria-label="Visible aggregation methods" value={methodCount} onChange={(event) => setMethodCount(Number(event.target.value))}>
-          {METHODS.map((_, index) => index + 1).filter((count) => count >= 3).map((count) => <option key={count} value={count}>{count} of {METHODS.length} methods</option>)}
+        <label><span>Methods</span><select aria-label="Visible aggregation methods" value={methodCount} onChange={(event) => setRequestedMethodCount(Number(event.target.value))}>
+          {series.map((_, index) => index + 1).filter((count) => count >= 3).map((count) => <option key={count} value={count}>{count} of {series.length} methods</option>)}
         </select></label>
         <label><span>Scoring runs</span><select aria-label="Performance history window" value={runWindow} onChange={(event) => setRunWindow(event.target.value as "6" | "12" | "all")}>
           <option value="6">Last 6 runs</option>
@@ -415,13 +497,14 @@ function PerformanceHistoryChart({ series, mode }: { series: HistorySeries[]; mo
   const xMax = Math.max(...points.map((point) => point.x));
   const values = points.map((point) => mode === "rank" ? point.rank : point.score);
   const rawMin = Math.min(...values), rawMax = Math.max(...values);
+  const rankDepth = Math.max(...points.map((point) => point.rank));
   const valuePadding = Math.max((rawMax - rawMin) * .18, .0025);
   const yMin = mode === "rank" ? 1 : Math.max(0, rawMin - valuePadding);
-  const yMax = mode === "rank" ? METHODS.length : Math.min(1, rawMax + valuePadding);
+  const yMax = mode === "rank" ? rankDepth : Math.min(1, rawMax + valuePadding);
   const x = (value: number) => left + (value - xMin) / Math.max(xMax - xMin, 1) * (width - left - right);
   const y = (value: number) => top + (mode === "rank" ? value - yMin : yMax - value) / Math.max(yMax - yMin, .0001) * (height - top - bottom);
   const yTicks = mode === "rank"
-    ? Array.from({ length: METHODS.length }, (_, index) => index + 1)
+    ? Array.from({ length: rankDepth }, (_, index) => index + 1)
     : Array.from({ length: 5 }, (_, index) => yMin + (yMax - yMin) * index / 4);
   const runPoints = series[0]?.values ?? [];
   const tickCount = Math.min(6, runPoints.length);

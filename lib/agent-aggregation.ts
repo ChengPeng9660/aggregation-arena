@@ -12,19 +12,25 @@ import {
   parseHarnessDecision,
   shrinkHarnessWeights,
 } from "@/lib/agent-harness-core.js";
+import { FORECAST_MODELS } from "@/lib/forecast-core.js";
+import {
+  ModelGatewayRequestError,
+  modelGatewayConfigurationProblem,
+  runModelGateway,
+} from "@/lib/model-gateway";
 
 type HarnessEnv = {
   DB: D1Database;
-  AI?: {
-    run(model: string, input: Record<string, unknown>): Promise<unknown>;
-  };
+  PROPHET_MODEL_GATEWAY_URL?: string;
+  PROPHET_MODEL_GATEWAY_API_KEY?: string;
+  PROPHET_MODEL_ID_MAP?: string;
 };
 
 type HarnessInformationSet = "blind" | "evidence-aware";
 
 type HarnessMethod = {
   id: "agg-agent-harness-blind-v1" | "agg-agent-harness-evidence-v1";
-  version: "agent-harness-blind-v1" | "agent-harness-evidence-v1";
+  version: "agent-harness-blind-v2" | "agent-harness-evidence-v2";
   informationSet: HarnessInformationSet;
 };
 
@@ -61,18 +67,18 @@ type HarnessPool = {
   forecasters: HarnessForecaster[];
 };
 
-export const AGENT_HARNESS_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
-export const AGENT_HARNESS_PROMPT_VERSION = "agent-weight-router-v1";
+export const AGENT_HARNESS_MODEL = "qwen-3.6-plus";
+export const AGENT_HARNESS_PROMPT_VERSION = "agent-weight-router-gateway-v2";
 
 export const AGENT_HARNESS_METHODS: HarnessMethod[] = [
   {
     id: "agg-agent-harness-blind-v1",
-    version: "agent-harness-blind-v1",
+    version: "agent-harness-blind-v2",
     informationSet: "blind",
   },
   {
     id: "agg-agent-harness-evidence-v1",
-    version: "agent-harness-evidence-v1",
+    version: "agent-harness-evidence-v2",
     informationSet: "evidence-aware",
   },
 ];
@@ -121,10 +127,13 @@ export async function runAgentHarnessBatch(
   options: { resolvedOnly?: boolean; eventLimit?: number } = {},
 ) {
   await ensureAgentHarnessReady(env.DB);
-  if (!env.AI) {
-    return { configured: false, processedEvents: 0, completed: 0, fallback: 0, message: "Workers AI binding is unavailable" };
+  const gatewayProblem = modelGatewayConfigurationProblem(env);
+  if (gatewayProblem) {
+    return { configured: false, processedEvents: 0, completed: 0, fallback: 0, failed: 0, message: gatewayProblem };
   }
   const eventLimit = Math.max(1, Math.min(10, Number(options.eventLimit || 3)));
+  const requiredForecasts = options.resolvedOnly ? 2 : FORECAST_MODELS.length;
+  const modelPlaceholders = FORECAST_MODELS.map(() => "?").join(", ");
   const statusClause = options.resolvedOnly ? "e.status='resolved'" : "e.status IN ('resolved','open')";
   const rows = await env.DB.prepare(`
     SELECT e.id, e.title, e.description, e.category, e.close_time, e.event_type,
@@ -138,23 +147,24 @@ export async function runAgentHarnessBatch(
     JOIN research_contexts rc ON rc.event_id=e.id AND rc.status='ready'
     WHERE ${statusClause}
       AND (SELECT COUNT(*) FROM model_forecast_runs mfr
-           WHERE mfr.context_id=rc.id AND mfr.status='completed') >= 2
+           WHERE mfr.context_id=rc.id AND mfr.status='completed'
+             AND mfr.participant_id IN (${modelPlaceholders})) >= ?
       AND (
         NOT EXISTS (
           SELECT 1 FROM aggregation_harness_runs ahr
           WHERE ahr.event_id=e.id AND ahr.method_id='agg-agent-harness-blind-v1'
-            AND ahr.method_version='agent-harness-blind-v1'
+            AND ahr.method_version='agent-harness-blind-v2'
             AND ahr.status IN ('completed','fallback')
         ) OR NOT EXISTS (
           SELECT 1 FROM aggregation_harness_runs ahr
           WHERE ahr.event_id=e.id AND ahr.method_id='agg-agent-harness-evidence-v1'
-            AND ahr.method_version='agent-harness-evidence-v1'
+            AND ahr.method_version='agent-harness-evidence-v2'
             AND ahr.status IN ('completed','fallback')
         )
       )
     ORDER BY CASE e.status WHEN 'resolved' THEN 0 ELSE 1 END, rc.as_of_time, e.id
     LIMIT ?
-  `).bind(eventLimit).all<Record<string, unknown>>();
+  `).bind(...FORECAST_MODELS.map((model) => model.participantId), requiredForecasts, eventLimit).all<Record<string, unknown>>();
 
   const outcomes = [];
   for (const row of rows.results) {
@@ -176,22 +186,25 @@ export async function runAgentHarnessBatch(
   return {
     configured: true,
     resolvedOnly: Boolean(options.resolvedOnly),
+    requiredForecasts,
     eventLimit,
     processedEvents: new Set(outcomes.map((item) => item.eventId)).size,
     completed: outcomes.filter((item) => item.status === "completed").length,
     fallback: outcomes.filter((item) => item.status === "fallback").length,
+    failed: outcomes.filter((item) => item.status === "failed").length,
     skipped: outcomes.filter((item) => item.status === "skipped").length,
     outcomes,
   };
 }
 
 async function loadHarnessPool(db: D1Database, event: CandidateEvent): Promise<HarnessPool | null> {
+  const modelPlaceholders = FORECAST_MODELS.map(() => "?").join(", ");
   const runRows = await db.prepare(`
     SELECT participant_id, rationale
     FROM model_forecast_runs
-    WHERE context_id=? AND status='completed'
+    WHERE context_id=? AND status='completed' AND participant_id IN (${modelPlaceholders})
     ORDER BY participant_id
-  `).bind(event.contextId).all<Record<string, unknown>>();
+  `).bind(event.contextId, ...FORECAST_MODELS.map((model) => model.participantId)).all<Record<string, unknown>>();
   const runMap = new Map(runRows.results.map((row) => [String(row.participant_id), String(row.rationale || "")]));
   const participantIds = [...runMap.keys()];
   if (participantIds.length < 2) return null;
@@ -330,18 +343,21 @@ async function runHarnessMethod(env: HarnessEnv, pool: HarnessPool, method: Harn
 
   const aliases = pool.forecasters.map((forecaster) => forecaster.alias);
   const requestStarted = Date.now();
-  let raw: unknown;
+  let raw: unknown = null;
   let rawWeights: Record<string, number>;
   let finalWeights: Record<string, number>;
   let rationale: string;
+  let gatewayModelId = AGENT_HARNESS_MODEL;
   let status: "completed" | "fallback" = "completed";
   let fallbackReason: string | null = null;
-  try {
-    const attempts: unknown[] = [];
-    let decision: ReturnType<typeof parseHarnessDecision> | null = null;
-    let parseError: unknown;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const response = await env.AI!.run(AGENT_HARNESS_MODEL, {
+  const attempts: unknown[] = [];
+  let decision: ReturnType<typeof parseHarnessDecision> | null = null;
+  let parseError: unknown;
+  let gatewayFailure: ModelGatewayRequestError | null = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const gatewayResult = await runModelGateway(env, {
+        modelId: AGENT_HARNESS_MODEL,
         messages: [
           {
             role: "system",
@@ -354,32 +370,59 @@ async function runHarnessMethod(env: HarnessEnv, pool: HarnessPool, method: Harn
               : ""}`,
           },
         ],
-        max_completion_tokens: 500,
+        maxTokens: 500,
         temperature: 0,
         seed: deterministicSeed(`${pool.event.id}-${method.version}-${attempt}`),
-        reasoning_effort: "low",
-        chat_template_kwargs: { enable_thinking: false },
-        response_format: { type: "json_object" },
       });
-      attempts.push(response);
+      gatewayModelId = gatewayResult.gatewayModelId;
+      attempts.push(gatewayResult.payload);
       try {
-        decision = parseHarnessDecision(response, aliases);
+        decision = parseHarnessDecision(gatewayResult.payload, aliases);
         break;
       } catch (error) {
         parseError = error;
       }
+    } catch (error) {
+      if (error instanceof ModelGatewayRequestError) {
+        gatewayFailure = error;
+        break;
+      }
+      throw error;
     }
-    raw = attempts.length === 1 ? attempts[0] : { attempts };
-    if (!decision) throw parseError || new Error("Harness response could not be parsed");
+  }
+  raw = attempts.length === 1 ? attempts[0] : { attempts };
+
+  if (gatewayFailure) {
+    const completedAt = new Date().toISOString();
+    const latencyMs = Date.now() - requestStarted;
+    const failureMessage = errorMessage(gatewayFailure).slice(0, 1200);
+    await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE aggregation_harness_runs SET status='failed', model_id=?, raw_response=?,
+          fallback_reason=?, latency_ms=?, completed_at=? WHERE id=?
+      `).bind(gatewayModelId, serializeRawResponse(raw), failureMessage, latencyMs, completedAt, runId),
+      env.DB.prepare(`
+        INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
+        VALUES ('aggregation.harness_failed', 'event', ?, ?, 'harness-cron', ?)
+      `).bind(
+        pool.event.id,
+        JSON.stringify({ methodId: method.id, runId, status: "failed", error: failureMessage, inputHash }),
+        completedAt,
+      ),
+    ]);
+    return { eventId: pool.event.id, methodId: method.id, status: "failed" as const, error: failureMessage, inputHash };
+  }
+
+  if (decision) {
     rawWeights = decision.weights;
     finalWeights = shrinkHarnessWeights(rawWeights, aliases);
     rationale = decision.rationale;
-  } catch (error) {
+  } else {
     status = "fallback";
-    fallbackReason = errorMessage(error).slice(0, 1200);
+    fallbackReason = errorMessage(parseError || new Error("Harness response could not be parsed")).slice(0, 1200);
     rawWeights = equalHarnessWeights(aliases);
     finalWeights = rawWeights;
-    rationale = "Equal-mean fallback used because the agent decision was unavailable or invalid.";
+    rationale = "Equal-mean fallback used because both gateway responses were valid requests but did not contain a usable weight decision.";
   }
 
   const aliasedProbabilities = finalizeHarnessDistribution(
@@ -400,7 +443,7 @@ async function runHarnessMethod(env: HarnessEnv, pool: HarnessPool, method: Harn
     inputHash,
     inputAsOfTime: pool.event.asOfTime,
     informationSet: method.informationSet,
-    modelId: AGENT_HARNESS_MODEL,
+    modelId: gatewayModelId,
     promptVersion: AGENT_HARNESS_PROMPT_VERSION,
     weights: publicWeights,
     fallback: status === "fallback",
@@ -430,11 +473,12 @@ async function runHarnessMethod(env: HarnessEnv, pool: HarnessPool, method: Harn
   const latencyMs = Date.now() - requestStarted;
   await env.DB.batch([
     env.DB.prepare(`
-      UPDATE aggregation_harness_runs SET status=?, weights_json=?, final_weights_json=?,
+      UPDATE aggregation_harness_runs SET status=?, model_id=?, weights_json=?, final_weights_json=?,
         probabilities_json=?, rationale=?, raw_response=?, fallback_reason=?, latency_ms=?, completed_at=?
       WHERE id=?
     `).bind(
       status,
+      gatewayModelId,
       JSON.stringify(rawWeights),
       JSON.stringify(finalWeights),
       JSON.stringify(probabilities),

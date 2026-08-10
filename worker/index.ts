@@ -1,30 +1,14 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { runPolymarketScheduled } from "../lib/polymarket";
+import { runMarketScheduled } from "../lib/polymarket";
 import { runForecastBatch } from "../lib/forecasting";
 import { runAgentHarnessBatch } from "../lib/agent-aggregation";
 
-interface Env {
-  ASSETS: Fetcher;
-  DB: D1Database;
-  AI: {
-    run(model: string, input: Record<string, unknown>): Promise<unknown>;
-  };
-  TAVILY_API_KEY?: string;
-  IMAGES: {
-    input(stream: ReadableStream): {
-      transform(options: Record<string, unknown>): {
-        output(options: { format: string; quality: number }): Promise<{ response(): Response }>;
-      };
-    };
-  };
-}
-
-interface ExecutionContext {
-  waitUntil(promise: Promise<unknown>): void;
-  passThroughOnException(): void;
-}
+type ImageOutputFormat = "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "image/avif" | "rgb" | "rgba";
+const IMAGE_OUTPUT_FORMATS = new Set<ImageOutputFormat>([
+  "image/jpeg", "image/png", "image/gif", "image/webp", "image/avif", "rgb", "rgba",
+]);
 
 // Image security config. SVG sources with .svg extension auto-skip the
 // optimization endpoint on the client side (served directly, no proxy).
@@ -41,7 +25,10 @@ const worker = {
       return handleImageOptimization(request, {
         fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
         transformImage: async (body, { width, format, quality }) => {
-          const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
+          const outputFormat = IMAGE_OUTPUT_FORMATS.has(format as ImageOutputFormat)
+            ? format as ImageOutputFormat
+            : "image/webp";
+          const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format: outputFormat, quality });
           return result.response();
         },
       }, allowedWidths);
@@ -52,7 +39,7 @@ const worker = {
   async scheduled(controller: { cron: string }, env: Env, ctx: ExecutionContext): Promise<void> {
     let task: Promise<unknown>;
     if (controller.cron === "0 * * * *" || controller.cron === "10 0 * * *") {
-      task = runPolymarketScheduled(env, controller);
+      task = runMarketScheduled(env, controller);
     } else if (controller.cron === "20 * * * *") {
       task = runForecastBatch(env);
     } else if (controller.cron === "30 * * * *") {

@@ -9,7 +9,7 @@ import {
 } from "@/lib/arena";
 import { runAgentHarnessBatch } from "@/lib/agent-aggregation";
 import { getForecastPipelineSnapshot, runForecastBatch } from "@/lib/forecasting";
-import { runPolymarketScheduled, selectDailyBalancedSlate } from "@/lib/polymarket";
+import { runMarketScheduled, selectDailyBalancedSlate } from "@/lib/polymarket";
 import { env } from "cloudflare:workers";
 
 export const dynamic = "force-dynamic";
@@ -32,7 +32,7 @@ export async function GET(request: Request) {
       }),
       getForecastPipelineSnapshot(
         undefined,
-        env as unknown as { AI?: unknown; TAVILY_API_KEY?: string },
+        env as unknown as Parameters<typeof getForecastPipelineSnapshot>[1],
       ),
     ]);
     return Response.json({ ...snapshot, forecastPipeline }, { headers: { "Cache-Control": "no-store" } });
@@ -100,7 +100,7 @@ export async function POST(request: Request) {
       result = { selection, forecast };
     } else if (action === "run_pipeline_sync") {
       const runtime = env as unknown as Parameters<typeof runForecastBatch>[0];
-      result = await runPolymarketScheduled(runtime, { cron: "0 * * * *" });
+      result = await runMarketScheduled(runtime, { cron: "0 * * * *" });
     } else if (action === "run_agent_harness_backfill") {
       const runtime = env as unknown as Parameters<typeof runAgentHarnessBatch>[0];
       result = await runAgentHarnessBatch(runtime, {

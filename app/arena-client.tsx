@@ -73,12 +73,21 @@ type Method = {
 type CurationSnapshot = {
   config: {
     configVersion: string;
+    dailyTotal: number;
+    sourceQuotas: Record<"polymarket" | "kalshi", number>;
     targetPerCategory: number;
+    recentDiversityDays: number;
     minimumTotalVolume: number;
     minimumVolume24h: number;
     minimumLiquidity: number;
     minimumCloseHours: number;
     maximumCloseDays: number;
+    minimumYesPrice: number;
+    maximumYesPrice: number;
+    kalshiMinimumTotalVolume: number;
+    kalshiMinimumVolume24h: number;
+    kalshiMinimumCloseHours: number;
+    kalshiMaximumCloseDays: number;
   };
   latestSync: null | {
     status: string;
@@ -104,6 +113,7 @@ type CurationSnapshot = {
     eligibleCount: number;
     selectedCount: number;
     categoryCounts: Record<string, number>;
+    sourceCounts: Record<string, number>;
     completedAt: string | null;
   };
   categories: {
@@ -117,6 +127,7 @@ type CurationSnapshot = {
   selectedMarkets: {
     marketId: string;
     eventId: string;
+    sourcePlatform: "polymarket" | "kalshi";
     title: string;
     category: string;
     rank: number;
@@ -153,7 +164,7 @@ type ForecastModel = {
 type ForecastPipelineSnapshot = {
   models: ForecastModel[];
   model: ForecastModel;
-  configured: { aiBinding: boolean; searchSecret: boolean };
+  configured: { modelGateway: boolean; modelGatewayProblem: string | null; searchSecret: boolean };
   stats: { contextsReady: number; completed: number; failed: number; pending: number };
   runs: {
     id: string;
@@ -241,8 +252,9 @@ const ACTION_LABELS: Record<string, string> = {
   "forecast.automated_completed": "Automated forecast completed",
   "forecast.pipeline_failed": "Forecast pipeline failed",
   "participant.upserted": "Forecaster updated",
-  "curation.event_selected": "Polymarket event selected",
-  "curation.event_resolved": "Polymarket event resolved",
+  "curation.event_selected": "Market event selected",
+  "curation.event_resolved": "Market event resolved",
+  "curation.selection_incomplete": "Daily release held for source quota",
 };
 
 export function ArenaClient() {
@@ -392,7 +404,7 @@ export function ArenaClient() {
 
       <footer className="public-footer">
         <div><strong>Aggregation Arena</strong><span>Open forecasting aggregation benchmark</span></div>
-        <p>{view === "history" ? "ForecastBench history · interactive model selection · resolved Brier scoring" : "Polymarket questions · frozen research context · public Event Brier scoring"}</p>
+        <p>{view === "history" ? "ForecastBench history · interactive model selection · resolved Brier scoring" : "Polymarket + Kalshi questions · frozen research context · public Event Brier scoring"}</p>
       </footer>
 
       {dialog && (
@@ -460,22 +472,22 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </nav>
 
       <section id="pipeline-stage-1" className="story-stage">
-        <StageHeader number="01" eyebrow="SOURCE" title="Market intake" summary="Active Polymarket events are synced hourly." />
+        <StageHeader number="01" eyebrow="SOURCE" title="Market intake" summary="Active Polymarket and Kalshi events are synced hourly." />
         <div className="funnel-visual">
           <FunnelBar label="Top-volume events fetched" value={curation.latestSync?.fetchedEvents || 0} max={Math.max(1, curation.latestSync?.fetchedEvents || 0)} detail="Active events ordered by 24h volume" tone="purple" />
           <FunnelBar label="Markets normalized" value={fetched} max={Math.max(1, fetched)} detail="Canonical IDs, prices, rules, volume" tone="purple" />
           <FunnelBar label="Markets passing all gates" value={eligible} max={Math.max(1, fetched)} detail={`${fetched ? ((eligible / fetched) * 100).toFixed(1) : "0.0"}% of normalized universe`} tone="gold" />
         </div>
-        <div className="stage-note"><b>Input</b><span>Polymarket Gamma event and market records</span><b>Refresh</b><span>{automation.schedules.intake}</span><b>Latest status</b><span>{automation.latestAttemptStatus || "Waiting for first sync"}</span></div>
+        <div className="stage-note"><b>Input</b><span>Polymarket Gamma + Kalshi public market records</span><b>Refresh</b><span>{automation.schedules.intake}</span><b>Latest status</b><span>{automation.latestAttemptStatus || "Waiting for first sync"}</span></div>
       </section>
 
       <section id="pipeline-stage-2" className="story-stage">
-        <StageHeader number="02" eyebrow="FILTERS" title="Quality gates" summary="The same rules apply to every market." />
+        <StageHeader number="02" eyebrow="FILTERS" title="Quality gates" summary="Source-specific activity gates feed one shared diversity policy." />
         <div className="gate-line">
-          <Gate label="24h volume" value={`≥ ${formatCompactMoney(curation.config.minimumVolume24h)}`} />
-          <Gate label="Total volume" value={`≥ ${formatCompactMoney(curation.config.minimumTotalVolume)}`} />
-          <Gate label="Liquidity" value={`≥ ${formatCompactMoney(curation.config.minimumLiquidity)}`} />
-          <Gate label="Close window" value={`${curation.config.minimumCloseHours}h–${curation.config.maximumCloseDays}d`} />
+          <Gate label="Daily mix" value={`${curation.config.sourceQuotas.polymarket} + ${curation.config.sourceQuotas.kalshi}`} />
+          <Gate label="Market probability" value={`${curation.config.minimumYesPrice * 100}–${curation.config.maximumYesPrice * 100}%`} />
+          <Gate label="Close window" value={`Poly ${curation.config.maximumCloseDays}d · Kalshi ${curation.config.kalshiMaximumCloseDays}d`} />
+          <Gate label="Repeat block" value={`${curation.config.recentDiversityDays} days`} />
         </div>
         <div className="category-flow">
           {curation.categories.map((item) => (
@@ -489,15 +501,15 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </section>
 
       <section id="pipeline-stage-3" className="story-stage">
-        <StageHeader number="03" eyebrow="SELECTION" title="Daily question slate" summary="Eligible events are deduplicated and capped at three per domain." />
+        <StageHeader number="03" eyebrow="SELECTION" title="Daily question slate" summary="Exactly 10 questions per provider, with cross-market and recent-history deduplication." />
         <div className="release-summary">
           <div><small>Release ID</small><strong>{curation.latestSelection?.id || "Pending"}</strong></div>
           <div><small>Eligible candidates</small><strong>{curation.latestSelection?.eligibleCount || 0}</strong></div>
           <div><small>Selected events</small><strong>{selected}</strong></div>
-          <div><small>Per-category cap</small><strong>{curation.config.targetPerCategory}</strong></div>
+          <div><small>Source mix</small><strong>{curation.latestSelection ? `${curation.latestSelection.sourceCounts.polymarket || 0} + ${curation.latestSelection.sourceCounts.kalshi || 0}` : "10 + 10"}</strong></div>
         </div>
-        <div className="stage-table-wrap"><table className="stage-table"><thead><tr><th>Category</th><th>Selected question</th><th>Selection score</th><th>24h volume</th><th>Market probability</th></tr></thead><tbody>
-          {curation.selectedMarkets.slice(0, 8).map((market) => <tr key={market.marketId}><td>{market.category}</td><td><button onClick={() => { const event = snapshot.events.find((item) => item.id === market.eventId); if (event) onOpenEvent(event); }}>{market.title}</button></td><td>{market.score.toFixed(3)}</td><td>{formatCompactMoney(market.volume24h)}</td><td>{(market.yesPrice * 100).toFixed(1)}%</td></tr>)}
+        <div className="stage-table-wrap"><table className="stage-table"><thead><tr><th>Source</th><th>Category</th><th>Selected question</th><th>Selection score</th><th>24h volume</th><th>Market probability</th></tr></thead><tbody>
+          {curation.selectedMarkets.slice(0, 8).map((market) => <tr key={market.marketId}><td>{sourceLabel(market.sourcePlatform)}</td><td>{market.category}</td><td><button onClick={() => { const event = snapshot.events.find((item) => item.id === market.eventId); if (event) onOpenEvent(event); }}>{market.title}</button></td><td>{market.score.toFixed(3)}</td><td>{formatCompactMoney(market.volume24h)}</td><td>{(market.yesPrice * 100).toFixed(1)}%</td></tr>)}
         </tbody></table></div>
       </section>
 
@@ -520,14 +532,14 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
             ["03", "Resolution rules", runEvent?.description || "Exact market rules and deadline"],
             ["04", "Allowed outcomes", runEvent?.outcomes.map((outcome) => outcome.label).join(" · ") || "Yes · No"],
             ["05", "Shared evidence", `${run?.sourceCount || 0} frozen Tavily sources`],
-            ["06", "Market data", selectedMarket ? `${(selectedMarket.yesPrice * 100).toFixed(1)}% at selection · ${formatCompactMoney(selectedMarket.volume24h)} 24h volume` : "Frozen Polymarket snapshot"],
+            ["06", "Market data", selectedMarket ? `${sourceLabel(selectedMarket.sourcePlatform)} · ${(selectedMarket.yesPrice * 100).toFixed(1)}% at selection · ${formatCompactMoney(selectedMarket.volume24h)} 24h volume` : "Frozen market snapshot"],
             ["07", "Output contract", "Rationale + every outcome probability + cited source ranks"],
           ].map(([number, label, value]) => <div key={number}><span>{number}</span><b>{label}</b><p>{value}</p></div>)}</div>
         </div>
       </section>
 
       <section id="pipeline-stage-6" className="story-stage output-stage">
-        <StageHeader number="06" eyebrow="OUTPUT" title="Model predictions" summary="Llama and Gemma are compared on the same Event and Frozen Context." />
+        <StageHeader number="06" eyebrow="OUTPUT" title="Model predictions" summary="All 18 registered models are compared on the same event and frozen context." />
         {run ? <div className="model-prediction-grid">{modelComparisons.map(({ model, run: modelRun }) => {
           const probabilities = predictionProbabilities(modelRun);
           return <article className={`model-prediction ${modelRun?.status || "pending"}`} key={model.participantId} style={{ borderTopColor: model.color }}>
@@ -674,8 +686,8 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
     <div className="page-content enter">
       <section className="page-heading">
         <div>
-          <h1>Balanced market curation</h1>
-          <p>Hourly Polymarket sync and daily five-domain selection.</p>
+          <h1>Dual-market curation</h1>
+          <p>Hourly Polymarket + Kalshi sync and one diverse 20-question daily release.</p>
         </div>
         <div className="updated-stamp"><span /><div><small>Latest sync</small><b>{curation.latestSync?.completedAt ? formatTime(curation.latestSync.completedAt) : "Waiting"}</b></div></div>
       </section>
@@ -683,19 +695,19 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
       <section className="metric-strip">
         <Metric label="Scanned markets" value={curation.latestSync?.fetchedMarkets || 0} detail={`${curation.latestSync?.fetchedEvents || 0} source events`} />
         <Metric label="Eligible now" value={curation.latestSync?.eligibleMarkets || 0} detail="passed all hard filters" />
-        <Metric label="Latest release" value={selected} detail={curation.latestSelection?.id || "next daily run"} />
+        <Metric label="Latest release" value={selected} detail={curation.latestSelection ? `${curation.latestSelection.sourceCounts.polymarket || 0} Polymarket · ${curation.latestSelection.sourceCounts.kalshi || 0} Kalshi` : "next daily run"} />
         <Metric label="Automation" value={curation.latestSync?.status === "completed" ? "LIVE" : "READY"} detail="hourly sync · daily release" highlight />
       </section>
 
       <section className="curation-rules">
-        <div><small>24H VOLUME</small><b>≥ {formatCompactMoney(curation.config.minimumVolume24h)}</b><span>Minimum activity threshold</span></div>
-        <div><small>TOTAL VOLUME</small><b>≥ {formatCompactMoney(curation.config.minimumTotalVolume)}</b><span>Established markets only</span></div>
-        <div><small>LIQUIDITY</small><b>≥ {formatCompactMoney(curation.config.minimumLiquidity)}</b><span>Executable probability signal</span></div>
-        <div><small>CLOSE WINDOW</small><b>{curation.config.minimumCloseHours}h–{curation.config.maximumCloseDays}d</b><span>Enough time to forecast</span></div>
+        <div><small>SOURCE QUOTA</small><b>{curation.config.sourceQuotas.polymarket} + {curation.config.sourceQuotas.kalshi}</b><span>Polymarket + Kalshi, never substituted</span></div>
+        <div><small>POLYMARKET ACTIVITY</small><b>{formatCompactMoney(curation.config.minimumVolume24h)} / 24h</b><span>{formatCompactMoney(curation.config.minimumTotalVolume)} total · {formatCompactMoney(curation.config.minimumLiquidity)} liquidity</span></div>
+        <div><small>KALSHI ACTIVITY</small><b>{formatCompactMoney(curation.config.kalshiMinimumVolume24h)} / 24h</b><span>{formatCompactMoney(curation.config.kalshiMinimumTotalVolume)} total · open-interest depth ranking</span></div>
+        <div><small>DIVERSITY</small><b>5 domains · {curation.config.recentDiversityDays}d</b><span>Event-family and semantic duplicate blocking</span></div>
       </section>
 
       <section className="balance-board">
-        <div className="section-title"><div><span className="eyebrow">DOMAIN QUOTAS</span><h2>Prophet Arena five-domain balance</h2></div><span>{curation.config.targetPerCategory} per domain / release</span></div>
+        <div className="section-title"><div><span className="eyebrow">DOMAIN TARGETS</span><h2>Prophet Arena five-domain balance</h2></div><span>{curation.config.targetPerCategory} per domain target / release</span></div>
         <div className="balance-grid">
           {curation.categories.map((item) => (
             <article key={item.category}>
@@ -712,9 +724,10 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
         {curation.selectedMarkets.length ? (
           <div className="curation-table-wrap">
             <table className="curation-table">
-              <thead><tr><th>Category</th><th>Market</th><th>Score</th><th>YES at selection</th><th>24h volume</th><th>Liquidity</th><th>Closes</th></tr></thead>
+              <thead><tr><th>Source</th><th>Category</th><th>Market</th><th>Score</th><th>YES at selection</th><th>24h volume</th><th>Depth</th><th>Closes</th></tr></thead>
               <tbody>{curation.selectedMarkets.map((market) => (
                 <tr key={market.marketId}>
+                  <td><span className="category-label">{sourceLabel(market.sourcePlatform)}</span></td>
                   <td><span className="category-label">{market.category}</span></td>
                   <td><a href={market.sourceUrl} target="_blank" rel="noreferrer">{market.title}<small>View source ↗</small></a></td>
                   <td className="mono-number">{market.score.toFixed(3)}</td>
@@ -828,7 +841,7 @@ function ProphetEventBlock({
     </section>}
 
     <footer>
-      <div className="event-evidence"><span>{sourceCount ? `${sourceCount} frozen sources` : "Context pending"}</span><small>{event.sourceEventId ? `Polymarket Event ${event.sourceEventId}` : event.season}</small></div>
+      <div className="event-evidence"><span>{sourceCount ? `${sourceCount} frozen sources` : "Context pending"}</span><small>{event.sourceEventId ? event.sourceEventId.startsWith("kalshi:") ? `Kalshi Market ${event.sourceEventId.slice(7)}` : `Polymarket Event ${event.sourceEventId}` : event.season}</small></div>
       <div className="event-timing"><span className={event.status === "open" ? "live" : "resolved"}>{event.status === "open" ? "LIVE" : "RESOLVED"}</span><time>{event.status === "resolved" ? (event.resolvedAt ? `Resolved ${formatDate(event.resolvedAt)}` : "Resolved") : event.closeTime ? formatCloseTime(event.closeTime) : "No deadline"}</time></div>
     </footer>
   </article>;
@@ -862,7 +875,7 @@ function ForecastsView({
   onRun: () => void;
 }) {
   const pipeline = snapshot.forecastPipeline;
-  const ready = pipeline.configured.aiBinding && pipeline.configured.searchSecret;
+  const ready = pipeline.configured.modelGateway && pipeline.configured.searchSecret;
   return (
     <div className="page-content enter">
       <section className="page-heading compact-heading">
@@ -871,17 +884,23 @@ function ForecastsView({
           <p>Each question uses one frozen research context.</p>
         </div>
         <button className="primary-button" disabled={busy || !ready || !pipeline.stats.pending} onClick={onRun}>
-          {busy ? "Running…" : "Run next event"}
+          {busy ? "Running…" : "Run next forecast"}
         </button>
       </section>
 
       {!ready && (
         <section className="pipeline-alert">
-          <b>One deployment setting is missing</b>
+          <b>Pipeline configuration required</b>
           <span>
-            {pipeline.configured.aiBinding ? "Workers AI is connected; set TAVILY_API_KEY." : "Connect the Workers AI binding."}
+            {!pipeline.configured.searchSecret
+              ? "Set TAVILY_API_KEY for the frozen research context."
+              : pipeline.configured.modelGatewayProblem}
           </span>
-          <code>npx wrangler secret put TAVILY_API_KEY</code>
+          <code>
+            npx wrangler secret put TAVILY_API_KEY<br />
+            npx wrangler secret put PROPHET_MODEL_GATEWAY_URL<br />
+            npx wrangler secret put PROPHET_MODEL_GATEWAY_API_KEY
+          </code>
         </section>
       )}
 
@@ -889,11 +908,11 @@ function ForecastsView({
         <Metric label="Frozen contexts" value={pipeline.stats.contextsReady} detail="one search per event" />
         <Metric label="Completed" value={pipeline.stats.completed} detail={`${pipeline.models.length} model families`} />
         <Metric label="Pending" value={pipeline.stats.pending} detail="model-event runs" />
-        <Metric label="Pipeline" value={ready ? "READY" : "SETUP"} detail="up to 15 complete events / hour" highlight />
+        <Metric label="Pipeline" value={ready ? "READY" : "SETUP"} detail="up to 16 model-event runs / hour" highlight />
       </section>
 
       <section className="pipeline-flow" aria-label="Forecast pipeline">
-        <div><span>01</span><b>Selected event</b><small>balanced Polymarket slate</small></div>
+        <div><span>01</span><b>Selected event</b><small>10 Polymarket + 10 Kalshi</small></div>
         <i>→</i>
         <div><span>02</span><b>Tavily Search</b><small>up to 10 ranked sources</small></div>
         <i>→</i>
@@ -901,7 +920,9 @@ function ForecastsView({
         <i>→</i>
         <div className="model-step"><span>04</span><b>{pipeline.models.length} independent models</b><small>{pipeline.models.map((model) => model.participantName).join(" · ")}</small></div>
         <i>→</i>
-        <div><span>05</span><b>Arena score</b><small>prediction history + Brier</small></div>
+        <div><span>05</span><b>Agent Harnesses</b><small>blind + evidence-aware · shared Gateway</small></div>
+        <i>→</i>
+        <div><span>06</span><b>Arena score</b><small>prediction history + Brier</small></div>
       </section>
 
       <section className="forecast-runs">
@@ -954,7 +975,7 @@ function ForecastsView({
             </div>
           </article>
         )) : (
-          <div className="empty-block">After the Tavily key is configured, the scheduled job creates shared research contexts for the latest release.</div>
+          <div className="empty-block">After Tavily and the model gateway are configured, the scheduled job creates shared research contexts and Prophet-panel forecasts.</div>
         )}
       </section>
     </div>
@@ -1206,6 +1227,10 @@ function sourceHost(value: string) {
   } catch {
     return value;
   }
+}
+
+function sourceLabel(value: string) {
+  return value === "kalshi" ? "Kalshi" : "Polymarket";
 }
 
 function formatCompactMoney(value: number) {
