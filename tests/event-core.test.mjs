@@ -39,6 +39,26 @@ test("parses Prophet-style outcome arrays by stable key or label", () => {
   });
 });
 
+test("parses JSON returned in an OpenAI-compatible reasoning_content field", () => {
+  const parsed = parseEventPredictionResponse({
+    choices: [{
+      message: {
+        content: null,
+        reasoning_content: JSON.stringify({
+          rationale: "The distribution is calibrated to the frozen context.",
+          probabilities: { "market-a": 0.5, "market-b": 0.35, other: 0.15 },
+          citedSourceRanks: [2],
+        }),
+      },
+    }],
+  }, outcomes);
+  assert.deepEqual(parsed.probabilities, {
+    "market-a": 0.5,
+    "market-b": 0.35,
+    other: 0.15,
+  });
+});
+
 test("categorical aggregation preserves the simplex", () => {
   const aggregate = aggregateDistribution([
     { a: 0.7, b: 0.2, c: 0.1 },

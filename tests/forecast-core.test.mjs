@@ -1,28 +1,81 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  FORECAST_EVENTS_PER_RUN,
+  FORECAST_JOBS_PER_RUN,
   FORECAST_MODELS,
+  PROPHET_MODEL_PANEL_AS_OF,
+  buildGatewayRequest,
   buildProphetPredictionPrompt,
   buildSearchQuery,
   normalizeSources,
+  parseModelIdMap,
   parsePredictionResponse,
+  resolveGatewayModelId,
 } from "../lib/forecast-core.js";
 
-test("scheduled forecast rounds cover the complete 15-event slate", () => {
-  assert.equal(FORECAST_EVENTS_PER_RUN, 15);
+test("scheduled forecast rounds drain sixteen model-event jobs at a time", () => {
+  assert.equal(FORECAST_JOBS_PER_RUN, 16);
 });
 
-test("forecast registry contains two independent model families on the shared prompt", () => {
-  assert.equal(FORECAST_MODELS.length, 2);
-  assert.equal(new Set(FORECAST_MODELS.map((model) => model.participantId)).size, 2);
-  assert.equal(new Set(FORECAST_MODELS.map((model) => model.modelId)).size, 2);
+test("forecast registry matches Prophet Arena's current 18-model Fixed Context panel", () => {
+  assert.equal(PROPHET_MODEL_PANEL_AS_OF, "2026-08-10");
+  assert.equal(FORECAST_MODELS.length, 18);
+  assert.equal(new Set(FORECAST_MODELS.map((model) => model.participantId)).size, 18);
+  assert.equal(new Set(FORECAST_MODELS.map((model) => model.modelId)).size, 18);
   assert.deepEqual(
     FORECAST_MODELS.map((model) => model.modelId),
-    ["@cf/meta/llama-3.2-3b-instruct", "@cf/google/gemma-4-26b-a4b-it"],
+    [
+      "gemini-3.6-flash",
+      "claude-fable-5",
+      "gemini-3.1-pro",
+      "gpt-5.6-sol",
+      "gpt-5.5-high",
+      "claude-opus-4.8-thinking",
+      "kimi-k3",
+      "thinking-machines-zs-v2",
+      "claude-sonnet-4.6",
+      "grok-4.5",
+      "glm-5.2",
+      "deepseek-v4-pro",
+      "muse-spark-1.1",
+      "qwen-3.6-plus",
+      "grok-4.3",
+      "inkling-small",
+      "minimax-m2.7",
+      "foresight-v3",
+    ],
   );
-  assert.ok(FORECAST_MODELS.every((model) => model.promptVersion === "prophet-shared-context-v1"));
-  assert.equal(FORECAST_MODELS[1].inferenceMode, "json-no-thinking");
+  assert.ok(FORECAST_MODELS.every((model) => model.promptVersion === "prophet-fixed-context-v1"));
+});
+
+test("gateway model IDs default to Prophet slugs and support explicit deployment aliases", () => {
+  assert.equal(resolveGatewayModelId("gpt-5.6-sol"), "gpt-5.6-sol");
+  const overrides = JSON.stringify({
+    "gpt-5.6-sol": "openai/gpt-5.6-sol-prod",
+    "claude-fable-5": "anthropic/claude-fable-5-prod",
+  });
+  assert.deepEqual(parseModelIdMap(overrides), {
+    "gpt-5.6-sol": "openai/gpt-5.6-sol-prod",
+    "claude-fable-5": "anthropic/claude-fable-5-prod",
+  });
+  assert.equal(resolveGatewayModelId("gpt-5.6-sol", overrides), "openai/gpt-5.6-sol-prod");
+  assert.throws(() => parseModelIdMap("[]"), /JSON object/);
+  assert.throws(() => parseModelIdMap('{"gpt-5.6-sol":""}'), /non-empty strings/);
+});
+
+test("gateway requests use the OpenAI-compatible JSON contract", () => {
+  assert.deepEqual(buildGatewayRequest(
+    "openai/gpt-5.6-sol-prod",
+    [{ role: "user", content: "Forecast this event." }],
+    { maxTokens: 700, temperature: 0.1, seed: 42 },
+  ), {
+    model: "openai/gpt-5.6-sol-prod",
+    messages: [{ role: "user", content: "Forecast this event." }],
+    max_tokens: 700,
+    temperature: 0.1,
+    seed: 42,
+    response_format: { type: "json_object" },
+  });
 });
 
 const event = {

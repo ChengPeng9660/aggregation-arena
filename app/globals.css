@@ -420,7 +420,7 @@ tbody tr.top-row { background: linear-gradient(90deg, rgba(138,97,255,.05), tran
 .automation-health dt { color: var(--quiet); font-size: 9px; }
 .automation-health dd { margin: 3px 0 0; font: 10px var(--font-geist-mono), monospace; }
 .pipeline-flow {
-  display: grid; grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr auto 1fr;
+  display: grid; grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr auto 1fr auto 1fr;
   align-items: stretch; gap: 10px; margin: 32px 0 44px;
 }
 .pipeline-flow > div { min-height: 98px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
@@ -1006,10 +1006,13 @@ td { font-size: 12px; }
 .model-presets button:hover { border-color: var(--purple-deep); color: var(--purple-deep); background: var(--purple-soft); }
 .model-search { grid-area: search; width: 100%; min-height: 42px; padding: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: #fff; font-size: 11px; }
 .model-options { grid-area: options; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); max-height: 248px; margin-top: 8px; overflow-y: auto; border-block: 1px solid var(--line); }
-.model-options label { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 9px; align-items: start; padding: 10px 12px; border-right: 1px solid rgba(231,225,234,.75); border-bottom: 1px solid rgba(231,225,234,.75); cursor: pointer; transition: background .18s ease; }
+.model-options label { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 9px; align-items: start; padding: 10px 12px; border-right: 1px solid rgba(231,225,234,.75); border-bottom: 1px solid rgba(231,225,234,.75); cursor: pointer; transition: background .18s ease, color .18s ease, opacity .18s ease; }
 .model-options label:nth-child(3n) { border-right: 0; }
 .model-options label:last-child { border-bottom: 0; }
 .model-options label:hover, .model-options label.selected { background: #fbf8fd; }
+.model-options label.unavailable, .model-options label.unavailable:hover { color: #aaa5ad; background: #f8f7f8; cursor: not-allowed; opacity: .62; }
+.model-options label.unavailable small { color: #aaa5ad; }
+.model-options label.unavailable input { cursor: not-allowed; opacity: .45; }
 .model-options input { margin: 2px 0 0; accent-color: var(--purple-deep); }
 .model-options b, .model-options small { display: block; }
 .model-options b { font-size: 11px; line-height: 1.35; }
@@ -1020,6 +1023,11 @@ td { font-size: 12px; }
 .history-controls label { color: var(--quiet); font: 9px var(--font-geist-mono), monospace; letter-spacing: .08em; text-transform: uppercase; }
 .history-controls select { display: block; min-width: 190px; margin-top: 6px; padding: 8px 28px 8px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: #fff; font: 11px var(--font-geist-sans), sans-serif; text-transform: none; }
 .history-filter-row { display: flex; gap: 10px; }
+.cptec-weight-field { min-width: 260px; }
+.cptec-weight-inputs { display: grid; grid-template-columns: minmax(110px, 1fr) 58px; gap: 8px; align-items: center; margin-top: 6px; }
+.cptec-weight-inputs input[type="range"] { width: 100%; accent-color: var(--purple-deep); }
+.cptec-weight-inputs input[type="number"] { min-width: 0; height: 33px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--purple-deep); background: #fff; font: 11px var(--font-geist-mono), monospace; }
+.cptec-weight-field small { display: block; margin-top: 5px; color: var(--quiet); font: 8px var(--font-geist-sans), sans-serif; letter-spacing: 0; text-transform: none; }
 .history-section-title { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 16px; align-items: start; margin-bottom: 16px; }
 .history-section-title h2 { margin: -4px 0 0; font-size: 24px; letter-spacing: -.04em; }
 .history-section-title p { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
@@ -1106,6 +1114,7 @@ td { font-size: 12px; }
   .history-controls { align-items: stretch; flex-direction: column; }
   .history-filter-row { flex-direction: column; }
   .history-controls select { width: 100%; }
+  .cptec-weight-field { min-width: 0; }
   .history-section-title { grid-template-columns: 1fr; gap: 8px; }
   .history-section-title h2 { margin-top: 0; }
   .history-ranking table { min-width: 560px; }

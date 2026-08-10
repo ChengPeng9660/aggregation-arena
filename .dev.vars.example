@@ -1,0 +1,12 @@
+# Copy this file to .dev.vars for local development. Never commit real keys.
+TAVILY_API_KEY=tvly-your-key
+
+# Exact OpenAI-compatible chat-completions endpoint, for example a private
+# LiteLLM gateway ending in /v1/chat/completions.
+PROPHET_MODEL_GATEWAY_URL=https://models.example.com/v1/chat/completions
+PROPHET_MODEL_GATEWAY_API_KEY=replace-with-gateway-key
+
+# Optional JSON map from Prophet Arena slug to the deployment alias exposed by
+# your gateway. Both base forecasters and Agent Harnesses share this gateway.
+# Omit this variable when the gateway accepts the public slugs directly.
+PROPHET_MODEL_ID_MAP={}

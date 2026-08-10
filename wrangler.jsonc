@@ -12,9 +12,10 @@
   "images": {
     "binding": "IMAGES"
   },
-  "ai": {
-    "binding": "AI",
-    "remote": true
+  "secrets": {
+    "required": [
+      "TAVILY_API_KEY"
+    ]
   },
   "triggers": {
     "crons": ["0 * * * *", "10 0 * * *", "20 * * * *", "30 * * * *"]

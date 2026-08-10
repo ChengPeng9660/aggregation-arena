@@ -1,20 +1,22 @@
 import { getD1 } from "@/db";
 import { recordAutomatedEventForecast, recordAutomatedForecast, syncAggregates } from "@/lib/arena";
 import {
-  FORECAST_EVENTS_PER_RUN,
+  FORECAST_JOBS_PER_RUN,
   FORECAST_MODELS,
+  RETIRED_FORECAST_PARTICIPANT_IDS,
   buildProphetPredictionPrompt,
   buildSearchQuery,
   normalizeSources,
 } from "@/lib/forecast-core.js";
 import { parseEventPredictionResponse } from "@/lib/event-core.js";
+import { modelGatewayConfigurationProblem, runModelGateway } from "@/lib/model-gateway";
 
 type ForecastEnv = {
   DB: D1Database;
-  AI?: {
-    run(model: string, input: Record<string, unknown>): Promise<unknown>;
-  };
   TAVILY_API_KEY?: string;
+  PROPHET_MODEL_GATEWAY_URL?: string;
+  PROPHET_MODEL_GATEWAY_API_KEY?: string;
+  PROPHET_MODEL_ID_MAP?: string;
 };
 
 type ForecastEvent = {
@@ -25,6 +27,7 @@ type ForecastEvent = {
   closeTime: string | null;
   rules: string;
   selectionRunId: string;
+  sourcePlatform: "polymarket" | "kalshi";
   sourceUrl: string;
   selectedAt: string;
   latestObservedAt: string;
@@ -102,7 +105,7 @@ export async function ensureForecastingReady(db: D1Database = getD1()) {
     forecastingSchemaReady = true;
   }
   if (!modelRegistryReady) {
-    await db.batch(FORECAST_MODELS.map((model) => db.prepare(`
+    const registryStatements = FORECAST_MODELS.map((model) => db.prepare(`
       INSERT INTO participants (id, name, organization, kind, color, status)
       VALUES (?, ?, ?, 'forecaster', ?, 'active')
       ON CONFLICT(id) DO UPDATE SET name=excluded.name, organization=excluded.organization,
@@ -112,19 +115,27 @@ export async function ensureForecastingReady(db: D1Database = getD1()) {
       model.participantName,
       model.organization,
       model.color,
-    )));
+    ));
+    if (RETIRED_FORECAST_PARTICIPANT_IDS.length) {
+      registryStatements.push(db.prepare(`
+        UPDATE participants SET status='inactive'
+        WHERE id IN (${RETIRED_FORECAST_PARTICIPANT_IDS.map(() => "?").join(", ")})
+      `).bind(...RETIRED_FORECAST_PARTICIPANT_IDS));
+    }
+    await db.batch(registryStatements);
     modelRegistryReady = true;
   }
 }
 
-export async function runForecastBatch(env: ForecastEnv, eventLimit = FORECAST_EVENTS_PER_RUN) {
+export async function runForecastBatch(env: ForecastEnv, jobLimit = FORECAST_JOBS_PER_RUN) {
   await ensureForecastingReady(env.DB);
-  if (!env.TAVILY_API_KEY || !env.AI) {
+  const gatewayProblem = modelGatewayConfigurationProblem(env);
+  if (!env.TAVILY_API_KEY || gatewayProblem) {
     return {
       configured: false,
       processed: 0,
       completed: 0,
-      message: !env.TAVILY_API_KEY ? "TAVILY_API_KEY is not configured" : "Workers AI binding is unavailable",
+      message: !env.TAVILY_API_KEY ? "TAVILY_API_KEY is not configured" : gatewayProblem,
     };
   }
 
@@ -135,59 +146,57 @@ export async function runForecastBatch(env: ForecastEnv, eventLimit = FORECAST_E
   // outcomes still become scoreable without rerunning paid inference/search.
   const repairedAggregates = await repairMissingAggregates(env.DB);
 
-  const batchEventLimit = Math.max(1, Math.min(FORECAST_EVENTS_PER_RUN, eventLimit));
+  const batchJobLimit = Math.max(1, Math.min(72, jobLimit));
   const modelValues = FORECAST_MODELS.map(() => "(?, ?)").join(", ");
   const modelBindings = FORECAST_MODELS.flatMap((model, index) => [model.participantId, index]);
   const rows = await env.DB.prepare(`
     WITH forecast_models(participant_id, model_order) AS (VALUES ${modelValues}),
-    pending_events AS (
-      SELECT e.id
+    pending_jobs AS (
+      SELECT e.id AS event_id, fm.participant_id, fm.model_order
       FROM events e
       JOIN selection_items si ON si.event_id=e.id
-      WHERE e.status='open' AND EXISTS (
-        SELECT 1 FROM forecast_models fm
-        WHERE NOT EXISTS (
-          SELECT 1 FROM model_forecast_runs completed_run
-          WHERE completed_run.event_id=e.id
-            AND completed_run.participant_id=fm.participant_id
-            AND completed_run.status='completed'
-        )
+      CROSS JOIN forecast_models fm
+      WHERE e.status='open' AND NOT EXISTS (
+        SELECT 1 FROM model_forecast_runs completed_run
+        WHERE completed_run.event_id=e.id
+          AND completed_run.participant_id=fm.participant_id
+          AND completed_run.status='completed'
       )
-      GROUP BY e.id
-      ORDER BY MIN(si.selected_at), MIN(si.category), MIN(si.rank), e.id
+      GROUP BY e.id, fm.participant_id, fm.model_order
+      ORDER BY MIN(si.selected_at), MIN(si.category), MIN(si.rank), e.id, fm.model_order
       LIMIT ?
     )
     SELECT e.id, e.title, e.description, e.category, e.close_time, e.event_type,
-      pc.rules, pc.source_url, pc.last_seen_at, pc.yes_price AS latest_yes_price,
+      pc.rules, pc.source_platform, pc.source_url, pc.last_seen_at, pc.yes_price AS latest_yes_price,
       pc.volume_24h AS latest_volume_24h, pc.total_volume AS latest_total_volume,
       pc.liquidity AS latest_liquidity, si.run_id, si.selected_at,
       si.price_at_selection, si.volume_24h, si.total_volume, si.liquidity,
-      forecast_models.participant_id AS target_participant_id,
+      pj.participant_id AS target_participant_id,
       (SELECT json_group_array(json_object(
         'key', eo.outcome_key, 'label', eo.label, 'marketId', eo.market_id,
         'sourceUrl', eo.source_url, 'priceAtSelection', eo.price_at_selection
       )) FROM event_outcomes eo WHERE eo.event_id=e.id ORDER BY eo.display_order) AS event_outcomes_json
-    FROM pending_events pe
-    JOIN events e ON e.id=pe.id
+    FROM pending_jobs pj
+    JOIN events e ON e.id=pj.event_id
     JOIN selection_items si ON si.event_id=e.id
     JOIN polymarket_candidates pc ON pc.market_id=si.market_id
-    CROSS JOIN forecast_models
-    WHERE NOT EXISTS (
-      SELECT 1 FROM model_forecast_runs completed_run
-      WHERE completed_run.event_id=e.id
-        AND completed_run.participant_id=forecast_models.participant_id
-        AND completed_run.status='completed'
-    )
-    ORDER BY si.selected_at, si.category, si.rank, e.id, forecast_models.model_order
-  `).bind(...modelBindings, batchEventLimit).all<Record<string, unknown>>();
+    ORDER BY si.selected_at, si.category, si.rank, e.id, pj.model_order
+  `).bind(...modelBindings, batchJobLimit).all<Record<string, unknown>>();
 
-  const outcomes = [];
-  for (const row of rows.results) {
+  const jobs = rows.results.flatMap((row) => {
     const event = rowToForecastEvent(row);
     const model = FORECAST_MODELS.find((candidate) => candidate.participantId === row.target_participant_id);
-    if (!model) continue;
+    return model ? [{ event, model }] : [];
+  });
+  const contextPromises = new Map<string, Promise<Awaited<ReturnType<typeof getOrCreateContext>>>>();
+  const outcomes = await mapWithConcurrency(jobs, 3, async ({ event, model }) => {
     try {
-      outcomes.push(await forecastEvent(env, event, model));
+      let contextPromise = contextPromises.get(event.id);
+      if (!contextPromise) {
+        contextPromise = getOrCreateContext(env, event);
+        contextPromises.set(event.id, contextPromise);
+      }
+      return await forecastEvent(env, event, model, await contextPromise);
     } catch (error) {
       await env.DB.prepare(`
         INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
@@ -197,13 +206,13 @@ export async function runForecastBatch(env: ForecastEnv, eventLimit = FORECAST_E
         JSON.stringify({ modelId: model.modelId, error: errorMessage(error).slice(0, 800) }),
         new Date().toISOString(),
       ).run();
-      outcomes.push({ eventId: event.id, modelId: model.modelId, status: "failed", error: errorMessage(error) });
+      return { eventId: event.id, modelId: model.modelId, status: "failed", error: errorMessage(error) };
     }
-  }
+  });
   return {
     configured: true,
     repairedAggregates,
-    eventLimit: batchEventLimit,
+    jobLimit: batchJobLimit,
     processedEvents: new Set(outcomes.map((item) => item.eventId)).size,
     processed: outcomes.length,
     completed: outcomes.filter((item) => item.status === "completed").length,
@@ -241,8 +250,12 @@ async function repairMissingAggregates(db: D1Database) {
   return repaired;
 }
 
-async function forecastEvent(env: ForecastEnv, event: ForecastEvent, model: ForecastModel) {
-  const context = await getOrCreateContext(env, event);
+async function forecastEvent(
+  env: ForecastEnv,
+  event: ForecastEvent,
+  model: ForecastModel,
+  context: Awaited<ReturnType<typeof getOrCreateContext>>,
+) {
   const runId = `run-${crypto.randomUUID()}`;
   const startedAt = new Date().toISOString();
   await env.DB.prepare(`
@@ -267,10 +280,17 @@ async function forecastEvent(env: ForecastEnv, event: ForecastEvent, model: Fore
   try {
     let parsed;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      raw = await env.AI!.run(model.modelId, inferenceInput(model, [
+      const gatewayResult = await runModelGateway(env, {
+        modelId: model.modelId,
+        messages: [
           { role: "system", content: "Return valid JSON only. Calibrate probabilities carefully." },
           { role: "user", content: attempt ? `${prompt}\n\nYour prior response was invalid. Return the required JSON object only.` : prompt },
-        ], 700, 0.1, deterministicSeed(`${event.id}-${model.participantId}`)));
+        ],
+        maxTokens: 700,
+        temperature: 0.1,
+        seed: deterministicSeed(`${event.id}-${model.participantId}-${attempt}`),
+      });
+      raw = gatewayResult.payload;
       try {
         parsed = parseEventPredictionResponse(raw, event.outcomes);
         break;
@@ -279,34 +299,6 @@ async function forecastEvent(env: ForecastEnv, event: ForecastEvent, model: Fore
       }
     }
     if (!parsed) throw new Error("Model response could not be parsed");
-    const initialPrediction = parsed;
-    const reviewRaw = await env.AI!.run(model.modelId, inferenceInput(model, [
-        {
-          role: "system",
-          content: "Audit a mutually-exclusive event forecast for semantic consistency. Return valid JSON only.",
-        },
-        {
-          role: "user",
-          content: `The exact event and allowed outcomes are:
-${event.title}
-${event.outcomes.map((outcome) => `- ${outcome.label} [key=${outcome.key}]`).join("\n")}
-
-Candidate forecast:
-${JSON.stringify({
-  rationale: initialPrediction.rationale,
-  probabilities: initialPrediction.probabilities,
-  citedSourceRanks: initialPrediction.citedSourceRanks,
-})}
-
-Check that each probability refers to the exact outcome key above and agrees with any numeric claims in the rationale. Correct an inversion or contradiction if present. Cover every outcome and return the same JSON schema as the original request.`,
-        },
-      ], 450, 0, deterministicSeed(`${event.id}-${model.participantId}-review`)));
-    try {
-      parsed = parseEventPredictionResponse(reviewRaw, event.outcomes);
-      raw = { initial: raw, review: reviewRaw };
-    } catch {
-      parsed = initialPrediction;
-    }
     const completedAt = new Date().toISOString();
     const latencyMs = Date.now() - requestStarted;
     await env.DB.prepare(`
@@ -386,7 +378,7 @@ async function getOrCreateContext(env: ForecastEnv, event: ForecastEvent) {
   const asOfTime = new Date().toISOString();
   const id = `ctx-${crypto.randomUUID()}`;
   const marketSnapshot = {
-    source: "Polymarket",
+    source: event.sourcePlatform === "kalshi" ? "Kalshi" : "Polymarket",
     sourceUrl: event.sourceUrl,
     outcomes: event.outcomes,
     atSelection: {
@@ -447,9 +439,10 @@ async function searchTavily(apiKey: string, query: string, topic: "news" | "gene
 
 export async function getForecastPipelineSnapshot(
   db: D1Database = getD1(),
-  runtime: { AI?: unknown; TAVILY_API_KEY?: string } = {},
+  runtime: Pick<ForecastEnv, "TAVILY_API_KEY" | "PROPHET_MODEL_GATEWAY_URL" | "PROPHET_MODEL_GATEWAY_API_KEY" | "PROPHET_MODEL_ID_MAP"> = {},
 ) {
   await ensureForecastingReady(db);
+  const gatewayProblem = modelGatewayConfigurationProblem(runtime);
   const modelValues = FORECAST_MODELS.map(() => "(?)").join(", ");
   const modelBindings = FORECAST_MODELS.map((model) => model.participantId);
   const [counts, runRows, pending] = await Promise.all([
@@ -482,7 +475,8 @@ export async function getForecastPipelineSnapshot(
     models: FORECAST_MODELS,
     model: FORECAST_MODELS[0],
     configured: {
-      aiBinding: Boolean(runtime.AI),
+      modelGateway: !gatewayProblem,
+      modelGatewayProblem: gatewayProblem,
       searchSecret: Boolean(runtime.TAVILY_API_KEY),
     },
     stats: {
@@ -531,6 +525,7 @@ function rowToForecastEvent(row: Record<string, unknown>): ForecastEvent {
     closeTime: row.close_time ? String(row.close_time) : null,
     rules: String(row.rules || ""),
     selectionRunId: String(row.run_id),
+    sourcePlatform: row.source_platform === "kalshi" ? "kalshi" : "polymarket",
     sourceUrl: String(row.source_url || ""),
     selectedAt: String(row.selected_at || ""),
     latestObservedAt: String(row.last_seen_at || new Date().toISOString()),
@@ -553,7 +548,7 @@ function contextFromRow(row: Record<string, unknown>, event: ForecastEvent) {
     event,
     sources: safeJson(String(row.sources_json || "[]"), []) as ResearchSource[],
     marketSnapshot: safeJson(String(row.market_snapshot_json || "{}"), {
-      source: "Polymarket",
+      source: event.sourcePlatform === "kalshi" ? "Kalshi" : "Polymarket",
       sourceUrl: event.sourceUrl,
       atSelection: {
         observedAt: event.selectedAt,
@@ -610,23 +605,21 @@ function deterministicSeed(value: string) {
   return (Math.abs(hash) % 2_000_000_000) + 1;
 }
 
-function inferenceInput(
-  model: ForecastModel,
-  messages: { role: string; content: string }[],
-  maxTokens: number,
-  temperature: number,
-  seed: number,
+async function mapWithConcurrency<Input, Output>(
+  items: Input[],
+  concurrency: number,
+  task: (item: Input, index: number) => Promise<Output>,
 ) {
-  if (model.inferenceMode === "json-no-thinking") {
-    return {
-      messages,
-      max_completion_tokens: maxTokens,
-      temperature,
-      seed,
-      reasoning_effort: "low",
-      chat_template_kwargs: { enable_thinking: false },
-      response_format: { type: "json_object" },
-    };
+  const output = new Array<Output>(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      output[index] = await task(items[index], index);
+    }
   }
-  return { messages, max_tokens: maxTokens, temperature, seed };
+  const workerCount = Math.min(items.length, Math.max(1, concurrency));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return output;
 }

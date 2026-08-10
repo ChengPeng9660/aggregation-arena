@@ -27,8 +27,14 @@ test("the benchmark implements six deterministic aggregation methods", async () 
 
 test("the leaderboard registers blind and evidence-aware agent harness methods separately", async () => {
   const source = await readFile(new URL("../lib/arena.ts", import.meta.url), "utf8");
+  const harnessSource = await readFile(new URL("../lib/agent-aggregation.ts", import.meta.url), "utf8");
   assert.match(source, /agg-agent-harness-blind-v1/);
   assert.match(source, /agg-agent-harness-evidence-v1/);
   assert.match(source, /informationSet: "blind"/);
   assert.match(source, /informationSet: "evidence-aware"/);
+  assert.match(harnessSource, /AGENT_HARNESS_MODEL = "qwen-3\.6-plus"/);
+  assert.match(harnessSource, /runModelGateway\(env/);
+  assert.match(harnessSource, /requiredForecasts = options\.resolvedOnly \? 2 : FORECAST_MODELS\.length/);
+  assert.match(harnessSource, /status: "failed" as const/);
+  assert.doesNotMatch(harnessSource, /env\.AI|Workers AI binding/);
 });
