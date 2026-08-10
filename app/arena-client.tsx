@@ -297,6 +297,7 @@ export function ArenaClient() {
       const payload = await readApiResponse<Snapshot & { message?: string }>(response);
       if (!response.ok) throw new Error(payload.message || "Failed to load benchmark data");
       setSnapshot(payload);
+      setError("");
     } catch (loadError) {
       if (!silent) setError(apiErrorMessage(loadError, "Failed to load benchmark data"));
     } finally {
