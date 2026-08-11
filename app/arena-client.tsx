@@ -760,9 +760,15 @@ function EventsView({
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
   const [eventScope, setEventScope] = useState<"live" | "resolved">("live");
+  const [marketSource, setMarketSource] = useState<"all" | "polymarket" | "kalshi">("all");
   const [sort, setSort] = useState<"latest" | "closing">("latest");
   const sourceEvents = eventScope === "live" ? openEvents : resolvedEvents;
+  const sourceCounts = {
+    polymarket: sourceEvents.filter((event) => eventMarketSource(event) === "polymarket").length,
+    kalshi: sourceEvents.filter((event) => eventMarketSource(event) === "kalshi").length,
+  };
   const visibleEvents = sourceEvents
+    .filter((event) => marketSource === "all" || eventMarketSource(event) === marketSource)
     .filter((event) => category === "All" || event.category === category)
     .filter((event) => `${event.title} ${event.description} ${event.sourceEventId || ""}`.toLowerCase().includes(query.trim().toLowerCase()))
     .sort((a, b) => {
@@ -776,7 +782,18 @@ function EventsView({
   return (
     <div className="page-content enter">
       <section className="page-heading compact-heading">
-        <div><span className="eyebrow">LIVE FORECAST BENCHMARK</span><h1>Events</h1><p>Every selected question, its market baseline, and how the models currently see the outcomes.</p></div>
+        <div><span className="eyebrow">POLYMARKET + KALSHI · LIVE FORECAST BENCHMARK</span><h1>Events</h1><p>One benchmark stream balanced across two markets: every complete daily release contains 10 Polymarket and 10 Kalshi questions.</p></div>
+      </section>
+      <section className="event-source-band" aria-label="Filter events by prediction market">
+        <button className={marketSource === "all" ? "active source-all" : "source-all"} aria-pressed={marketSource === "all"} onClick={() => setMarketSource("all")}>
+          <span>ALL MARKETS</span><strong>{sourceEvents.length}</strong><small>{eventScope === "live" ? "Open benchmark events" : "Resolved benchmark events"}</small>
+        </button>
+        <button className={marketSource === "polymarket" ? "active source-polymarket" : "source-polymarket"} aria-pressed={marketSource === "polymarket"} onClick={() => setMarketSource("polymarket")}>
+          <span><i />POLYMARKET</span><strong>{sourceCounts.polymarket}</strong><small>10 questions per complete daily release</small>
+        </button>
+        <button className={marketSource === "kalshi" ? "active source-kalshi" : "source-kalshi"} aria-pressed={marketSource === "kalshi"} onClick={() => setMarketSource("kalshi")}>
+          <span><i />KALSHI</span><strong>{sourceCounts.kalshi}</strong><small>10 questions per complete daily release</small>
+        </button>
       </section>
       <section className="event-discovery" aria-label="Find benchmark events">
         <label className="event-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search events by title, category, or source ticker…" /></label>
@@ -817,6 +834,7 @@ function ProphetEventBlock({
   onDetail: () => void;
 }) {
   const outcomes = eventBlockOutcomes(event).slice(0, 2);
+  const marketSource = eventMarketSource(event);
   const sourceCount = Math.max(0, ...runs.map((run) => run.sourceCount));
   const completedModels = new Set(runs.filter((run) => run.status === "completed").map((run) => run.participantId)).size;
   const resolvedLabel = event.resolvedOutcome ? event.outcomes.find((outcome) => outcome.key === event.resolvedOutcome)?.label || event.resolvedOutcome : null;
@@ -824,7 +842,7 @@ function ProphetEventBlock({
     <header>
       <div className="event-symbol" aria-hidden="true">{initials(event.category)}</div>
       <button className="event-block-title" onClick={onDetail}>
-        <span>{event.category}{event.eventType === "categorical" ? " · MULTI-OUTCOME" : " · BINARY"}</span>
+        <span className="event-block-meta"><i className={`event-market-badge ${marketSource}`}>{sourceLabel(marketSource)}</i><em>{event.category}{event.eventType === "categorical" ? " · MULTI-OUTCOME" : " · BINARY"}</em></span>
         <h3>{event.title}</h3>
       </button>
       <button className="event-open-arrow" onClick={onDetail} aria-label={`Open ${event.title}`}>↗</button>
@@ -1232,6 +1250,10 @@ function sourceHost(value: string) {
 
 function sourceLabel(value: string) {
   return value === "kalshi" ? "Kalshi" : "Polymarket";
+}
+
+function eventMarketSource(event: ArenaEvent): "polymarket" | "kalshi" {
+  return event.sourceEventId?.startsWith("kalshi:") || event.id.includes("-kalshi-") ? "kalshi" : "polymarket";
 }
 
 function formatCompactMoney(value: number) {
