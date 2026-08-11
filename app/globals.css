@@ -289,7 +289,24 @@ tbody tr.top-row { background: linear-gradient(90deg, rgba(138,97,255,.05), tran
 .resolved-grid div { display: flex; justify-content: space-between; color: var(--quiet); font: 8px var(--font-geist-mono), monospace; }
 
 /* Prophet-style Event block: one event is the primary operating unit. */
-.event-discovery { margin: -4px 0 38px; }
+.event-source-band {
+  display: grid; grid-template-columns: 1.08fr 1fr 1fr; margin: -7px 0 28px; border-block: 1px solid var(--line);
+}
+.event-source-band button {
+  min-width: 0; padding: 19px 20px; border: 0; text-align: left; color: var(--ink); background: transparent; cursor: pointer;
+  transition: color .18s ease, background .18s ease;
+}
+.event-source-band button + button { border-left: 1px solid var(--line); }
+.event-source-band button:hover, .event-source-band button.active { background: var(--surface-raised); }
+.event-source-band button.source-polymarket.active { background: var(--purple-soft); }
+.event-source-band button.source-kalshi.active { background: var(--gold-soft); }
+.event-source-band span, .event-source-band strong, .event-source-band small { display: block; }
+.event-source-band span { color: var(--quiet); font: 9px var(--font-geist-mono), monospace; font-weight: 700; letter-spacing: .1em; }
+.event-source-band span i { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--purple); }
+.event-source-band .source-kalshi span i { background: var(--gold); }
+.event-source-band strong { margin-top: 8px; font-size: 28px; line-height: 1; letter-spacing: -.035em; }
+.event-source-band small { margin-top: 7px; color: var(--quiet); font-size: 10px; }
+.event-discovery { margin: 0 0 38px; }
 .event-search { position: relative; display: block; }
 .event-search > span { position: absolute; left: 16px; top: 50%; color: var(--quiet); font-size: 20px; transform: translateY(-53%); pointer-events: none; }
 .event-search input {
@@ -323,7 +340,10 @@ tbody tr.top-row { background: linear-gradient(90deg, rgba(138,97,255,.05), tran
 .prophet-event-block > header { display: grid; grid-template-columns: 40px minmax(0, 1fr) 32px; gap: 12px; align-items: start; padding: 17px 17px 15px; }
 .event-symbol { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; color: var(--purple-deep); background: var(--purple-soft); font: 11px var(--font-geist-mono), monospace; font-weight: 750; }
 .event-block-title { min-width: 0; padding: 0; border: 0; text-align: left; background: transparent; cursor: pointer; }
-.event-block-title > span { display: block; color: var(--gold); font: 9px var(--font-geist-mono), monospace; letter-spacing: .07em; }
+.event-block-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--gold); font: 9px var(--font-geist-mono), monospace; letter-spacing: .07em; }
+.event-block-meta em { font-style: normal; }
+.event-market-badge { padding: 3px 6px; border-radius: 4px; color: var(--purple-deep); background: var(--purple-soft); font-style: normal; font-weight: 750; letter-spacing: .04em; }
+.event-market-badge.kalshi { color: #795600; background: var(--gold-soft); }
 .event-block-title h3 { display: -webkit-box; margin: 6px 0 0; overflow: hidden; font-size: 15px; line-height: 1.38; letter-spacing: -.015em; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .event-block-title:hover h3 { color: var(--purple); }
 .event-open-arrow { width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 8px; color: var(--quiet); background: transparent; cursor: pointer; transition: color .18s ease, border-color .18s ease, transform .18s ease; }
@@ -906,6 +926,12 @@ td { font-size: 12px; }
   .category-label { display: none; }
   .event-row { grid-template-columns: 1fr; gap: 4px; padding: 12px 0; }
   .event-topics { flex-wrap: nowrap; margin-inline: -18px; padding-inline: 18px; overflow-x: auto; }
+  .event-source-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .event-source-band .source-all { grid-column: 1 / -1; }
+  .event-source-band button { padding: 16px 13px; }
+  .event-source-band .source-polymarket { border-left: 0; border-top: 1px solid var(--line); }
+  .event-source-band .source-kalshi { border-top: 1px solid var(--line); }
+  .event-source-band strong { font-size: 24px; }
   .event-topics small, .event-topics button { flex: 0 0 auto; }
   .event-view-controls { align-items: stretch; flex-direction: column; }
   .event-scope button { flex: 1; }
