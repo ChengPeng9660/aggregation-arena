@@ -115,6 +115,9 @@ export async function POST(request: Request) {
       const runtime = env as unknown as Parameters<typeof runRapidResolutionRound>[0];
       result = await runRapidResolutionRound(runtime, {
         jobLimit: Math.max(1, Math.min(72, Number(payload.jobLimit || 16))),
+        runForecast: payload.runForecast !== false,
+        runHarness: payload.runHarness !== false,
+        harnessEventLimit: Math.max(1, Math.min(3, Number(payload.harnessEventLimit || 1))),
       });
     } else if (action === "run_agent_harness_backfill") {
       const runtime = env as unknown as Parameters<typeof runAgentHarnessBatch>[0];

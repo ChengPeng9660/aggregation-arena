@@ -181,7 +181,7 @@ export async function runForecastBatch(
         WHERE recent_failure.event_id=e.id
           AND recent_failure.participant_id=fm.participant_id
           AND recent_failure.status='failed'
-          AND datetime(recent_failure.completed_at) > datetime('now', '-1 minute')
+          AND datetime(recent_failure.completed_at) > datetime('now', '-15 minutes')
       )
       GROUP BY e.id, fm.participant_id, fm.model_order
       ORDER BY MIN(si.selected_at), MIN(si.category), MIN(si.rank), e.id, fm.model_order

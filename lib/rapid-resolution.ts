@@ -11,12 +11,17 @@ type RapidResolutionEnv = Parameters<typeof runForecastBatch>[0]
 
 export async function runRapidResolutionRound(
   env: RapidResolutionEnv,
-  options: { jobLimit?: number } = {},
+  options: {
+    jobLimit?: number;
+    runForecast?: boolean;
+    runHarness?: boolean;
+    harnessEventLimit?: number;
+  } = {},
 ) {
   const now = new Date();
   await ensureCurationReady(env.DB);
   const hour = now.toISOString().slice(0, 13).replace("T", "-");
-  const runId = `rapid-${hour}00-v1`;
+  const runId = `rapid10-${hour}00-v1`;
   const [existing, latestSync] = await Promise.all([
     env.DB.prepare("SELECT status FROM selection_runs WHERE id=?")
       .bind(runId).first<{ status: string }>(),
@@ -30,13 +35,16 @@ export async function runRapidResolutionRound(
     ? null
     : await syncLiveMarketCandidates(env.DB, now);
   const selection = await selectRapidResolutionSlate(env.DB, now);
-  const forecast = selection.eventIds.length
+  const forecast = selection.eventIds.length && options.runForecast !== false
     ? await runForecastBatch(env, Math.max(1, Math.min(72, Number(options.jobLimit || 16))), selection.eventIds)
-    : { configured: true, processed: 0, completed: 0, outcomes: [] };
-  const harness = selection.eventIds.length
+    : { configured: true, skipped: options.runForecast === false, processed: 0, completed: 0, outcomes: [] };
+  const harness = selection.eventIds.length && options.runHarness !== false
     ? await runAgentHarnessBatch(env, {
         resolvedOnly: false,
-        eventLimit: selection.eventIds.length,
+        eventLimit: Math.max(1, Math.min(
+          selection.eventIds.length,
+          Number(options.harnessEventLimit || selection.eventIds.length),
+        )),
         eventIds: selection.eventIds,
       })
     : null;

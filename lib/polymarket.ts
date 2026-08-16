@@ -45,16 +45,18 @@ type EventCandidate = Candidate & {
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
 const KALSHI_API = "https://external-api.kalshi.com/trade-api/v2";
+const KALSHI_API_FALLBACK_ORIGIN = "https://api.elections.kalshi.com";
 const MAX_POLYMARKET_EVENTS = 600;
 const MAX_EVENT_PAGES = 12;
 const EVENT_PAGE_SIZE = 50;
 const MAX_RAPID_EVENT_PAGES = 4;
 const RAPID_RESOLUTION_HOURS = 3;
-const RAPID_MINIMUM_LEAD_MINUTES = 30;
-const RAPID_EVENT_LIMIT = 3;
-const RAPID_MINIMUM_POLYMARKET_LIQUIDITY = 40;
-const RAPID_MINIMUM_YES_PRICE = 0.02;
-const RAPID_MAXIMUM_YES_PRICE = 0.98;
+const RAPID_MINIMUM_LEAD_MINUTES = 15;
+const RAPID_EVENT_LIMIT = 10;
+const RAPID_MAX_PER_DIVERSITY_GROUP = 4;
+const RAPID_MINIMUM_POLYMARKET_LIQUIDITY = 0;
+const RAPID_MINIMUM_YES_PRICE = 0.01;
+const RAPID_MAXIMUM_YES_PRICE = 0.99;
 const RAPID_ALLOWED_REASONS = [
   "outside_close_window",
   "low_total_volume",
@@ -63,8 +65,8 @@ const RAPID_ALLOWED_REASONS = [
   "market_too_new",
   "extreme_or_missing_price",
 ];
-const MAX_KALSHI_EVENT_PAGES = 3;
-const KALSHI_EVENT_PAGE_SIZE = 200;
+const MAX_KALSHI_MARKET_PAGES = 2;
+const KALSHI_MARKET_PAGE_SIZE = 1000;
 const MAX_RESOLUTION_CHECKS_PER_RUN = 24;
 const EXTERNAL_FETCH_TIMEOUT_MS = 15_000;
 const MAX_EXTERNAL_PAGE_BYTES = 8 * 1024 * 1024;
@@ -451,7 +453,7 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
 export async function selectRapidResolutionSlate(db: D1Database = getD1(), now = new Date()) {
   await ensureCurationReady(db);
   const hour = now.toISOString().slice(0, 13).replace("T", "-");
-  const runId = `rapid-${hour}00-v1`;
+  const runId = `rapid10-${hour}00-v1`;
   const existing = await db.prepare("SELECT * FROM selection_runs WHERE id=?").bind(runId)
     .first<Record<string, unknown>>();
   if (existing?.status === "completed") {
@@ -501,6 +503,7 @@ export async function selectRapidResolutionSlate(db: D1Database = getD1(), now =
     minimumPolymarketLiquidity: RAPID_MINIMUM_POLYMARKET_LIQUIDITY,
     minimumYesPrice: RAPID_MINIMUM_YES_PRICE,
     maximumYesPrice: RAPID_MAXIMUM_YES_PRICE,
+    maxPerDiversityGroup: RAPID_MAX_PER_DIVERSITY_GROUP,
     limit: Math.max(1, candidates.length),
   }) as Candidate[];
   const selected = eligiblePool.slice(0, RAPID_EVENT_LIMIT);
@@ -525,7 +528,7 @@ export async function selectRapidResolutionSlate(db: D1Database = getD1(), now =
       completed_at=excluded.completed_at
   `).bind(
     runId,
-    `${CURATION_CONFIG.configVersion}-rapid-3h-v1`,
+    `${CURATION_CONFIG.configVersion}-rapid10-3h-v1`,
     CURATION_CONFIG.taxonomyVersion,
     selected.length ? "running" : "incomplete",
     candidates.length,
@@ -545,7 +548,7 @@ export async function selectRapidResolutionSlate(db: D1Database = getD1(), now =
       horizonHours: RAPID_RESOLUTION_HOURS,
       minimumLeadMinutes: RAPID_MINIMUM_LEAD_MINUTES,
       candidateCount: candidates.length,
-      rule: "rapid-resolution gates: open binary market, non-extreme price, clear rules, and minimum source liquidity",
+      rule: "rapid experiment gates: open binary market, minimally non-extreme price, clear rules, and up to four questions per source event",
     }), completedAt).run();
     return { runId, selected: 0, eventIds: [], sourceCounts, categoryCounts, reused: false };
   }
@@ -613,6 +616,7 @@ export async function selectRapidResolutionSlate(db: D1Database = getD1(), now =
         waivedReasons: candidate.reasons,
         minimumPolymarketLiquidity: RAPID_MINIMUM_POLYMARKET_LIQUIDITY,
         rapidYesPriceRange: [RAPID_MINIMUM_YES_PRICE, RAPID_MAXIMUM_YES_PRICE],
+        maxPerDiversityGroup: RAPID_MAX_PER_DIVERSITY_GROUP,
       }), completedAt),
       db.prepare(`
         INSERT OR IGNORE INTO event_outcomes (
@@ -1117,51 +1121,85 @@ async function fetchRapidPolymarketEvents(now: Date) {
 }
 
 async function fetchKalshiCandidates(now: Date): Promise<SourceFetchResult> {
-  const events: Record<string, unknown>[] = [];
+  const markets = new Map<string, Record<string, unknown>>();
   let pages = 0;
-  let cursor = "";
-  const seenCursors = new Set<string>();
-  for (let page = 0; page < MAX_KALSHI_EVENT_PAGES; page += 1) {
-    const url = new URL(`${KALSHI_API}/events`);
-    url.searchParams.set("status", "open");
-    url.searchParams.set("with_nested_markets", "true");
-    url.searchParams.set("min_close_ts", String(Math.floor((now.getTime() + CURATION_CONFIG.kalshiMinimumCloseHours * 3_600_000) / 1000)));
-    url.searchParams.set("limit", String(KALSHI_EVENT_PAGE_SIZE));
-    if (cursor) url.searchParams.set("cursor", cursor);
-    const response = await fetchKalshiWithRetry(url);
-    if (!response.ok) throw new Error(`Kalshi returned ${response.status}`);
-    const payload = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as {
-      events?: Record<string, unknown>[];
-      cursor?: string;
-    };
-    const pageRows = Array.isArray(payload.events) ? payload.events : [];
-    events.push(...pageRows);
-    pages += 1;
-    const nextCursor = String(payload.cursor || "");
-    if (!nextCursor || pageRows.length < KALSHI_EVENT_PAGE_SIZE || seenCursors.has(nextCursor)) break;
-    seenCursors.add(nextCursor);
-    cursor = nextCursor;
+  const windows = [
+    {
+      minClose: now.getTime(),
+      maxClose: now.getTime() + RAPID_RESOLUTION_HOURS * 3_600_000,
+      maxPages: 1,
+    },
+    {
+      minClose: now.getTime() + CURATION_CONFIG.kalshiMinimumCloseHours * 3_600_000,
+      maxClose: now.getTime() + CURATION_CONFIG.kalshiMaximumCloseDays * 86_400_000,
+      maxPages: MAX_KALSHI_MARKET_PAGES,
+    },
+  ];
+
+  for (const window of windows) {
+    let cursor = "";
+    const seenCursors = new Set<string>();
+    for (let page = 0; page < window.maxPages; page += 1) {
+      const url = new URL(`${KALSHI_API}/markets`);
+      // Kalshi documents close-time filters as incompatible with status=open,
+      // so request the bounded window and enforce active status locally.
+      url.searchParams.set("min_close_ts", String(Math.floor(window.minClose / 1000)));
+      url.searchParams.set("max_close_ts", String(Math.floor(window.maxClose / 1000)));
+      url.searchParams.set("mve_filter", "exclude");
+      url.searchParams.set("limit", String(KALSHI_MARKET_PAGE_SIZE));
+      if (cursor) url.searchParams.set("cursor", cursor);
+      const response = await fetchKalshiWithRetry(url);
+      if (!response.ok) throw new Error(`Kalshi markets API returned ${response.status}`);
+      const payload = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as {
+        markets?: Record<string, unknown>[];
+        cursor?: string;
+      };
+      const pageRows = Array.isArray(payload.markets) ? payload.markets : [];
+      for (const market of pageRows) {
+        const ticker = String(market.ticker || market.ticker_name || "").trim();
+        if (ticker) markets.set(ticker, market);
+      }
+      pages += 1;
+      const nextCursor = String(payload.cursor || "");
+      if (!nextCursor || pageRows.length < KALSHI_MARKET_PAGE_SIZE || seenCursors.has(nextCursor)) break;
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
   }
-  const candidates = events.flatMap((event) => {
-    const markets = Array.isArray(event.markets) ? event.markets as Record<string, unknown>[] : [];
-    return markets.map((market) => normalizeKalshiMarket(event, market, now));
-  }).filter((candidate) => candidate.marketId !== "kalshi:");
-  return { source: "kalshi", eventCount: events.length, pages, candidates };
+
+  const candidates = [...markets.values()]
+    .map((market) => normalizeKalshiMarket({
+      event_ticker: market.event_ticker,
+      series_ticker: market.series_ticker,
+      title: market.title,
+    }, market, now))
+    .filter((candidate) => candidate.marketId !== "kalshi:" && candidate.active && !candidate.closed);
+  const eventCount = new Set(candidates.map((candidate) => candidate.diversityGroupId)).size;
+  return { source: "kalshi", eventCount, pages, candidates };
 }
 
 async function fetchKalshiWithRetry(url: URL) {
   let response: Response | null = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    response = await fetch(url, {
-      headers: { accept: "application/json", "user-agent": "Aggrena/1.0" },
-      signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
-    });
-    if (response.status !== 429 || attempt === 2) return response;
-    const retryAfterSeconds = Number(response.headers.get("retry-after"));
-    const delayMs = Number.isFinite(retryAfterSeconds)
-      ? Math.min(2_000, Math.max(250, retryAfterSeconds * 1_000))
-      : 250 * 2 ** attempt;
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  const fallbackUrl = new URL(url.pathname + url.search, KALSHI_API_FALLBACK_ORIGIN);
+  for (const endpoint of [url, fallbackUrl]) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      response = await fetch(endpoint, {
+        headers: {
+          accept: "application/json",
+          "user-agent": "Aggrena/1.0 (+https://www.aggrena.com)",
+        },
+        signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
+      });
+      if (response.status !== 429) return response;
+      if (attempt === 0) {
+        await response.body?.cancel();
+        // Kalshi's 429 response currently omits Retry-After; use documented
+        // exponential backoff so anonymous public reads do not hammer the bucket.
+        const delayMs = 750;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    await response?.body?.cancel();
   }
   return response!;
 }

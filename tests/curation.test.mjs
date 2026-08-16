@@ -202,6 +202,38 @@ test("rapid selector deduplicates sibling markets from one source event", () => 
   assert.equal(selected[0].marketId, "rapid-sibling-strong");
 });
 
+test("rapid experiment can admit a bounded number of sibling questions", () => {
+  const ranked = rankCandidates([
+    candidate({
+      marketId: "rapid-sibling-a",
+      sourceEventId: "rapid-event-shared",
+      diversityGroupId: "rapid-group-shared",
+      closeTime: "2026-07-29T02:00:00.000Z",
+      volume24h: 80_000,
+    }),
+    candidate({
+      marketId: "rapid-sibling-b",
+      sourceEventId: "rapid-event-shared",
+      diversityGroupId: "rapid-group-shared",
+      closeTime: "2026-07-29T02:00:00.000Z",
+      volume24h: 60_000,
+    }),
+    candidate({
+      marketId: "rapid-sibling-c",
+      sourceEventId: "rapid-event-shared",
+      diversityGroupId: "rapid-group-shared",
+      closeTime: "2026-07-29T02:00:00.000Z",
+      volume24h: 40_000,
+    }),
+  ], now);
+  const selected = selectRapidResolutionCandidates(ranked, {
+    now,
+    limit: 3,
+    maxPerDiversityGroup: 2,
+  });
+  assert.deepEqual(selected.map((item) => item.marketId), ["rapid-sibling-a", "rapid-sibling-b"]);
+});
+
 test("rapid experiment may waive long-market activity gates but keeps source quality floors", () => {
   const ranked = rankCandidates([
     candidate({
