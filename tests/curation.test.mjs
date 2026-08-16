@@ -9,6 +9,7 @@ import {
   normalizeKalshiMarket,
   rankCandidates,
   selectPersistenceCandidates,
+  selectRapidResolutionCandidates,
   selectBalancedCandidates,
   selectDiverseSourceBalancedCandidates,
   titleSimilarity,
@@ -144,6 +145,91 @@ test("hourly persistence keeps every market in an eligible event and drops irrel
     candidate({ marketId: "irrelevant", sourceEventId: "event-b", eligible: false }),
   ]);
   assert.deepEqual(persisted.map((item) => item.marketId), ["eligible", "sibling"]);
+});
+
+test("rapid selector admits only near-close markets that pass every non-time gate", () => {
+  const ranked = rankCandidates([
+    candidate({
+      marketId: "rapid-good",
+      sourceEventId: "rapid-event-a",
+      diversityGroupId: "rapid-group-a",
+      closeTime: "2026-07-29T02:00:00.000Z",
+    }),
+    candidate({
+      marketId: "rapid-low-volume",
+      sourceEventId: "rapid-event-b",
+      diversityGroupId: "rapid-group-b",
+      closeTime: "2026-07-29T02:15:00.000Z",
+      volume24h: 100,
+    }),
+    candidate({
+      marketId: "rapid-too-soon",
+      sourceEventId: "rapid-event-c",
+      diversityGroupId: "rapid-group-c",
+      closeTime: "2026-07-29T00:10:00.000Z",
+    }),
+    candidate({
+      marketId: "rapid-too-late",
+      sourceEventId: "rapid-event-d",
+      diversityGroupId: "rapid-group-d",
+      closeTime: "2026-07-29T04:00:00.000Z",
+    }),
+  ], now);
+  const selected = selectRapidResolutionCandidates(ranked, { now, horizonHours: 3, minimumLeadMinutes: 30 });
+  assert.deepEqual(selected.map((item) => item.marketId), ["rapid-good"]);
+  assert.deepEqual(selected[0].reasons, ["outside_close_window"]);
+});
+
+test("rapid selector deduplicates sibling markets from one source event", () => {
+  const ranked = rankCandidates([
+    candidate({
+      marketId: "rapid-sibling-strong",
+      sourceEventId: "rapid-event-shared",
+      diversityGroupId: "rapid-group-shared",
+      closeTime: "2026-07-29T02:00:00.000Z",
+      volume24h: 80_000,
+    }),
+    candidate({
+      marketId: "rapid-sibling-weak",
+      sourceEventId: "rapid-event-shared",
+      diversityGroupId: "rapid-group-shared",
+      closeTime: "2026-07-29T02:00:00.000Z",
+      volume24h: 20_000,
+    }),
+  ], now);
+  const selected = selectRapidResolutionCandidates(ranked, { now });
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].marketId, "rapid-sibling-strong");
+});
+
+test("rapid experiment may waive long-market activity gates but keeps source quality floors", () => {
+  const ranked = rankCandidates([
+    candidate({
+      marketId: "rapid-thin-but-valid",
+      sourceEventId: "rapid-thin-event",
+      diversityGroupId: "rapid-thin-group",
+      closeTime: "2026-07-29T02:00:00.000Z",
+      volume24h: 0,
+      totalVolume: 0,
+      liquidity: 80,
+      startTime: "2026-07-28T23:00:00.000Z",
+    }),
+    candidate({
+      marketId: "rapid-no-liquidity",
+      sourceEventId: "rapid-empty-event",
+      diversityGroupId: "rapid-empty-group",
+      closeTime: "2026-07-29T02:00:00.000Z",
+      volume24h: 0,
+      totalVolume: 0,
+      liquidity: 0,
+    }),
+  ], now);
+  const selected = selectRapidResolutionCandidates(ranked, {
+    now,
+    allowedReasons: ["outside_close_window", "low_total_volume", "low_24h_volume", "low_liquidity", "market_too_new"],
+    minimumPolymarketLiquidity: 40,
+  });
+  assert.deepEqual(selected.map((item) => item.marketId), ["rapid-thin-but-valid"]);
 });
 
 test("balanced selector caps every category at the target", () => {

@@ -10,6 +10,7 @@ import {
 import { runAgentHarnessBatch } from "@/lib/agent-aggregation";
 import { getForecastPipelineSnapshot, runForecastBatch } from "@/lib/forecasting";
 import { runMarketScheduled, selectDailyBalancedSlate } from "@/lib/polymarket";
+import { runRapidResolutionRound } from "@/lib/rapid-resolution";
 import { env } from "cloudflare:workers";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +46,8 @@ export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as Record<string, unknown>;
     const action = String(payload.action || "");
-    const actor = action === "run_daily_forecast_batch" || action === "run_pipeline_sync" || action === "run_agent_harness_backfill"
+    const actor = action === "run_daily_forecast_batch" || action === "run_pipeline_sync"
+      || action === "run_agent_harness_backfill" || action === "run_rapid_forecast_batch"
       ? pipelineActor(request)
       : writeActor(request);
     let result: unknown;
@@ -109,6 +111,11 @@ export async function POST(request: Request) {
     } else if (action === "run_pipeline_sync") {
       const runtime = env as unknown as Parameters<typeof runForecastBatch>[0];
       result = await runMarketScheduled(runtime, { cron: "0 * * * *" });
+    } else if (action === "run_rapid_forecast_batch") {
+      const runtime = env as unknown as Parameters<typeof runRapidResolutionRound>[0];
+      result = await runRapidResolutionRound(runtime, {
+        jobLimit: Math.max(1, Math.min(72, Number(payload.jobLimit || 16))),
+      });
     } else if (action === "run_agent_harness_backfill") {
       const runtime = env as unknown as Parameters<typeof runAgentHarnessBatch>[0];
       result = await runAgentHarnessBatch(runtime, {

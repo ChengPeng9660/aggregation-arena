@@ -6,6 +6,7 @@ import {
   normalizePolymarketMarket,
   rankCandidates,
   selectPersistenceCandidates,
+  selectRapidResolutionCandidates,
   selectDiverseSourceBalancedCandidates,
 } from "@/lib/curation-core";
 import {
@@ -47,6 +48,21 @@ const KALSHI_API = "https://external-api.kalshi.com/trade-api/v2";
 const MAX_POLYMARKET_EVENTS = 600;
 const MAX_EVENT_PAGES = 12;
 const EVENT_PAGE_SIZE = 50;
+const MAX_RAPID_EVENT_PAGES = 4;
+const RAPID_RESOLUTION_HOURS = 3;
+const RAPID_MINIMUM_LEAD_MINUTES = 30;
+const RAPID_EVENT_LIMIT = 3;
+const RAPID_MINIMUM_POLYMARKET_LIQUIDITY = 40;
+const RAPID_MINIMUM_YES_PRICE = 0.02;
+const RAPID_MAXIMUM_YES_PRICE = 0.98;
+const RAPID_ALLOWED_REASONS = [
+  "outside_close_window",
+  "low_total_volume",
+  "low_24h_volume",
+  "low_liquidity",
+  "market_too_new",
+  "extreme_or_missing_price",
+];
 const MAX_KALSHI_EVENT_PAGES = 3;
 const KALSHI_EVENT_PAGE_SIZE = 200;
 const MAX_RESOLUTION_CHECKS_PER_RUN = 24;
@@ -155,7 +171,30 @@ export async function syncLiveMarketCandidates(db: D1Database = getD1(), now = n
     }
     const normalized = successes.flatMap((result) => result.candidates);
     const ranked = rankCandidates(normalized, now) as Candidate[];
-    const persisted = selectPersistenceCandidates(ranked) as Candidate[];
+    const regularPersisted = selectPersistenceCandidates(ranked) as Candidate[];
+    const rapidEligible = selectRapidResolutionCandidates(ranked, {
+      now,
+      horizonHours: RAPID_RESOLUTION_HOURS,
+      minimumLeadMinutes: RAPID_MINIMUM_LEAD_MINUTES,
+      allowedReasons: RAPID_ALLOWED_REASONS,
+      minimumPolymarketLiquidity: RAPID_MINIMUM_POLYMARKET_LIQUIDITY,
+      minimumYesPrice: RAPID_MINIMUM_YES_PRICE,
+      maximumYesPrice: RAPID_MAXIMUM_YES_PRICE,
+      limit: 24,
+    }) as Candidate[];
+    const rapidEarliest = now.getTime() + RAPID_MINIMUM_LEAD_MINUTES * 60_000;
+    const rapidLatest = now.getTime() + RAPID_RESOLUTION_HOURS * 3_600_000;
+    const rapidWindow = ranked.filter((candidate) => {
+      const closeTime = Date.parse(candidate.closeTime || "");
+      return Number.isFinite(closeTime) && closeTime >= rapidEarliest && closeTime <= rapidLatest;
+    }).sort((left, right) => right.volume24h - left.volume24h).slice(0, 200);
+    const persisted = [...new Map(
+      [...regularPersisted, ...rapidWindow, ...rapidEligible].map((candidate) => [candidate.marketId, candidate]),
+    ).values()];
+    const rapidReasonCounts: Record<string, number> = {};
+    for (const candidate of rapidWindow) {
+      for (const reason of candidate.reasons) rapidReasonCounts[reason] = (rapidReasonCounts[reason] || 0) + 1;
+    }
     const categoryStats = Object.fromEntries(CANONICAL_CATEGORIES.map((category) => [category, {
       candidates: ranked.filter((candidate) => candidate.category === category).length,
       eligible: ranked.filter((candidate) => candidate.category === category && candidate.eligible).length,
@@ -235,6 +274,13 @@ export async function syncLiveMarketCandidates(db: D1Database = getD1(), now = n
         persistedMarkets: persisted.length,
         categoryStats,
         sourceStats,
+        rapidResolution: {
+          horizonHours: RAPID_RESOLUTION_HOURS,
+          minimumLeadMinutes: RAPID_MINIMUM_LEAD_MINUTES,
+          windowCandidates: rapidWindow.length,
+          eligibleCandidates: rapidEligible.length,
+          rejectionReasonCounts: rapidReasonCounts,
+        },
         degraded: successes.length < 2,
       }),
       new Date().toISOString(),
@@ -400,6 +446,198 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
   await db.prepare("UPDATE selection_runs SET status='completed', completed_at=? WHERE id=?")
     .bind(completedAt, runId).run();
   return { runId, selected: selected.length, sourceCounts, categoryCounts, quotaMet: true, reused: false };
+}
+
+export async function selectRapidResolutionSlate(db: D1Database = getD1(), now = new Date()) {
+  await ensureCurationReady(db);
+  const hour = now.toISOString().slice(0, 13).replace("T", "-");
+  const runId = `rapid-${hour}00-v1`;
+  const existing = await db.prepare("SELECT * FROM selection_runs WHERE id=?").bind(runId)
+    .first<Record<string, unknown>>();
+  if (existing?.status === "completed") {
+    const existingItems = await db.prepare(
+      "SELECT event_id FROM selection_items WHERE run_id=? ORDER BY rank, event_id",
+    ).bind(runId).all<{ event_id: string }>();
+    return {
+      runId,
+      selected: Number(existing.selected_count),
+      eventIds: existingItems.results.map((row) => row.event_id),
+      sourceCounts: safeJson(existing.source_counts_json, {}),
+      reused: true,
+    };
+  }
+
+  const horizon = new Date(now.getTime() + RAPID_RESOLUTION_HOURS * 3_600_000).toISOString();
+  const earliest = new Date(now.getTime() + RAPID_MINIMUM_LEAD_MINUTES * 60_000).toISOString();
+  const [rows, selectedGroups] = await Promise.all([
+    db.prepare(`
+    SELECT c.*
+    FROM polymarket_candidates c
+    WHERE c.last_seen_at=(
+      SELECT started_at FROM curation_sync_runs WHERE status='completed' ORDER BY id DESC LIMIT 1
+    )
+      AND datetime(c.close_time) >= datetime(?)
+      AND datetime(c.close_time) <= datetime(?)
+    ORDER BY c.selection_score DESC, c.volume_24h DESC, c.close_time
+    LIMIT 200
+  `).bind(earliest, horizon).all<Record<string, unknown>>(),
+    db.prepare(`
+      SELECT DISTINCT pc.diversity_group_id
+      FROM selection_items si
+      JOIN polymarket_candidates pc ON pc.market_id=si.market_id
+      WHERE pc.diversity_group_id!=''
+    `).all<{ diversity_group_id: string }>(),
+  ]);
+  const selectedGroupIds = new Set(selectedGroups.results.map((row) => row.diversity_group_id));
+  const candidates = rows.results.map((row) => rowToCandidate({
+    ...row,
+    already_selected: selectedGroupIds.has(String(row.diversity_group_id)) ? 1 : 0,
+  }));
+  const eligiblePool = selectRapidResolutionCandidates(candidates, {
+    now,
+    horizonHours: RAPID_RESOLUTION_HOURS,
+    minimumLeadMinutes: RAPID_MINIMUM_LEAD_MINUTES,
+    allowedReasons: RAPID_ALLOWED_REASONS,
+    minimumPolymarketLiquidity: RAPID_MINIMUM_POLYMARKET_LIQUIDITY,
+    minimumYesPrice: RAPID_MINIMUM_YES_PRICE,
+    maximumYesPrice: RAPID_MAXIMUM_YES_PRICE,
+    limit: Math.max(1, candidates.length),
+  }) as Candidate[];
+  const selected = eligiblePool.slice(0, RAPID_EVENT_LIMIT);
+  const categoryCounts = Object.fromEntries(CANONICAL_CATEGORIES.map((category) => [
+    category,
+    selected.filter((candidate) => candidate.category === category).length,
+  ]));
+  const sourceCounts = Object.fromEntries(["polymarket", "kalshi"].map((source) => [
+    source,
+    selected.filter((candidate) => candidate.sourcePlatform === source).length,
+  ]));
+  const completedAt = new Date().toISOString();
+
+  await db.prepare(`
+    INSERT INTO selection_runs (
+      id, config_version, taxonomy_version, status, candidate_count, eligible_count,
+      selected_count, category_counts_json, source_counts_json, started_at, completed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET status=excluded.status, candidate_count=excluded.candidate_count,
+      eligible_count=excluded.eligible_count, selected_count=excluded.selected_count,
+      category_counts_json=excluded.category_counts_json, source_counts_json=excluded.source_counts_json,
+      completed_at=excluded.completed_at
+  `).bind(
+    runId,
+    `${CURATION_CONFIG.configVersion}-rapid-3h-v1`,
+    CURATION_CONFIG.taxonomyVersion,
+    selected.length ? "running" : "incomplete",
+    candidates.length,
+    eligiblePool.length,
+    selected.length,
+    JSON.stringify(categoryCounts),
+    JSON.stringify(sourceCounts),
+    now.toISOString(),
+    completedAt,
+  ).run();
+
+  if (!selected.length) {
+    await db.prepare(`
+      INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
+      VALUES ('curation.rapid_selection_incomplete', 'selection_run', ?, ?, 'rapid-resolution-cron', ?)
+    `).bind(runId, JSON.stringify({
+      horizonHours: RAPID_RESOLUTION_HOURS,
+      minimumLeadMinutes: RAPID_MINIMUM_LEAD_MINUTES,
+      candidateCount: candidates.length,
+      rule: "rapid-resolution gates: open binary market, non-extreme price, clear rules, and minimum source liquidity",
+    }), completedAt).run();
+    return { runId, selected: 0, eventIds: [], sourceCounts, categoryCounts, reused: false };
+  }
+
+  const eventIds: string[] = [];
+  const statements = selected.flatMap((candidate, index) => {
+    const sourceName = candidate.sourcePlatform === "kalshi" ? "Kalshi" : "Polymarket";
+    const safeMarketId = candidate.marketId.replace(/[^a-zA-Z0-9_-]/g, "-");
+    const eventId = `rapid-event-${candidate.sourcePlatform}-${safeMarketId}`;
+    eventIds.push(eventId);
+    const description = [
+      candidate.description,
+      candidate.rules ? `Resolution rules: ${candidate.rules}` : "",
+      `Source: ${sourceName}`,
+      candidate.sourceUrl ? `Event URL: ${candidate.sourceUrl}` : "",
+      `Selection run: ${runId}`,
+      `Rapid resolution window: ${RAPID_RESOLUTION_HOURS} hours`,
+    ].filter(Boolean).join("\n\n");
+    return [
+      db.prepare(`
+        INSERT OR IGNORE INTO events (
+          id, title, description, category, season, close_time, status, event_type,
+          source_event_id, outcomes_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'Live Benchmark', ?, 'open', 'binary', ?, '["yes","no"]', ?, ?)
+      `).bind(
+        eventId,
+        candidate.title,
+        description,
+        candidate.category,
+        candidate.closeTime,
+        candidate.sourceEventId,
+        completedAt,
+        completedAt,
+      ),
+      db.prepare(`
+        INSERT OR IGNORE INTO selection_items (
+          run_id, market_id, event_id, source_platform, category, rank, selection_score, price_at_selection,
+          volume_24h, total_volume, liquidity, selected_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        runId,
+        candidate.marketId,
+        eventId,
+        candidate.sourcePlatform,
+        candidate.category,
+        index + 1,
+        candidate.selectionScore,
+        candidate.yesPrice,
+        candidate.volume24h,
+        candidate.totalVolume,
+        candidate.liquidity,
+        completedAt,
+      ),
+      db.prepare(`
+        INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
+        VALUES ('curation.rapid_event_selected', 'event', ?, ?, 'rapid-resolution-cron', ?)
+      `).bind(eventId, JSON.stringify({
+        runId,
+        sourceEventId: candidate.sourceEventId,
+        marketId: candidate.marketId,
+        sourcePlatform: candidate.sourcePlatform,
+        closeTime: candidate.closeTime,
+        horizonHours: RAPID_RESOLUTION_HOURS,
+        waivedReason: "outside_close_window",
+        waivedReasons: candidate.reasons,
+        minimumPolymarketLiquidity: RAPID_MINIMUM_POLYMARKET_LIQUIDITY,
+        rapidYesPriceRange: [RAPID_MINIMUM_YES_PRICE, RAPID_MAXIMUM_YES_PRICE],
+      }), completedAt),
+      db.prepare(`
+        INSERT OR IGNORE INTO event_outcomes (
+          event_id, outcome_key, label, market_id, source_url, price_at_selection,
+          volume_24h, total_volume, liquidity, display_order, created_at
+        ) VALUES (?, 'yes', 'Yes', ?, ?, ?, ?, ?, ?, 0, ?)
+      `).bind(
+        eventId, candidate.marketId, candidate.sourceUrl, candidate.yesPrice,
+        candidate.volume24h, candidate.totalVolume, candidate.liquidity, completedAt,
+      ),
+      db.prepare(`
+        INSERT OR IGNORE INTO event_outcomes (
+          event_id, outcome_key, label, market_id, source_url, price_at_selection,
+          volume_24h, total_volume, liquidity, display_order, created_at
+        ) VALUES (?, 'no', 'No', ?, ?, ?, ?, ?, ?, 1, ?)
+      `).bind(
+        eventId, candidate.marketId, candidate.sourceUrl, 1 - candidate.yesPrice,
+        candidate.volume24h, candidate.totalVolume, candidate.liquidity, completedAt,
+      ),
+    ];
+  });
+  await runBatches(db, statements);
+  await db.prepare("UPDATE selection_runs SET status='completed', completed_at=? WHERE id=?")
+    .bind(completedAt, runId).run();
+  return { runId, selected: selected.length, eventIds, sourceCounts, categoryCounts, reused: false };
 }
 
 export async function resolveSelectedMarkets(db: D1Database = getD1()) {
@@ -798,7 +1036,7 @@ type SourceFetchResult = {
 };
 
 async function fetchPolymarketCandidates(now: Date): Promise<SourceFetchResult> {
-  const events: Record<string, unknown>[] = [];
+  const volumeEvents: Record<string, unknown>[] = [];
   let pages = 0;
   let cursor = "";
   for (let page = 0; page < MAX_EVENT_PAGES; page += 1) {
@@ -819,16 +1057,63 @@ async function fetchPolymarketCandidates(now: Date): Promise<SourceFetchResult> 
       next_cursor?: string;
     };
     const pageRows = Array.isArray(payload.events) ? payload.events : [];
-    events.push(...pageRows.slice(0, MAX_POLYMARKET_EVENTS - events.length));
+    volumeEvents.push(...pageRows.slice(0, MAX_POLYMARKET_EVENTS - volumeEvents.length));
     pages += 1;
     cursor = String(payload.next_cursor || "");
-    if (!cursor || pageRows.length < EVENT_PAGE_SIZE || events.length >= MAX_POLYMARKET_EVENTS) break;
+    if (!cursor || pageRows.length < EVENT_PAGE_SIZE || volumeEvents.length >= MAX_POLYMARKET_EVENTS) break;
   }
+  let rapidEvents: Record<string, unknown>[] = [];
+  try {
+    const rapidResult = await fetchRapidPolymarketEvents(now);
+    rapidEvents = rapidResult.events;
+    pages += rapidResult.pages;
+  } catch (error) {
+    console.warn(JSON.stringify({
+      message: "Rapid-resolution Polymarket intake failed; regular intake remains available",
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
+  const events = [...new Map([...volumeEvents, ...rapidEvents].map((event) => [
+    String(event.id || event.slug || crypto.randomUUID()),
+    event,
+  ])).values()];
   const candidates = events.flatMap((event) => {
     const markets = Array.isArray(event.markets) ? event.markets as Record<string, unknown>[] : [];
     return markets.map((market) => normalizePolymarketMarket(event, market, now));
   }).filter((candidate) => candidate.marketId);
   return { source: "polymarket", eventCount: events.length, pages, candidates };
+}
+
+async function fetchRapidPolymarketEvents(now: Date) {
+  const events: Record<string, unknown>[] = [];
+  let pages = 0;
+  let cursor = "";
+  for (let page = 0; page < MAX_RAPID_EVENT_PAGES; page += 1) {
+    const url = new URL("/events/keyset", GAMMA_API);
+    url.searchParams.set("active", "true");
+    url.searchParams.set("closed", "false");
+    url.searchParams.set("end_date_min", now.toISOString());
+    url.searchParams.set("end_date_max", new Date(now.getTime() + RAPID_RESOLUTION_HOURS * 3_600_000).toISOString());
+    url.searchParams.set("order", "endDate");
+    url.searchParams.set("ascending", "true");
+    url.searchParams.set("limit", String(EVENT_PAGE_SIZE));
+    if (cursor) url.searchParams.set("after_cursor", cursor);
+    const response = await fetch(url, {
+      headers: { accept: "application/json", "user-agent": "Aggrena/1.0" },
+      signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`Polymarket rapid intake returned ${response.status}`);
+    const payload = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as {
+      events?: Record<string, unknown>[];
+      next_cursor?: string;
+    };
+    const pageRows = Array.isArray(payload.events) ? payload.events : [];
+    events.push(...pageRows);
+    pages += 1;
+    cursor = String(payload.next_cursor || "");
+    if (!cursor || pageRows.length < EVENT_PAGE_SIZE) break;
+  }
+  return { events, pages };
 }
 
 async function fetchKalshiCandidates(now: Date): Promise<SourceFetchResult> {
