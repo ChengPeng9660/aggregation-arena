@@ -74,6 +74,13 @@ test("Qwen reasoning_content JSON is accepted when content is null", () => {
   assert.equal(decision.confidence, "high");
 });
 
+test("Qwen thinking text may wrap a complete harness weights object", () => {
+  const decision = parseHarnessDecision({ choices: [{ message: { content:
+    'Thinking... {draft}. Final: {"weights":{"F1":0.7,"F2":0.3},"rationale":"Weighted by history.","confidence":"medium"}'
+  } }] }, ["F1", "F2"]);
+  assert.deepEqual(decision.weights, { F1: 0.7, F2: 0.3 });
+});
+
 test("deterministic finalizer computes a normalized convex probability pool", () => {
   const probabilities = finalizeHarnessDistribution(base.forecasters, ["O1", "O2"], { F1: 0.7, F2: 0.3 });
   assert.ok(Math.abs(probabilities.O1 - 0.61) < 1e-12);

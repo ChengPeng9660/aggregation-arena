@@ -5,9 +5,12 @@ import {
   FORECAST_MODELS,
   PROPHET_MODEL_PANEL_AS_OF,
   buildGatewayRequest,
+  buildGatewayRequestForEndpoint,
   buildProphetPredictionPrompt,
   buildSearchQuery,
   normalizeSources,
+  getActiveForecastModels,
+  parseDisabledModelIds,
   parseModelIdMap,
   parsePredictionResponse,
   resolveGatewayModelId,
@@ -63,6 +66,14 @@ test("gateway model IDs default to Prophet slugs and support explicit deployment
   assert.throws(() => parseModelIdMap('{"gpt-5.6-sol":""}'), /non-empty strings/);
 });
 
+test("provider-unavailable models are explicit and never silently substituted", () => {
+  const unavailable = JSON.stringify(["claude-fable-5", "foresight-v3"]);
+  assert.deepEqual(parseDisabledModelIds(unavailable), ["claude-fable-5", "foresight-v3"]);
+  assert.equal(getActiveForecastModels(unavailable).length, 16);
+  assert.ok(getActiveForecastModels(unavailable).every((model) => !["claude-fable-5", "foresight-v3"].includes(model.modelId)));
+  assert.throws(() => parseDisabledModelIds('{}'), /JSON array/);
+});
+
 test("gateway requests use the OpenAI-compatible JSON contract", () => {
   assert.deepEqual(buildGatewayRequest(
     "openai/gpt-5.6-sol-prod",
@@ -76,6 +87,55 @@ test("gateway requests use the OpenAI-compatible JSON contract", () => {
     seed: 42,
     response_format: { type: "json_object" },
   });
+});
+
+test("Poe requests omit extra_body fields rejected by provider-backed bots", () => {
+  assert.deepEqual(buildGatewayRequestForEndpoint(
+    "https://api.poe.com/v1/chat/completions",
+    "Gemini-3.6-Flash",
+    [{ role: "user", content: "Forecast this event." }],
+    { maxTokens: 700, temperature: 0.1, seed: 42 },
+  ), {
+    model: "Gemini-3.6-Flash",
+    messages: [{ role: "user", content: "Forecast this event." }],
+    max_tokens: 2200,
+    temperature: 0.1,
+  });
+});
+
+test("Poe Responses API requests use its native input contract", () => {
+  assert.deepEqual(buildGatewayRequestForEndpoint(
+    "https://api.poe.com/v1/responses",
+    "GPT-5.5",
+    [
+      { role: "system", content: "Return JSON only." },
+      { role: "user", content: "Forecast this event." },
+    ],
+    { maxTokens: 700, temperature: 0.1, seed: 42 },
+  ), {
+    model: "GPT-5.5",
+    input: "Forecast this event.",
+    instructions: "Return JSON only.",
+    max_output_tokens: 2200,
+    temperature: 0.1,
+  });
+});
+
+test("Poe grants larger ceilings to bots that spend heavily on hidden reasoning", () => {
+  const request = buildGatewayRequestForEndpoint(
+    "https://api.poe.com/v1/chat/completions",
+    "deepseek-v4-pro",
+    [{ role: "user", content: "Forecast this event." }],
+    { maxTokens: 700, temperature: 0.1, seed: 42 },
+  );
+  assert.equal(request.max_tokens, 12000);
+  const minimaxRequest = buildGatewayRequestForEndpoint(
+    "https://api.poe.com/v1/chat/completions",
+    "minimax-m2.7",
+    [{ role: "user", content: "Forecast this event." }],
+    { maxTokens: 700, temperature: 0.1, seed: 42 },
+  );
+  assert.equal(minimaxRequest.max_tokens, 12000);
 });
 
 const event = {

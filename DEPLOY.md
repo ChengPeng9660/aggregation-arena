@@ -116,7 +116,7 @@ npx vinext deploy
 ```text
 Uploaded aggregation-arena (X sec)
 Deployed aggregation-arena triggers (X sec)
-  https://aggregation-arena.luorx00.workers.dev
+  https://www.aggrena.com
 Current Version ID: a9a90355-c1fb-43ae-91c7-3898dcf14738
 ```
 
@@ -127,7 +127,7 @@ Current Version ID: a9a90355-c1fb-43ae-91c7-3898dcf14738
 检查首页是否可访问：
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://aggregation-arena.luorx00.workers.dev/
+curl -s -o /dev/null -w "%{http_code}\n" https://www.aggrena.com/
 ```
 
 应返回 `200`。
@@ -135,7 +135,7 @@ curl -s -o /dev/null -w "%{http_code}\n" https://aggregation-arena.luorx00.worke
 检查 API 是否返回正常数据：
 
 ```bash
-curl -s "https://aggregation-arena.luorx00.workers.dev/api/arena?track=aggregators&window=all&season=all&category=all" | head -c 300
+curl -s "https://www.aggrena.com/api/arena?track=aggregators&window=all&season=all&category=all" | head -c 300
 ```
 
 应返回包含 `generatedAt`、`stats`、`leaderboard` 等字段的 JSON。
@@ -170,7 +170,7 @@ echo "=== 6. 部署到 Cloudflare ==="
 npx vinext deploy
 
 echo "=== 7. 验证首页 ==="
-curl -s -o /dev/null -w "Homepage HTTP: %{http_code}\n" https://aggregation-arena.luorx00.workers.dev/
+curl -s -o /dev/null -w "Homepage HTTP: %{http_code}\n" https://www.aggrena.com/
 
 echo "=== 部署完成 ==="
 ```

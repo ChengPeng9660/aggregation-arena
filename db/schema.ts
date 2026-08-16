@@ -24,6 +24,8 @@ export const events = sqliteTable("events", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   resolvedAt: text("resolved_at"),
+  lockedAt: text("locked_at"),
+  lockReason: text("lock_reason"),
   eventType: text("event_type").notNull().default("binary"),
   sourceEventId: text("source_event_id"),
   outcomesJson: text("outcomes_json").notNull().default('["Yes","No"]'),

@@ -1,12 +1,17 @@
 # Copy this file to .dev.vars for local development. Never commit real keys.
 TAVILY_API_KEY=tvly-your-key
 
-# Exact OpenAI-compatible chat-completions endpoint, for example a private
-# LiteLLM gateway ending in /v1/chat/completions.
-PROPHET_MODEL_GATEWAY_URL=https://models.example.com/v1/chat/completions
-PROPHET_MODEL_GATEWAY_API_KEY=replace-with-gateway-key
+# Production uses Poe's OpenAI-compatible endpoint. The API key is stored only
+# as a Cloudflare encrypted secret; never commit a real key here.
+PROPHET_MODEL_GATEWAY_URL=https://api.poe.com/v1/chat/completions
+PROPHET_MODEL_GATEWAY_API_KEY=replace-with-poe-key
 
 # Optional JSON map from Prophet Arena slug to the deployment alias exposed by
 # your gateway. Both base forecasters and Agent Harnesses share this gateway.
 # Omit this variable when the gateway accepts the public slugs directly.
-PROPHET_MODEL_ID_MAP={}
+PROPHET_MODEL_ID_MAP={"gemini-3.6-flash":"gemini-3.6-flash","claude-fable-5":"claude-fable-5","gemini-3.1-pro":"gemini-3.1-pro","gpt-5.6-sol":"gpt-5.6-sol","gpt-5.5-high":"gpt-5.5","claude-opus-4.8-thinking":"claude-opus-4.8","kimi-k3":"kimi-k3","thinking-machines-zs-v2":"inkling","claude-sonnet-4.6":"claude-sonnet-4.6","grok-4.5":"grok-4.5","glm-5.2":"glm-5.2","deepseek-v4-pro":"deepseek-v4-pro","muse-spark-1.1":"muse-spark-1-1","qwen-3.6-plus":"qwen3.6-plus-t","grok-4.3":"grok-4.3","inkling-small":"inkling-small","minimax-m2.7":"minimax-m2.7","foresight-v3":"foresight-v3"}
+
+# Keep the public 18-model registry intact while excluding exact models that
+# the current Poe API does not actually accept. Remove IDs only after a live
+# request succeeds; a visible Poe UI page alone is not enough.
+PROPHET_DISABLED_MODEL_IDS=["claude-fable-5","gpt-5.6-sol","gpt-5.5-high","inkling-small","foresight-v3"]

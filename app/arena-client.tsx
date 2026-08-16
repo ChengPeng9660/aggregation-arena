@@ -23,7 +23,7 @@ type ArenaEvent = {
   category: string;
   season: string;
   closeTime: string | null;
-  status: "open" | "resolved" | "invalid";
+  status: "open" | "locked" | "resolved" | "invalid";
   eventType: "binary" | "categorical";
   sourceEventId: string | null;
   outcomes: { key: string; label: string; priceAtSelection?: number }[];
@@ -33,6 +33,8 @@ type ArenaEvent = {
   createdAt: string;
   updatedAt: string;
   resolvedAt: string | null;
+  lockedAt: string | null;
+  lockReason: string | null;
   forecasterCount: number;
   predictions: Prediction[];
 };
@@ -47,19 +49,26 @@ type Participant = {
 
 type LeaderboardRow = {
   id: string;
-  rank: number;
+  rank: number | null;
   name: string;
   shortName: string;
   organization: string;
   kind: "forecaster" | "aggregate";
   color: string;
-  brier: number;
-  ciLow: number;
-  ciHigh: number;
+  brier: number | null;
+  ciLow: number | null;
+  ciHigh: number | null;
   resolved: number;
   coverage: number;
-  status: "listed" | "provisional";
+  status: "listed" | "provisional" | "awaiting_resolution" | "awaiting_forecast";
   version: string;
+  forecasted: number;
+  pending: number;
+  methodId?: string;
+  aggregationScope?: "pair" | "adaptive-panel";
+  modelPair?: { id: string; name: string; organization: string; color: string }[];
+  modelCount?: number;
+  pairCount?: number;
 };
 
 type Method = {
@@ -253,6 +262,7 @@ const ACTION_LABELS: Record<string, string> = {
   "forecast.pipeline_failed": "Forecast pipeline failed",
   "participant.upserted": "Forecaster updated",
   "curation.event_selected": "Market event selected",
+  "curation.event_locked": "Market event locked",
   "curation.event_resolved": "Market event resolved",
   "curation.selection_incomplete": "Daily release held for source quota",
 };
@@ -307,7 +317,7 @@ export function ArenaClient() {
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void load(), 0);
-    const timer = window.setInterval(() => load(true), 30000);
+    const timer = window.setInterval(() => load(true), 60000);
     return () => {
       window.clearTimeout(initialLoad);
       window.clearInterval(timer);
@@ -337,7 +347,7 @@ export function ArenaClient() {
   };
 
   const openEvents = useMemo(
-    () => snapshot?.events.filter((event) => event.status === "open") ?? [],
+    () => snapshot?.events.filter((event) => event.status === "open" || event.status === "locked") ?? [],
     [snapshot],
   );
   const resolvedEvents = useMemo(
@@ -349,9 +359,9 @@ export function ArenaClient() {
     <div className="arena-app public-arena">
       <header className="public-header">
         <div className="public-header-inner">
-          <button className="public-brand" onClick={() => navigateView("leaderboard")} aria-label="Aggregation Arena home">
+          <button className="public-brand" onClick={() => navigateView("leaderboard")} aria-label="Aggrena home">
             <span className="public-mark" aria-hidden="true"><i /><i /><i /></span>
-            <strong>Aggregation Arena</strong>
+            <strong>Aggrena</strong>
           </button>
           <nav aria-label="Public benchmark navigation">
             <PublicNavButton active={view === "leaderboard"} label="Leaderboard" onClick={() => navigateView("leaderboard")} />
@@ -404,7 +414,7 @@ export function ArenaClient() {
       </main>
 
       <footer className="public-footer">
-        <div><strong>Aggregation Arena</strong><span>Open forecasting aggregation benchmark</span></div>
+        <div><strong>Aggrena</strong><span>Open forecasting aggregation benchmark</span></div>
         <p>{view === "history" ? "ForecastBench history · interactive model selection · resolved Brier scoring" : "Polymarket + Kalshi questions · frozen research context · public Event Brier scoring"}</p>
       </footer>
 
@@ -606,12 +616,13 @@ function LeaderboardView({
   onTrack: (value: LeaderboardTrack) => void;
 }) {
   const isMethods = track === "aggregators";
+  const pairMetadata = snapshot.leaderboard.find((row) => row.aggregationScope === "pair");
 
   return (
     <div className="page-content public-leaderboard enter">
       <section className="public-leaderboard-hero">
         <div className="public-hero-copy">
-          <span className="eyebrow">AGGREGATION ARENA · LIVE BENCHMARK</span>
+          <span className="eyebrow">AGGRENA · LIVE BENCHMARK</span>
           <h1 className="public-hero-title">Forecast Aggregation Leaderboard</h1>
           <p>Aggregation methods combine independent AI forecasts on real prediction markets and are scored in public when events resolve.</p>
           <div className="public-hero-actions">
@@ -648,15 +659,18 @@ function LeaderboardView({
 
         <section className="leaderboard-panel public-ranking-table">
           <div className="table-caption">
-            <div><b>{isMethods ? "Aggregation method standings" : "Individual model standings"}</b><span>Minimum {snapshot.methodology.minimumResolved} resolved event{snapshot.methodology.minimumResolved === 1 ? "" : "s"} to be ranked · scores update as events resolve</span></div>
+            <div><b>{isMethods ? "Aggregation method standings" : "Individual model standings"}</b><span>{isMethods
+              ? `Best two-model combination per deterministic method · ${pairMetadata?.modelCount ?? 0} forecasted models and ${pairMetadata?.pairCount ?? 0} overlapping pairs considered · fewer than ${snapshot.methodology.minimumResolved} common resolutions are provisional`
+              : `All registered models are shown · fewer than ${snapshot.methodology.minimumResolved} resolved events are provisional`
+            }</span></div>
             <span className="metric-definition">Event Brier · lower is better</span>
           </div>
           <div className="table-scroll">
-            <table>
-              <thead><tr><th>Rank</th><th>{isMethods ? "Method" : "Model"}</th><th>Event Brier ↓</th><th>Resolved events</th><th>Coverage</th></tr></thead>
+            <table className={isMethods ? "methods-table" : undefined}>
+              <thead><tr><th>Rank</th><th>{isMethods ? "Method" : "Model"}</th>{isMethods && <th>Model pair / panel</th>}<th>Event Brier ↓</th><th>{isMethods ? "Common resolved" : "Resolved / live"}</th><th>Coverage</th></tr></thead>
               <tbody>
-                {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} />) : (
-                  <tr><td colSpan={5} className="empty-cell">No resolved scores match the current filters.</td></tr>
+                {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} showInputs={isMethods} />) : (
+                  <tr><td colSpan={isMethods ? 6 : 5} className="empty-cell">No resolved scores match the current filters.</td></tr>
                 )}
               </tbody>
             </table>
@@ -668,14 +682,38 @@ function LeaderboardView({
   );
 }
 
-function LeaderboardRowView({ row }: { row: LeaderboardRow }) {
+function LeaderboardRowView({ row, showInputs = false }: { row: LeaderboardRow; showInputs?: boolean }) {
+  const rank = row.rank;
+  const brier = row.brier;
+  const hasScore = rank !== null && brier !== null;
+  const statusLabel = row.status === "provisional"
+    ? "PROV"
+    : row.status === "awaiting_resolution"
+      ? "PENDING"
+      : row.status === "awaiting_forecast"
+        ? "QUEUED"
+        : null;
   return (
-    <tr className={row.rank <= 3 ? "top-row" : ""}>
-      <td><span className={`rank rank-${row.rank}`}>{String(row.rank).padStart(2, "0")}</span></td>
-      <td><div className="method-cell"><i style={{ background: row.color }} /><div><b>{row.name}</b></div>{row.status === "provisional" && <em>PROV</em>}</div></td>
-      <td><strong className="index-value">{row.brier.toFixed(4)}</strong></td>
-      <td className="mono-number">{row.resolved}</td>
-      <td><div className="coverage-cell"><span><i style={{ width: `${Math.min(100, row.coverage)}%` }} /></span><b>{row.coverage.toFixed(0)}%</b></div></td>
+    <tr className={hasScore && rank <= 3 ? "top-row" : !hasScore ? "awaiting-row" : ""}>
+      <td><span className={`rank ${hasScore ? `rank-${rank}` : "rank-pending"}`}>{hasScore ? String(rank).padStart(2, "0") : "—"}</span></td>
+      <td><div className="method-cell"><i style={{ background: row.color }} /><div><b>{row.name}</b></div>{statusLabel && <em>{statusLabel}</em>}</div></td>
+      {showInputs && <td>{row.aggregationScope === "pair" && row.modelPair?.length === 2
+        ? <div className="model-pair-cell">
+            <span><i style={{ background: row.modelPair[0].color }} /><b>{row.modelPair[0].name}</b></span>
+            <em aria-hidden="true">+</em>
+            <span><i style={{ background: row.modelPair[1].color }} /><b>{row.modelPair[1].name}</b></span>
+          </div>
+        : <div className="model-panel-cell"><b>Adaptive model panel</b><small>Event-specific available forecasts</small></div>
+      }</td>}
+      <td>{hasScore
+        ? <strong className="index-value">{brier.toFixed(4)}</strong>
+        : <span className="awaiting-score">{row.status === "awaiting_resolution" ? "Awaiting outcome" : "Awaiting first forecast"}</span>
+      }</td>
+      <td><div className="forecast-count"><b>{row.resolved}</b>{row.kind === "forecaster" && row.pending > 0 && <small>{row.pending} live</small>}</div></td>
+      <td>{hasScore
+        ? <div className="coverage-cell"><span><i style={{ width: `${Math.min(100, row.coverage)}%` }} /></span><b>{row.coverage.toFixed(0)}%</b></div>
+        : <span className="muted-number">—</span>
+      }</td>
     </tr>
   );
 }
@@ -782,17 +820,17 @@ function EventsView({
   return (
     <div className="page-content enter">
       <section className="page-heading compact-heading">
-        <div><span className="eyebrow">POLYMARKET + KALSHI · LIVE FORECAST BENCHMARK</span><h1>Events</h1><p>One benchmark stream balanced across two markets: every complete daily release contains 10 Polymarket and 10 Kalshi questions.</p></div>
+        <div><span className="eyebrow">POLYMARKET + KALSHI · LIVE FORECAST BENCHMARK</span><h1>Events</h1><p>Currently tracking {sourceCounts.polymarket} Polymarket and {sourceCounts.kalshi} Kalshi {eventScope === "live" ? "live" : "resolved"} events, with source identity preserved on every forecast.</p></div>
       </section>
       <section className="event-source-band" aria-label="Filter events by prediction market">
         <button className={marketSource === "all" ? "active source-all" : "source-all"} aria-pressed={marketSource === "all"} onClick={() => setMarketSource("all")}>
-          <span>ALL MARKETS</span><strong>{sourceEvents.length}</strong><small>{eventScope === "live" ? "Open benchmark events" : "Resolved benchmark events"}</small>
+          <span>ALL MARKETS</span><strong>{sourceEvents.length}</strong><small>{sourceCounts.polymarket} Poly · {sourceCounts.kalshi} Kalshi</small>
         </button>
         <button className={marketSource === "polymarket" ? "active source-polymarket" : "source-polymarket"} aria-pressed={marketSource === "polymarket"} onClick={() => setMarketSource("polymarket")}>
-          <span><i />POLYMARKET</span><strong>{sourceCounts.polymarket}</strong><small>10 questions per complete daily release</small>
+          <span><i />POLYMARKET</span><strong>{sourceCounts.polymarket}</strong><small>{eventScope === "live" ? "Open and locked questions" : "Resolved questions"}</small>
         </button>
         <button className={marketSource === "kalshi" ? "active source-kalshi" : "source-kalshi"} aria-pressed={marketSource === "kalshi"} onClick={() => setMarketSource("kalshi")}>
-          <span><i />KALSHI</span><strong>{sourceCounts.kalshi}</strong><small>10 questions per complete daily release</small>
+          <span><i />KALSHI</span><strong>{sourceCounts.kalshi}</strong><small>{eventScope === "live" ? "Open and locked questions" : "Resolved questions"}</small>
         </button>
       </section>
       <section className="event-discovery" aria-label="Find benchmark events">
@@ -810,7 +848,7 @@ function EventsView({
       </section>
 
       <section className="prophet-event-board">
-        <div className="section-title"><div><span className="eyebrow">{eventScope === "live" ? "OPEN" : "HISTORY"}</span><h2>{eventScope === "live" ? "Active event slate" : "Resolved events"}</h2></div><span>{visibleEvents.length} of {sourceEvents.length}</span></div>
+        <div className="section-title"><div><span className="eyebrow">{eventScope === "live" ? "LIVE" : "HISTORY"}</span><h2>{eventScope === "live" ? "Active event slate" : "Resolved events"}</h2></div><span>{visibleEvents.length} of {sourceEvents.length}</span></div>
         {visibleEvents.length ? <div className="prophet-event-grid">{visibleEvents.map((event) => (
           <ProphetEventBlock
             key={event.id}
@@ -861,7 +899,16 @@ function ProphetEventBlock({
 
     <footer>
       <div className="event-evidence"><span>{sourceCount ? `${sourceCount} frozen sources` : "Context pending"}</span><small>{event.sourceEventId ? event.sourceEventId.startsWith("kalshi:") ? `Kalshi Market ${event.sourceEventId.slice(7)}` : `Polymarket Event ${event.sourceEventId}` : event.season}</small></div>
-      <div className="event-timing"><span className={event.status === "open" ? "live" : "resolved"}>{event.status === "open" ? "LIVE" : "RESOLVED"}</span><time>{event.status === "resolved" ? (event.resolvedAt ? `Resolved ${formatDate(event.resolvedAt)}` : "Resolved") : event.closeTime ? formatCloseTime(event.closeTime) : "No deadline"}</time></div>
+      <div className="event-timing">
+        <span className={event.status === "open" ? "live" : event.status === "locked" ? "locked" : "resolved"}>
+          {event.status === "open" ? "LIVE" : event.status === "locked" ? "LOCKED" : "RESOLVED"}
+        </span>
+        <time>{event.status === "resolved"
+          ? event.resolvedAt ? `Resolved ${formatDate(event.resolvedAt)}` : "Resolved"
+          : event.status === "locked"
+            ? event.lockedAt ? `Locked ${formatDate(event.lockedAt)}` : "Awaiting resolution"
+            : event.closeTime ? formatCloseTime(event.closeTime) : "No deadline"}</time>
+      </div>
     </footer>
   </article>;
 }
@@ -1119,7 +1166,7 @@ function ResolveForm({ event, busy, onSubmit }: { event: ArenaEvent; busy: boole
   const [resolvedOutcome, setResolvedOutcome] = useState<string | null>(null);
   const [note, setNote] = useState("");
   return <form className="resolve-form" onSubmit={(formEvent) => { formEvent.preventDefault(); if (resolvedOutcome !== null) onSubmit(resolvedOutcome, note); }}>
-    <div className="event-context"><span>{event.forecasterCount} locked forecasts</span><h3>{event.title}</h3><p>Resolution locks the event and its forecasts, then updates the leaderboard immediately.</p></div>
+    <div className="event-context"><span>{event.forecasterCount} locked forecasts</span><h3>{event.title}</h3><p>Resolution records the final outcome for an already frozen forecast set, then updates the leaderboard immediately.</p></div>
     <div className="outcome-picker">{event.outcomes.map((outcome) => (
       <button type="button" key={outcome.key} className={resolvedOutcome === outcome.key ? "selected yes" : ""} onClick={() => setResolvedOutcome(outcome.key)}>
         <b>{outcome.label}</b><span>{outcome.key}</span>
@@ -1267,13 +1314,29 @@ function initials(value: string) {
 function exportLeaderboard(snapshot: Snapshot | null) {
   if (!snapshot?.leaderboard.length) return;
   const rows = [
-    ["rank", "name", "type", "event_brier", "ci_low", "ci_high", "resolved_events", "coverage_pct"],
-    ...snapshot.leaderboard.map((row) => [row.rank, row.name, row.kind, row.brier.toFixed(6), row.ciLow.toFixed(6), row.ciHigh.toFixed(6), row.resolved, row.coverage.toFixed(2)]),
+    ["rank", "name", "method_id", "type", "aggregation_scope", "model_1", "model_2", "status", "event_brier", "ci_low", "ci_high", "resolved_events", "live_forecasts", "total_forecasted_events", "coverage_pct"],
+    ...snapshot.leaderboard.map((row) => [
+      row.rank ?? "",
+      row.name,
+      row.methodId ?? "",
+      row.kind,
+      row.aggregationScope ?? "",
+      row.modelPair?.[0]?.name ?? "",
+      row.modelPair?.[1]?.name ?? "",
+      row.status,
+      row.brier?.toFixed(6) ?? "",
+      row.ciLow?.toFixed(6) ?? "",
+      row.ciHigh?.toFixed(6) ?? "",
+      row.resolved,
+      row.pending,
+      row.forecasted,
+      row.brier === null ? "" : row.coverage.toFixed(2),
+    ]),
   ];
   const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-  link.download = `aggregation-arena-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.download = `aggrena-${new Date().toISOString().slice(0, 10)}.csv`;
   link.click();
   URL.revokeObjectURL(link.href);
 }

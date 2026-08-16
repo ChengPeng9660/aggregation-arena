@@ -7,6 +7,7 @@ import {
   buildProphetPredictionPrompt,
   buildSearchQuery,
   normalizeSources,
+  getActiveForecastModels,
 } from "@/lib/forecast-core.js";
 import { parseEventPredictionResponse } from "@/lib/event-core.js";
 import { modelGatewayConfigurationProblem, runModelGateway } from "@/lib/model-gateway";
@@ -17,6 +18,7 @@ type ForecastEnv = {
   PROPHET_MODEL_GATEWAY_URL?: string;
   PROPHET_MODEL_GATEWAY_API_KEY?: string;
   PROPHET_MODEL_ID_MAP?: string;
+  PROPHET_DISABLED_MODEL_IDS?: string;
 };
 
 type ForecastEvent = {
@@ -127,7 +129,11 @@ export async function ensureForecastingReady(db: D1Database = getD1()) {
   }
 }
 
-export async function runForecastBatch(env: ForecastEnv, jobLimit = FORECAST_JOBS_PER_RUN) {
+export async function runForecastBatch(
+  env: ForecastEnv,
+  jobLimit = FORECAST_JOBS_PER_RUN,
+  requestedEventIds: string[] = [],
+) {
   await ensureForecastingReady(env.DB);
   const gatewayProblem = modelGatewayConfigurationProblem(env);
   if (!env.TAVILY_API_KEY || gatewayProblem) {
@@ -147,8 +153,13 @@ export async function runForecastBatch(env: ForecastEnv, jobLimit = FORECAST_JOB
   const repairedAggregates = await repairMissingAggregates(env.DB);
 
   const batchJobLimit = Math.max(1, Math.min(72, jobLimit));
-  const modelValues = FORECAST_MODELS.map(() => "(?, ?)").join(", ");
-  const modelBindings = FORECAST_MODELS.flatMap((model, index) => [model.participantId, index]);
+  const targetEventIds = [...new Set(requestedEventIds.map((value) => String(value).trim()).filter(Boolean))].slice(0, 10);
+  const targetEventClause = targetEventIds.length
+    ? `AND e.id IN (${targetEventIds.map(() => "?").join(", ")})`
+    : "";
+  const activeModels = getActiveForecastModels(env.PROPHET_DISABLED_MODEL_IDS);
+  const modelValues = activeModels.map(() => "(?, ?)").join(", ");
+  const modelBindings = activeModels.flatMap((model, index) => [model.participantId, index]);
   const rows = await env.DB.prepare(`
     WITH forecast_models(participant_id, model_order) AS (VALUES ${modelValues}),
     pending_jobs AS (
@@ -156,11 +167,21 @@ export async function runForecastBatch(env: ForecastEnv, jobLimit = FORECAST_JOB
       FROM events e
       JOIN selection_items si ON si.event_id=e.id
       CROSS JOIN forecast_models fm
-      WHERE e.status='open' AND NOT EXISTS (
+      WHERE e.status='open'
+        AND (e.close_time IS NULL OR datetime(e.close_time) > datetime('now'))
+        ${targetEventClause}
+        AND NOT EXISTS (
         SELECT 1 FROM model_forecast_runs completed_run
         WHERE completed_run.event_id=e.id
           AND completed_run.participant_id=fm.participant_id
           AND completed_run.status='completed'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM model_forecast_runs recent_failure
+        WHERE recent_failure.event_id=e.id
+          AND recent_failure.participant_id=fm.participant_id
+          AND recent_failure.status='failed'
+          AND datetime(recent_failure.completed_at) > datetime('now', '-1 minute')
       )
       GROUP BY e.id, fm.participant_id, fm.model_order
       ORDER BY MIN(si.selected_at), MIN(si.category), MIN(si.rank), e.id, fm.model_order
@@ -181,11 +202,11 @@ export async function runForecastBatch(env: ForecastEnv, jobLimit = FORECAST_JOB
     JOIN selection_items si ON si.event_id=e.id
     JOIN polymarket_candidates pc ON pc.market_id=si.market_id
     ORDER BY si.selected_at, si.category, si.rank, e.id, pj.model_order
-  `).bind(...modelBindings, batchJobLimit).all<Record<string, unknown>>();
+  `).bind(...modelBindings, ...targetEventIds, batchJobLimit).all<Record<string, unknown>>();
 
   const jobs = rows.results.flatMap((row) => {
     const event = rowToForecastEvent(row);
-    const model = FORECAST_MODELS.find((candidate) => candidate.participantId === row.target_participant_id);
+    const model = activeModels.find((candidate) => candidate.participantId === row.target_participant_id);
     return model ? [{ event, model }] : [];
   });
   const contextPromises = new Map<string, Promise<Awaited<ReturnType<typeof getOrCreateContext>>>>();
@@ -213,6 +234,7 @@ export async function runForecastBatch(env: ForecastEnv, jobLimit = FORECAST_JOB
     configured: true,
     repairedAggregates,
     jobLimit: batchJobLimit,
+    targetEventIds,
     processedEvents: new Set(outcomes.map((item) => item.eventId)).size,
     processed: outcomes.length,
     completed: outcomes.filter((item) => item.status === "completed").length,
@@ -224,7 +246,9 @@ async function repairMissingAggregates(db: D1Database) {
   const rows = await db.prepare(`
     SELECT e.id
     FROM events e
-    WHERE e.status='open' AND (
+    WHERE e.status='open'
+      AND (e.close_time IS NULL OR datetime(e.close_time) > datetime('now'))
+      AND (
       (
         e.event_type='categorical'
         AND (SELECT COUNT(DISTINCT participant_id) FROM prediction_outcomes
@@ -283,7 +307,10 @@ async function forecastEvent(
       const gatewayResult = await runModelGateway(env, {
         modelId: model.modelId,
         messages: [
-          { role: "system", content: "Return valid JSON only. Calibrate probabilities carefully." },
+          {
+            role: "system",
+            content: "Return valid JSON only. The top-level object must include both probabilities and rationale. Never omit probabilities. Calibrate carefully.",
+          },
           { role: "user", content: attempt ? `${prompt}\n\nYour prior response was invalid. Return the required JSON object only.` : prompt },
         ],
         maxTokens: 700,
@@ -439,12 +466,13 @@ async function searchTavily(apiKey: string, query: string, topic: "news" | "gene
 
 export async function getForecastPipelineSnapshot(
   db: D1Database = getD1(),
-  runtime: Pick<ForecastEnv, "TAVILY_API_KEY" | "PROPHET_MODEL_GATEWAY_URL" | "PROPHET_MODEL_GATEWAY_API_KEY" | "PROPHET_MODEL_ID_MAP"> = {},
+  runtime: Pick<ForecastEnv, "TAVILY_API_KEY" | "PROPHET_MODEL_GATEWAY_URL" | "PROPHET_MODEL_GATEWAY_API_KEY" | "PROPHET_MODEL_ID_MAP" | "PROPHET_DISABLED_MODEL_IDS"> = {},
 ) {
   await ensureForecastingReady(db);
   const gatewayProblem = modelGatewayConfigurationProblem(runtime);
-  const modelValues = FORECAST_MODELS.map(() => "(?)").join(", ");
-  const modelBindings = FORECAST_MODELS.map((model) => model.participantId);
+  const activeModels = getActiveForecastModels(runtime.PROPHET_DISABLED_MODEL_IDS);
+  const modelValues = activeModels.map(() => "(?)").join(", ");
+  const modelBindings = activeModels.map((model) => model.participantId);
   const [counts, runRows, pending] = await Promise.all([
     db.prepare(`
       SELECT
@@ -468,11 +496,15 @@ export async function getForecastPipelineSnapshot(
       CROSS JOIN forecast_models
       LEFT JOIN model_forecast_runs mfr
         ON mfr.event_id=e.id AND mfr.participant_id=forecast_models.participant_id AND mfr.status='completed'
-      WHERE e.status='open' AND mfr.id IS NULL
+      WHERE e.status='open'
+        AND (e.close_time IS NULL OR datetime(e.close_time) > datetime('now'))
+        AND mfr.id IS NULL
     `).bind(...modelBindings).first<{ count: number }>(),
   ]);
   return {
     models: FORECAST_MODELS,
+    activeModels: activeModels.map((model) => model.modelId),
+    unavailableModels: FORECAST_MODELS.filter((model) => !activeModels.includes(model)).map((model) => model.modelId),
     model: FORECAST_MODELS[0],
     configured: {
       modelGateway: !gatewayProblem,

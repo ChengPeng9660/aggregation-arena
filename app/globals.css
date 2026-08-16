@@ -376,6 +376,7 @@ tbody tr.top-row { background: linear-gradient(90deg, rgba(138,97,255,.05), tran
 .event-evidence small { max-width: 220px; margin-top: 4px; overflow: hidden; color: var(--quiet); font: 8px var(--font-geist-mono), monospace; text-overflow: ellipsis; white-space: nowrap; }
 .event-timing { flex: 0 0 auto; text-align: right; }
 .event-timing span { color: var(--green); font: 8px var(--font-geist-mono), monospace; font-weight: 750; letter-spacing: .1em; }
+.event-timing span.locked { color: var(--gold); }
 .event-timing span.resolved { color: var(--quiet); }
 .event-timing time { margin-top: 4px; color: var(--quiet); font-size: 9px; }
 .event-block-actions { display: flex; border-top: 1px solid var(--line); }
@@ -1306,6 +1307,7 @@ td { font-size: 12px; }
 .public-ranking-table { border: 0; border-radius: 0; box-shadow: none; }
 .public-ranking-table .table-caption { padding: 12px 0; border-bottom-color: var(--line-strong); }
 .public-ranking-table table { min-width: 820px; }
+.public-ranking-table .methods-table { min-width: 1060px; }
 .public-ranking-table th { padding: 10px 12px; background: #fbfafc; }
 .public-ranking-table th:first-child, .public-ranking-table td:first-child { padding-left: 8px; }
 .public-ranking-table th:last-child, .public-ranking-table td:last-child { padding-right: 8px; }
@@ -1320,7 +1322,22 @@ td { font-size: 12px; }
 .public-ranking-table .rank { width: 24px; height: 24px; border-radius: 50%; background: transparent; }
 .public-ranking-table .rank-1 { color: #8d6200; background: var(--gold-soft); box-shadow: none; }
 .public-ranking-table .rank-2, .public-ranking-table .rank-3 { color: var(--purple-deep); background: var(--purple-soft); }
+.public-ranking-table .rank-pending { color: var(--quiet); background: transparent; }
 .public-ranking-table .method-cell > i { width: 4px; height: 25px; }
+.public-ranking-table .awaiting-row { color: var(--quiet); }
+.public-ranking-table .awaiting-row .method-cell b { color: var(--muted); }
+.public-ranking-table .awaiting-score { color: var(--quiet); font: 10px var(--font-geist-mono), monospace; }
+.public-ranking-table .forecast-count { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 7px; font-family: var(--font-geist-mono), monospace; }
+.public-ranking-table .forecast-count b { color: var(--muted); font-size: 10px; font-weight: 500; }
+.public-ranking-table .forecast-count small { color: var(--purple-deep); font-size: 8px; white-space: nowrap; }
+.model-pair-cell { display: flex; align-items: center; gap: 8px; min-width: 300px; }
+.model-pair-cell > span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.model-pair-cell > span > i { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; }
+.model-pair-cell b { overflow: hidden; max-width: 128px; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.model-pair-cell > em { color: var(--gold); font: 11px var(--font-geist-mono), monospace; font-style: normal; }
+.model-panel-cell b, .model-panel-cell small { display: block; }
+.model-panel-cell b { font-size: 11px; font-weight: 600; }
+.model-panel-cell small { margin-top: 4px; color: var(--quiet); font-size: 9px; }
 .public-open-events { margin-top: 86px; }
 .public-open-events .section-title { margin-bottom: 18px; }
 .public-open-events .event-rail { border-color: var(--line-strong); }

@@ -1,5 +1,5 @@
 import {
-  buildGatewayRequest,
+  buildGatewayRequestForEndpoint,
   parseModelIdMap,
   resolveGatewayModelId,
 } from "@/lib/forecast-core.js";
@@ -8,6 +8,8 @@ export type ModelGatewayEnv = {
   PROPHET_MODEL_GATEWAY_URL?: string;
   PROPHET_MODEL_GATEWAY_API_KEY?: string;
   PROPHET_MODEL_ID_MAP?: string;
+  PROPHET_DISABLED_MODEL_IDS?: string;
+  PROPHET_RESPONSES_MODEL_IDS?: string;
 };
 
 export type ModelGatewayMessage = {
@@ -31,6 +33,7 @@ export function modelGatewayConfigurationProblem(env: ModelGatewayEnv) {
       return "PROPHET_MODEL_GATEWAY_URL must use HTTP or HTTPS";
     }
     parseModelIdMap(env.PROPHET_MODEL_ID_MAP);
+    parseModelIdList(env.PROPHET_RESPONSES_MODEL_IDS, "PROPHET_RESPONSES_MODEL_IDS");
   } catch (error) {
     return errorMessage(error);
   }
@@ -50,15 +53,25 @@ export async function runModelGateway(
   const gatewayProblem = modelGatewayConfigurationProblem(env);
   if (gatewayProblem) throw new ModelGatewayRequestError(gatewayProblem);
   const gatewayModelId = resolveGatewayModelId(request.modelId, env.PROPHET_MODEL_ID_MAP);
+  const gatewayEndpoint = resolveGatewayEndpoint(
+    env.PROPHET_MODEL_GATEWAY_URL!,
+    request.modelId,
+    env.PROPHET_RESPONSES_MODEL_IDS,
+  );
   let response: Response;
   try {
-    response = await fetch(env.PROPHET_MODEL_GATEWAY_URL!, {
+    response = await fetch(gatewayEndpoint, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${env.PROPHET_MODEL_GATEWAY_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(buildGatewayRequest(gatewayModelId, request.messages, request)),
+      body: JSON.stringify(buildGatewayRequestForEndpoint(
+        gatewayEndpoint,
+        gatewayModelId,
+        request.messages,
+        request,
+      )),
       signal: AbortSignal.timeout(180_000),
     });
   } catch (error) {
@@ -91,6 +104,57 @@ export async function runModelGateway(
     throw new ModelGatewayRequestError(`Model gateway request failed for ${request.modelId}: ${detail}`);
   }
   return { payload, gatewayModelId };
+}
+
+export async function listModelGatewayModels(env: ModelGatewayEnv) {
+  const gatewayProblem = modelGatewayConfigurationProblem(env);
+  if (gatewayProblem) throw new ModelGatewayRequestError(gatewayProblem);
+  const endpoint = new URL(env.PROPHET_MODEL_GATEWAY_URL!);
+  endpoint.pathname = endpoint.pathname.replace(/\/(?:chat\/completions|responses)\/?$/, "/models");
+  endpoint.search = "";
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${env.PROPHET_MODEL_GATEWAY_API_KEY}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    throw new ModelGatewayRequestError(`Model catalog request failed: ${errorMessage(error)}`, { cause: error });
+  }
+  const responseText = await readLimitedResponse(response, 1_000_000);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(responseText);
+  } catch {
+    throw new ModelGatewayRequestError(`Model catalog returned non-JSON content (HTTP ${response.status})`);
+  }
+  const gatewayError = gatewayPayloadError(payload);
+  if (!response.ok || gatewayError) {
+    throw new ModelGatewayRequestError(`Model catalog request failed: ${gatewayError || `HTTP ${response.status}`}`);
+  }
+  const data = payload && typeof payload === "object" && Array.isArray((payload as { data?: unknown }).data)
+    ? (payload as { data: { id?: unknown }[] }).data
+    : [];
+  return data.map((model) => String(model?.id || "").trim()).filter(Boolean);
+}
+
+function resolveGatewayEndpoint(endpointValue: string, modelId: string, responsesModelIds: string | undefined) {
+  const endpoint = new URL(endpointValue);
+  const useResponses = parseModelIdList(responsesModelIds, "PROPHET_RESPONSES_MODEL_IDS").includes(modelId);
+  if (useResponses && endpoint.hostname.toLowerCase() === "api.poe.com") {
+    endpoint.pathname = endpoint.pathname.replace(/\/chat\/completions\/?$/, "/responses");
+    endpoint.search = "";
+  }
+  return endpoint.toString();
+}
+
+function parseModelIdList(value: string | undefined, variableName: string) {
+  if (!value) return [];
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed) || parsed.some((modelId) => typeof modelId !== "string" || !modelId.trim())) {
+    throw new Error(`${variableName} must be a JSON array of non-empty strings`);
+  }
+  return [...new Set(parsed.map((modelId) => modelId.trim()))];
 }
 
 function gatewayPayloadError(payload: unknown) {

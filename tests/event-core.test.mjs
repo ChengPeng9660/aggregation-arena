@@ -39,6 +39,38 @@ test("parses Prophet-style outcome arrays by stable key or label", () => {
   });
 });
 
+test("recovers a complete probability array when Poe truncates only trailing metadata", () => {
+  const parsed = parseEventPredictionResponse({ choices: [{ message: { content:
+    '{"rationale":"Short view.","probabilities":[{"market":"yes","probability":0.53},{"market":"no","probability":0.47}],"cited'
+  } }] }, [
+    { key: "yes", label: "Yes" },
+    { key: "no", label: "No" },
+  ]);
+  assert.deepEqual(parsed.probabilities, { yes: 0.53, no: 0.47 });
+  assert.equal(parsed.rationale, "Short view.");
+});
+
+test("selects prediction JSON embedded after provider thinking text", () => {
+  const parsed = parseEventPredictionResponse({ choices: [{ message: { content:
+    'Thinking... example {not json}. Final: {"rationale":"Calibrated.","probabilities":[{"market":"yes","probability":0.54},{"market":"no","probability":0.46}],"citedSourceRanks":[1]}'
+  } }] }, [
+    { key: "yes", label: "Yes" },
+    { key: "no", label: "No" },
+  ]);
+  assert.deepEqual(parsed.probabilities, { yes: 0.54, no: 0.46 });
+});
+
+test("prefers the final prediction over a zero-value schema example in provider thinking", () => {
+  const parsed = parseEventPredictionResponse({ choices: [{ message: { content:
+    'Schema example: {"rationale":"...","probabilities":[{"market":"yes","probability":0.0},{"market":"no","probability":0.0}]}. Final: {"rationale":"Calibrated.","probabilities":[{"market":"yes","probability":0.52},{"market":"no","probability":0.48}],"citedSourceRanks":[2]}'
+  } }] }, [
+    { key: "yes", label: "Yes" },
+    { key: "no", label: "No" },
+  ]);
+  assert.deepEqual(parsed.probabilities, { yes: 0.52, no: 0.48 });
+  assert.equal(parsed.rationale, "Calibrated.");
+});
+
 test("parses JSON returned in an OpenAI-compatible reasoning_content field", () => {
   const parsed = parseEventPredictionResponse({
     choices: [{

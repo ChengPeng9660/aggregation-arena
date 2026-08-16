@@ -34,7 +34,8 @@ test("the leaderboard registers blind and evidence-aware agent harness methods s
   assert.match(source, /informationSet: "evidence-aware"/);
   assert.match(harnessSource, /AGENT_HARNESS_MODEL = "qwen-3\.6-plus"/);
   assert.match(harnessSource, /runModelGateway\(env/);
-  assert.match(harnessSource, /requiredForecasts = options\.resolvedOnly \? 2 : FORECAST_MODELS\.length/);
+  assert.match(harnessSource, /requiredForecasts = options\.resolvedOnly \? 2 : activeModels\.length/);
+  assert.match(harnessSource, /getActiveForecastModels\(env\.PROPHET_DISABLED_MODEL_IDS\)/);
   assert.match(harnessSource, /status: "failed" as const/);
   assert.doesNotMatch(harnessSource, /env\.AI|Workers AI binding/);
 });

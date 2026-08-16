@@ -21,7 +21,7 @@ async function waitForServer(process) {
   throw new Error("Timed out waiting for the production server");
 }
 
-test("production server renders the finished Aggregation Arena shell", async () => {
+test("production server renders the finished Aggrena shell", async () => {
   const server = spawn(
     process.execPath,
     [
@@ -53,8 +53,9 @@ test("production server renders the finished Aggregation Arena shell", async () 
     const response = await waitForServer(server);
     assert.equal(response.status, 200);
     const html = await response.text();
-    assert.match(html, /<title>Aggregation Arena/);
-    assert.match(html, /Aggregation Arena/);
+    assert.match(html, /<title>Aggrena/);
+    assert.match(html, /Aggrena/);
+    assert.doesNotMatch(html, /Aggregation Arena/);
     assert.match(html, /Loading data/);
     assert.doesNotMatch(html, /codex-preview/);
     assert.doesNotMatch(html, /Your site is taking shape/);

@@ -2,6 +2,10 @@ import { getD1 } from "@/db";
 import { getCurationSnapshot } from "@/lib/polymarket";
 import { CANONICAL_CATEGORIES } from "@/lib/curation-core.js";
 import { aggregateDistribution, normalizeDistribution, prophetEventBrier } from "@/lib/event-core.js";
+import { forecastAdmission } from "@/lib/event-state-core.js";
+import { lockEvent } from "@/lib/event-state";
+import { FORECAST_MODELS } from "@/lib/forecast-core.js";
+import { buildBestPairStandings } from "@/lib/pair-leaderboard-core.js";
 
 export type ArenaFilters = {
   track?: "aggregators" | "forecasters" | "all";
@@ -92,6 +96,15 @@ export const AGGREGATE_METHODS: AggregateDefinition[] = [
   },
 ];
 
+const PAIR_AGGREGATION_METHODS = [
+  { id: "agg-equal-mean", aggregateMethod: "mean" },
+  { id: "agg-median", aggregateMethod: "median" },
+  { id: "agg-trimmed-mean", aggregateMethod: "trimmed" },
+  { id: "agg-logit-pool", aggregateMethod: "logit" },
+  { id: "agg-extremized", aggregateMethod: "extremized" },
+  { id: "agg-performance-weighted", aggregateMethod: "weighted" },
+] as const;
+
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS participants (
     id TEXT PRIMARY KEY,
@@ -118,7 +131,9 @@ const SCHEMA_STATEMENTS = [
     resolution_note TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    resolved_at TEXT
+    resolved_at TEXT,
+    locked_at TEXT,
+    lock_reason TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS event_outcomes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, outcome_key TEXT NOT NULL,
@@ -200,7 +215,7 @@ export async function getArenaSnapshot(filters: ArenaFilters = {}) {
   await ensureArenaReady();
   const db = getD1();
   const [eventRows, participantRows, predictionRows, predictionOutcomeRows, eventOutcomeRows, auditRows, curation] = await Promise.all([
-    db.prepare("SELECT * FROM events WHERE id NOT LIKE 'demo-%' AND season <> 'Demo Season' ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC").all(),
+    db.prepare("SELECT * FROM events WHERE id NOT LIKE 'demo-%' AND season <> 'Demo Season' ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'locked' THEN 1 ELSE 2 END, updated_at DESC").all(),
     db.prepare("SELECT * FROM participants WHERE status = 'active' ORDER BY created_at, name").all(),
     db.prepare("SELECT * FROM predictions WHERE event_id NOT LIKE 'demo-%' ORDER BY event_id, CASE kind WHEN 'aggregate' THEN 1 ELSE 0 END, participant_name").all(),
     db.prepare("SELECT * FROM prediction_outcomes WHERE event_id NOT LIKE 'demo-%' ORDER BY event_id, participant_id, outcome_key").all(),
@@ -273,6 +288,8 @@ export async function getArenaSnapshot(filters: ArenaFilters = {}) {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       resolvedAt: row.resolved_at,
+      lockedAt: row.locked_at,
+      lockReason: row.lock_reason,
       forecasterCount: predictions.filter((item) => item.kind === "forecaster").length,
       predictions,
     };
@@ -393,7 +410,7 @@ export async function submitForecasts(
   const db = getD1();
   const event = await db.prepare("SELECT * FROM events WHERE id = ?").bind(eventId).first<Record<string, unknown>>();
   if (!event) throw new ArenaError(404, "Event not found");
-  if (event.status !== "open") throw new ArenaError(409, "The event is locked and forecasts cannot be changed");
+  await assertForecastAdmission(db, event, eventId, actor);
   const forecasts = Array.isArray(payload.forecasts) ? payload.forecasts : [];
   if (!forecasts.length) throw new ArenaError(400, "Enter at least one probability");
   const participants = await db.prepare("SELECT * FROM participants WHERE status = 'active'").all<Record<string, unknown>>();
@@ -438,7 +455,9 @@ export async function resolveEvent(
   const db = getD1();
   const event = await db.prepare("SELECT * FROM events WHERE id = ?").bind(eventId).first<Record<string, unknown>>();
   if (!event) throw new ArenaError(404, "Event not found");
-  if (event.status !== "open") throw new ArenaError(409, "The event is already resolved or invalid");
+  if (!["open", "locked"].includes(String(event.status))) {
+    throw new ArenaError(409, "The event is already resolved or invalid");
+  }
   const categorical = String(event.event_type || "binary") === "categorical";
   const resolution = Number(payload.resolution);
   const resolvedOutcome = categorical ? String(payload.resolvedOutcome || "") : resolution === 1 ? "yes" : "no";
@@ -458,8 +477,9 @@ export async function resolveEvent(
   const now = new Date().toISOString();
   await db.prepare(`
     UPDATE events SET status = 'resolved', resolution = ?, resolved_outcome=?, resolution_note = ?,
-      resolved_at = ?, updated_at = ? WHERE id = ?
-  `).bind(categorical ? null : resolution, resolvedOutcome, String(payload.note || "").trim() || null, now, now, eventId).run();
+      locked_at=COALESCE(locked_at, ?), lock_reason=COALESCE(lock_reason, 'manual_resolution'),
+      resolved_at = ?, updated_at = ? WHERE id = ? AND status IN ('open','locked')
+  `).bind(categorical ? null : resolution, resolvedOutcome, String(payload.note || "").trim() || null, now, now, now, eventId).run();
   await writeAudit("event.resolved", "event", eventId, { resolution, resolvedOutcome, note: payload.note || "" }, actor);
   return { eventId, status: "resolved", resolution: categorical ? null : resolution, resolvedOutcome };
 }
@@ -476,7 +496,8 @@ export async function changeEventStatus(
   const db = getD1();
   const result = await db.prepare(`
     UPDATE events SET status = ?, resolution = NULL, resolution_note = NULL,
-      resolved_outcome=NULL, resolved_at = NULL, updated_at = ? WHERE id = ?
+      resolved_outcome=NULL, resolved_at = NULL, locked_at=NULL, lock_reason=NULL,
+      updated_at = ? WHERE id = ?
   `).bind(status, now, eventId).run();
   if (!Number(result.meta.changes || 0)) throw new ArenaError(404, "Event not found");
   await writeAudit(`event.${status === "open" ? "reopened" : "invalidated"}`, "event", eventId, {}, actor);
@@ -485,7 +506,7 @@ export async function changeEventStatus(
 
 async function buildLeaderboard(
   filters: ArenaFilters,
-  participants: { id: unknown; name: unknown; organization: unknown; color: unknown }[],
+  participants: { id: unknown; name: unknown; organization: unknown; color: unknown; kind: unknown }[],
 ) {
   const db = getD1();
   const eventRows = await db.prepare(
@@ -506,8 +527,6 @@ async function buildLeaderboard(
       .filter((event) => !filters.category || filters.category === "all" || event.category === filters.category)
       .map((event) => String(event.id)),
   );
-  if (!eligible.size) return [];
-
   const rows = await db.prepare(`
     SELECT p.*, e.resolution, e.resolved_at
     FROM predictions p JOIN events e ON e.id = p.event_id
@@ -523,6 +542,16 @@ async function buildLeaderboard(
   const eventOutcomes = await db.prepare(
     "SELECT event_id, outcome_key FROM event_outcomes ORDER BY event_id, display_order",
   ).all<{ event_id: string; outcome_key: string }>();
+  const forecastActivityRows = await db.prepare(`
+    SELECT DISTINCT f.participant_id, e.id AS event_id, e.status, e.category, e.season, e.resolved_at
+    FROM (
+      SELECT participant_id, event_id FROM predictions
+      UNION ALL
+      SELECT participant_id, event_id FROM prediction_outcomes
+    ) f
+    JOIN events e ON e.id=f.event_id
+    WHERE e.id NOT LIKE 'demo-%' AND e.season <> 'Demo Season'
+  `).all<Record<string, unknown>>();
   const track = filters.track ?? "aggregators";
   const acceptsTrack = (row: Record<string, unknown>) => {
     if (!eligible.has(String(row.event_id))) return false;
@@ -545,6 +574,48 @@ async function buildLeaderboard(
     keys.push(String(row.outcome_key));
     outcomeKeysByEvent.set(String(row.event_id), keys);
   }
+  const pairForecastsByEvent = new Map<string, Record<string, Record<string, number>>>();
+  for (const row of rows.results) {
+    if (row.kind !== "forecaster") continue;
+    const eventId = String(row.event_id);
+    const forecasts = pairForecastsByEvent.get(eventId) ?? {};
+    const probability = Number(row.probability);
+    forecasts[String(row.participant_id)] = { yes: probability, no: 1 - probability };
+    pairForecastsByEvent.set(eventId, forecasts);
+  }
+  const pairOutcomeGroups = new Map<string, Record<string, unknown>[]>();
+  for (const row of outcomeRows.results) {
+    if (row.kind !== "forecaster") continue;
+    const key = `${row.event_id}::${row.participant_id}`;
+    const group = pairOutcomeGroups.get(key) ?? [];
+    group.push(row);
+    pairOutcomeGroups.set(key, group);
+  }
+  for (const group of pairOutcomeGroups.values()) {
+    const first = group[0];
+    const eventId = String(first.event_id);
+    const keys = outcomeKeysByEvent.get(eventId) ?? [];
+    if (!keys.length || group.length !== keys.length) continue;
+    const forecasts = pairForecastsByEvent.get(eventId) ?? {};
+    forecasts[String(first.participant_id)] = Object.fromEntries(
+      group.map((row) => [String(row.outcome_key), Number(row.probability)]),
+    );
+    pairForecastsByEvent.set(eventId, forecasts);
+  }
+  const pairEvents = eventRows.results.map((event) => {
+    const eventId = String(event.id);
+    const categorical = String(event.event_type || "binary") === "categorical";
+    return {
+      id: eventId,
+      resolvedAt: String(event.resolved_at || ""),
+      resolvedOutcome: categorical
+        ? String(event.resolved_outcome)
+        : Number(event.resolution) === 1 ? "yes" : "no",
+      outcomeKeys: categorical ? outcomeKeysByEvent.get(eventId) ?? [] : ["yes", "no"],
+      eligible: eligible.has(eventId),
+      forecasts: pairForecastsByEvent.get(eventId) ?? {},
+    };
+  }).filter((event) => event.outcomeKeys.length > 0);
   const vectorGroups = new Map<string, Record<string, unknown>[]>();
   for (const row of outcomeRows.results.filter(acceptsTrack)) {
     const key = `${row.event_id}::${row.participant_id}`;
@@ -575,14 +646,26 @@ async function buildLeaderboard(
   }
   const participantMeta = new Map(participants.map((item) => [String(item.id), item]));
   const methodMeta = new Map(AGGREGATE_METHODS.map((item) => [item.id, item]));
+  const activityByParticipant = new Map<string, { forecasted: Set<string>; pending: Set<string> }>();
+  for (const row of forecastActivityRows.results) {
+    if (filters.season && filters.season !== "all" && row.season !== filters.season) continue;
+    if (filters.category && filters.category !== "all" && row.category !== filters.category) continue;
+    if (row.status === "resolved" && cutoff && Date.parse(String(row.resolved_at)) < cutoff) continue;
+    const participantId = String(row.participant_id);
+    const activity = activityByParticipant.get(participantId) ?? { forecasted: new Set<string>(), pending: new Set<string>() };
+    activity.forecasted.add(String(row.event_id));
+    if (row.status === "open" || row.status === "locked") activity.pending.add(String(row.event_id));
+    activityByParticipant.set(participantId, activity);
+  }
 
-  return [...groups.entries()]
+  const ranked = [...groups.entries()]
     .map(([id, group]) => {
       const losses = group.map((row) => row.loss);
       const averageBrier = mean(losses);
       const ci = bootstrapMeanCI(losses, id);
       const method = methodMeta.get(id);
       const participant = participantMeta.get(id);
+      const activity = activityByParticipant.get(id);
       return {
         id,
         name: String(method?.name || group[0].participantName),
@@ -597,10 +680,110 @@ async function buildLeaderboard(
         coverage: (losses.length / eligible.size) * 100,
         status: losses.length >= 5 ? "listed" : "provisional",
         version: group[group.length - 1].version,
+        forecasted: activity?.forecasted.size ?? losses.length,
+        pending: activity?.pending.size ?? 0,
       };
     })
     .sort((a, b) => a.brier - b.brier)
     .map((row, index) => ({ ...row, rank: index + 1 }));
+
+  if (track === "aggregators") {
+    const pairParticipantMap = new Map(participants.map((participant) => [String(participant.id), participant]));
+    for (const row of [...rows.results, ...outcomeRows.results]) {
+      if (row.kind !== "forecaster") continue;
+      const id = String(row.participant_id);
+      if (!pairParticipantMap.has(id)) {
+        pairParticipantMap.set(id, {
+          id,
+          name: String(row.participant_name),
+          organization: "Archived benchmark model",
+          color: "#7c4dff",
+          kind: "forecaster",
+        });
+      }
+    }
+    const bestPairs = buildBestPairStandings({
+      events: pairEvents,
+      methods: PAIR_AGGREGATION_METHODS,
+      participants: [...pairParticipantMap.values()],
+    });
+    const pairRows = bestPairs.map((pair) => {
+      const method = methodMeta.get(pair.methodId)!;
+      const ci = bootstrapMeanCI(pair.losses, `${pair.methodId}:${pair.firstId}:${pair.secondId}`);
+      return {
+        id: `${pair.methodId}:${pair.firstId}:${pair.secondId}`,
+        rank: 0,
+        methodId: pair.methodId,
+        name: method.name,
+        shortName: method.shortName,
+        organization: method.organization || "Arena Baseline",
+        kind: "aggregate" as const,
+        color: method.color,
+        brier: pair.brier,
+        ciLow: ci.low,
+        ciHigh: ci.high,
+        resolved: pair.losses.length,
+        coverage: eligible.size ? (pair.losses.length / eligible.size) * 100 : 0,
+        status: pair.losses.length >= 5 ? "listed" as const : "provisional" as const,
+        version: "pair-replay-v1",
+        forecasted: pair.losses.length,
+        pending: 0,
+        aggregationScope: "pair" as const,
+        modelPair: pair.modelPair,
+        modelCount: pair.modelCount,
+        pairCount: pair.pairCount,
+      };
+    });
+    const panelRows = ranked
+      .filter((row) => methodMeta.get(row.id)?.experimental)
+      .map((row) => ({
+        ...row,
+        aggregationScope: "adaptive-panel" as const,
+        modelPair: [],
+        modelCount: bestPairs[0]?.modelCount ?? 0,
+        pairCount: bestPairs[0]?.pairCount ?? 0,
+      }));
+    return [...pairRows, ...panelRows]
+      .sort((left, right) => Number(left.brier) - Number(right.brier))
+      .map((row, index) => ({ ...row, rank: index + 1 }));
+  }
+
+  if (track !== "forecasters") return ranked;
+
+  const scoredIds = new Set(groups.keys());
+  const registryOrder = new Map(FORECAST_MODELS.map((model, index) => [model.participantId, index]));
+  const awaiting = participants
+    .filter((participant) => participant.kind === "forecaster" && !scoredIds.has(String(participant.id)))
+    .sort((a, b) => {
+      const aOrder = registryOrder.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER;
+      const bOrder = registryOrder.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER;
+      return aOrder - bOrder || String(a.name).localeCompare(String(b.name));
+    })
+    .map((participant) => {
+      const id = String(participant.id);
+      const activity = activityByParticipant.get(id);
+      const forecasted = activity?.forecasted.size ?? 0;
+      return {
+        id,
+        rank: null,
+        name: String(participant.name),
+        shortName: String(participant.name),
+        organization: String(participant.organization || "Independent"),
+        kind: "forecaster" as const,
+        color: String(participant.color || "#7c4dff"),
+        brier: null,
+        ciLow: null,
+        ciHigh: null,
+        resolved: 0,
+        coverage: 0,
+        status: forecasted ? "awaiting_resolution" as const : "awaiting_forecast" as const,
+        version: "pending",
+        forecasted,
+        pending: activity?.pending.size ?? 0,
+      };
+    });
+
+  return [...ranked, ...awaiting];
 }
 
 export async function syncAggregates(eventId: string) {
@@ -700,10 +883,10 @@ export async function recordAutomatedForecast(payload: {
 }) {
   await ensureArenaReady();
   const db = getD1();
-  const event = await db.prepare("SELECT status FROM events WHERE id=?").bind(payload.eventId)
-    .first<{ status: string }>();
+  const event = await db.prepare("SELECT status, close_time FROM events WHERE id=?").bind(payload.eventId)
+    .first<{ status: string; close_time: string | null }>();
   if (!event) throw new ArenaError(404, "Event not found");
-  if (event.status !== "open") throw new ArenaError(409, "The event is locked and cannot accept automated forecasts");
+  await assertForecastAdmission(db, event, payload.eventId, "forecast-cron");
   await upsertPrediction(
     payload.eventId,
     {
@@ -743,10 +926,10 @@ export async function recordAutomatedEventForecast(payload: {
 }) {
   await ensureArenaReady();
   const db = getD1();
-  const event = await db.prepare("SELECT status FROM events WHERE id=?").bind(payload.eventId)
-    .first<{ status: string }>();
+  const event = await db.prepare("SELECT status, close_time FROM events WHERE id=?").bind(payload.eventId)
+    .first<{ status: string; close_time: string | null }>();
   if (!event) throw new ArenaError(404, "Event not found");
-  if (event.status !== "open") throw new ArenaError(409, "The event is locked and cannot accept automated forecasts");
+  await assertForecastAdmission(db, event, payload.eventId, "forecast-cron");
   const outcomes = await db.prepare(
     "SELECT outcome_key FROM event_outcomes WHERE event_id=? ORDER BY display_order",
   ).bind(payload.eventId).all<{ outcome_key: string }>();
@@ -960,6 +1143,25 @@ async function writeAudit(
     INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `).bind(action, entityType, entityId, JSON.stringify(detail), actor, new Date().toISOString()).run();
+}
+
+async function assertForecastAdmission(
+  db: D1Database,
+  event: Record<string, unknown> | { status: string; close_time: string | null },
+  eventId: string,
+  actor: string,
+) {
+  const admission = forecastAdmission(event);
+  if (admission.accepted) return;
+  if (admission.reason === "scheduled_close" && String(event.status) === "open") {
+    await lockEvent(db, {
+      eventId,
+      reason: "scheduled_close",
+      actor,
+      detail: { scheduledCloseTime: event.close_time || null, detectedBy: "forecast_admission_guard" },
+    });
+  }
+  throw new ArenaError(409, "The event is locked and forecasts cannot be changed");
 }
 
 function brier(probability: number, resolution: number) {

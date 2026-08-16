@@ -105,6 +105,27 @@ test("normalizes Kalshi's public market schema without requiring display liquidi
   assert.equal(evaluateHardEligibility(normalized, now).eligible, true);
 });
 
+test("Kalshi early-close markets freeze at expected determination instead of the fallback close", () => {
+  const normalized = normalizeKalshiMarket({
+    event_ticker: "KXSPORT-26AUG16",
+    series_ticker: "KXSPORT",
+    category: "Sports",
+    title: "Will Team A win?",
+  }, {
+    ticker_name: "KXSPORT-26AUG16-TEAMA",
+    status: "active",
+    open_date: "2026-08-15T14:00:00Z",
+    close_date: "2026-08-30T14:00:00Z",
+    event_occurrence_datetime: "2026-08-16T17:00:00Z",
+    expected_expiration_date: "2026-08-16T17:00:00Z",
+    yes_bid_dollars: "0.4800",
+    yes_ask_dollars: "0.5200",
+  }, now);
+  assert.equal(normalized.marketId, "kalshi:KXSPORT-26AUG16-TEAMA");
+  assert.equal(normalized.startTime, "2026-08-15T14:00:00.000Z");
+  assert.equal(normalized.closeTime, "2026-08-16T17:00:00.000Z");
+});
+
 test("category percentile ranks candidates but is not an eligibility gate", () => {
   const ranked = rankCandidates([
     candidate({ marketId: "lower-volume", volume24h: 20_000 }),

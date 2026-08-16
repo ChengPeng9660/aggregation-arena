@@ -149,6 +149,9 @@ test("public leaderboard keeps compact method and individual model standings", (
   assert.match(publicArenaSource, /Individual Models/);
   assert.match(publicArenaSource, /track: leaderboardTrack/);
   assert.match(publicArenaSource, /onTrack\("forecasters"\)/);
+  assert.match(publicArenaSource, /All registered models are shown/);
+  assert.match(publicArenaSource, /Awaiting outcome/);
+  assert.match(publicArenaSource, /row\.pending/);
 });
 
 test("live benchmark clears a transient load error after a successful retry", () => {
@@ -157,7 +160,7 @@ test("live benchmark clears a transient load error after a successful retry", ()
 
 test("live events expose the balanced Polymarket and Kalshi source structure", () => {
   assert.match(publicArenaSource, /POLYMARKET \+ KALSHI · LIVE FORECAST BENCHMARK/);
-  assert.match(publicArenaSource, /10 Polymarket and 10 Kalshi questions/);
+  assert.match(publicArenaSource, /Currently tracking \{sourceCounts\.polymarket\} Polymarket and \{sourceCounts\.kalshi\} Kalshi/);
   assert.match(publicArenaSource, /marketSource === "all" \|\| eventMarketSource\(event\) === marketSource/);
   assert.match(publicArenaSource, /sourceCounts\.polymarket/);
   assert.match(publicArenaSource, /sourceCounts\.kalshi/);

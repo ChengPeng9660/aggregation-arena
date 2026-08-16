@@ -8,6 +8,13 @@ import {
   selectPersistenceCandidates,
   selectDiverseSourceBalancedCandidates,
 } from "@/lib/curation-core";
+import {
+  inspectKalshiMarket,
+  inspectPolymarketBinaryMarket,
+  inspectPolymarketCategoricalEvent,
+  selectResolutionCheckRows,
+} from "@/lib/event-state-core.js";
+import { lockEvent } from "@/lib/event-state";
 
 type Candidate = Omit<ReturnType<typeof normalizePolymarketMarket>, "sourcePlatform"> & {
   sourcePlatform: "polymarket" | "kalshi";
@@ -36,12 +43,13 @@ type EventCandidate = Candidate & {
 };
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
-const KALSHI_API = "https://api.elections.kalshi.com/trade-api/v2";
-const MAX_POLYMARKET_EVENTS = 800;
-const MAX_EVENT_PAGES = 16;
+const KALSHI_API = "https://external-api.kalshi.com/trade-api/v2";
+const MAX_POLYMARKET_EVENTS = 600;
+const MAX_EVENT_PAGES = 12;
 const EVENT_PAGE_SIZE = 50;
-const MAX_KALSHI_EVENT_PAGES = 10;
+const MAX_KALSHI_EVENT_PAGES = 3;
 const KALSHI_EVENT_PAGE_SIZE = 200;
+const MAX_RESOLUTION_CHECKS_PER_RUN = 24;
 const EXTERNAL_FETCH_TIMEOUT_MS = 15_000;
 const MAX_EXTERNAL_PAGE_BYTES = 8 * 1024 * 1024;
 const STALE_SYNC_MINUTES = 20;
@@ -116,11 +124,9 @@ export async function ensureCurationReady(db: D1Database = getD1()) {
   await ensureColumn(db, "polymarket_candidates", "diversity_group_id", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "selection_runs", "source_counts_json", "TEXT NOT NULL DEFAULT '{}'");
   await ensureColumn(db, "selection_items", "source_platform", "TEXT NOT NULL DEFAULT 'polymarket'");
-  await db.prepare(`
-    UPDATE polymarket_candidates
-    SET diversity_group_id='polymarket-event:' || source_event_id
-    WHERE diversity_group_id=''
-  `).run();
+  // The legacy diversity backfill is migration-owned. Re-scanning the entire
+  // candidate history on every cold isolate can exceed D1's per-query CPU
+  // budget even when there are no rows left to update.
   curationSchemaReady = true;
 }
 
@@ -399,115 +405,169 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
 export async function resolveSelectedMarkets(db: D1Database = getD1()) {
   await ensureCurationReady(db);
   const rows = await db.prepare(`
-    SELECT si.market_id, si.source_platform, si.event_id, e.event_type, e.source_event_id FROM selection_items si
+    SELECT si.market_id, si.source_platform, si.event_id, e.status, e.close_time,
+      e.event_type, e.source_event_id
+    FROM selection_items si
     JOIN events e ON e.id=si.event_id
-    WHERE e.status='open' AND datetime(e.close_time) <= datetime('now', '+12 hours')
-    ORDER BY e.close_time LIMIT 50
+    WHERE e.status IN ('open','locked')
+    ORDER BY CASE e.status WHEN 'locked' THEN 0 ELSE 1 END, e.close_time
   `).all<{
     market_id: string;
     source_platform: string;
     event_id: string;
+    status: string;
+    close_time: string | null;
     event_type: string;
     source_event_id: string | null;
   }>();
+  const checkRows = selectResolutionCheckRows(rows.results, new Date(), MAX_RESOLUTION_CHECKS_PER_RUN);
+  let locked = 0;
   let resolved = 0;
-  for (const row of rows.results) {
-    if (row.source_platform === "kalshi") {
-      const ticker = row.market_id.replace(/^kalshi:/, "");
-      const response = await fetch(`${KALSHI_API}/markets/${encodeURIComponent(ticker)}`, {
-        headers: { accept: "application/json", "user-agent": "AggregationArena/1.0" },
+  let failed = 0;
+  for (const row of checkRows) {
+    try {
+      if (row.status === "open" && deadlinePassed(row.close_time)) {
+        locked += Number(await lockEvent(db, {
+          eventId: row.event_id,
+          reason: "scheduled_close",
+          actor: "market-curation-cron",
+          detail: { scheduledCloseTime: row.close_time },
+        }));
+      }
+
+      if (row.source_platform === "kalshi") {
+        const ticker = row.market_id.replace(/^kalshi:/, "");
+        const response = await fetch(`${KALSHI_API}/markets/${encodeURIComponent(ticker)}`, {
+          headers: { accept: "application/json", "user-agent": "Aggrena/1.0" },
+          signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
+        });
+        if (!response.ok) continue;
+        const payload = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as Record<string, unknown>;
+        const market = (payload.market && typeof payload.market === "object" ? payload.market : payload) as Record<string, unknown>;
+        const state = inspectKalshiMarket(market);
+        if (state.resolvedOutcome) {
+          const outcome = state.resolvedOutcome === "yes" ? 1 : 0;
+          resolved += Number(await resolveSelectedEvent(db, {
+            eventId: row.event_id,
+            resolution: outcome,
+            resolvedOutcome: state.resolvedOutcome,
+            note: `Automatically resolved from Kalshi market ${ticker}.`,
+            detail: { sourcePlatform: "kalshi", ticker, resolution: outcome },
+          }));
+        } else if (state.closed) {
+          locked += Number(await lockEvent(db, {
+            eventId: row.event_id,
+            reason: "source_closed",
+            actor: "market-curation-cron",
+            detail: { sourcePlatform: "kalshi", ticker },
+          }));
+        }
+        continue;
+      }
+
+      if (row.event_type === "categorical" && row.source_event_id) {
+        const response = await fetch(`${GAMMA_API}/events/${encodeURIComponent(row.source_event_id)}`, {
+          headers: { accept: "application/json", "user-agent": "Aggrena/1.0" },
+          signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
+        });
+        if (!response.ok) continue;
+        const sourceEvent = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as Record<string, unknown>;
+        const outcomeRows = await db.prepare(
+          "SELECT outcome_key, market_id FROM event_outcomes WHERE event_id=? ORDER BY display_order",
+        ).bind(row.event_id).all<{ outcome_key: string; market_id: string }>();
+        const state = inspectPolymarketCategoricalEvent(sourceEvent, outcomeRows.results);
+        if (state.resolvedOutcome) {
+          resolved += Number(await resolveSelectedEvent(db, {
+            eventId: row.event_id,
+            resolution: null,
+            resolvedOutcome: state.resolvedOutcome,
+            note: `Automatically resolved from Polymarket event ${row.source_event_id}.`,
+            detail: { sourceEventId: row.source_event_id, resolvedOutcome: state.resolvedOutcome },
+          }));
+        } else if (state.closed) {
+          locked += Number(await lockEvent(db, {
+            eventId: row.event_id,
+            reason: "source_closed",
+            actor: "market-curation-cron",
+            detail: { sourcePlatform: "polymarket", sourceEventId: row.source_event_id },
+          }));
+        }
+        continue;
+      }
+
+      const response = await fetch(`${GAMMA_API}/markets/${encodeURIComponent(row.market_id)}`, {
+        headers: { accept: "application/json", "user-agent": "Aggrena/1.0" },
         signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
       });
       if (!response.ok) continue;
-      const payload = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as Record<string, unknown>;
-      const market = (payload.market && typeof payload.market === "object" ? payload.market : payload) as Record<string, unknown>;
-      const result = String(market.result || "").toLowerCase();
-      if (result !== "yes" && result !== "no") continue;
-      const outcome = result === "yes" ? 1 : 0;
-      const resolvedAt = new Date().toISOString();
-      await db.batch([
-        db.prepare(`
-          UPDATE events SET status='resolved', resolution=?, resolved_outcome=?, resolution_note=?,
-            resolved_at=?, updated_at=? WHERE id=? AND status='open'
-        `).bind(
-          outcome, result, `Automatically resolved from Kalshi market ${ticker}.`,
-          resolvedAt, resolvedAt, row.event_id,
-        ),
-        db.prepare(`
-          INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
-          VALUES ('curation.event_resolved', 'event', ?, ?, 'market-curation-cron', ?)
-        `).bind(row.event_id, JSON.stringify({ sourcePlatform: "kalshi", ticker, resolution: outcome }), resolvedAt),
-      ]);
-      resolved += 1;
-      continue;
+      const market = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as Record<string, unknown>;
+      const state = inspectPolymarketBinaryMarket(market);
+      if (state.resolvedOutcome) {
+        const outcome = state.resolvedOutcome === "yes" ? 1 : 0;
+        resolved += Number(await resolveSelectedEvent(db, {
+          eventId: row.event_id,
+          resolution: outcome,
+          resolvedOutcome: state.resolvedOutcome,
+          note: `Automatically resolved from Polymarket market ${row.market_id}.`,
+          detail: { marketId: row.market_id, resolution: outcome },
+        }));
+      } else if (state.closed) {
+        locked += Number(await lockEvent(db, {
+          eventId: row.event_id,
+          reason: "source_closed",
+          actor: "market-curation-cron",
+          detail: { sourcePlatform: "polymarket", marketId: row.market_id },
+        }));
+      }
+    } catch (error) {
+      failed += 1;
+      console.error(JSON.stringify({
+        message: "Market resolution check failed",
+        eventId: row.event_id,
+        sourcePlatform: row.source_platform,
+        error: error instanceof Error ? error.message : String(error),
+      }));
     }
-    if (row.event_type === "categorical" && row.source_event_id) {
-      const response = await fetch(`${GAMMA_API}/events/${encodeURIComponent(row.source_event_id)}`, {
-        headers: { accept: "application/json", "user-agent": "AggregationArena/1.0" },
-        signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
-      });
-      if (!response.ok) continue;
-      const sourceEvent = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as Record<string, unknown>;
-      const sourceMarkets = Array.isArray(sourceEvent.markets) ? sourceEvent.markets as Record<string, unknown>[] : [];
-      const outcomeRows = await db.prepare(
-        "SELECT outcome_key, market_id FROM event_outcomes WHERE event_id=? ORDER BY display_order",
-      ).bind(row.event_id).all<{ outcome_key: string; market_id: string }>();
-      const winner = outcomeRows.results.find((outcome) => {
-        const market = sourceMarkets.find((item) => String(item.id) === String(outcome.market_id));
-        if (!market || market.closed !== true) return false;
-        const prices = parseJsonList(market.outcomePrices).map(Number);
-        const labels = parseJsonList(market.outcomes).map((value) => String(value).toLowerCase());
-        const yesIndex = labels.indexOf("yes");
-        return prices[yesIndex >= 0 ? yesIndex : 0] >= 0.999;
-      });
-      if (!winner) continue;
-      const resolvedAt = new Date().toISOString();
-      await db.batch([
-        db.prepare(`
-          UPDATE events SET status='resolved', resolution=NULL, resolved_outcome=?,
-            resolution_note=?, resolved_at=?, updated_at=? WHERE id=? AND status='open'
-        `).bind(
-          winner.outcome_key,
-          `Automatically resolved from Polymarket event ${row.source_event_id}.`,
-          resolvedAt, resolvedAt, row.event_id,
-        ),
-        db.prepare(`
-          INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
-          VALUES ('curation.event_resolved', 'event', ?, ?, 'market-curation-cron', ?)
-        `).bind(row.event_id, JSON.stringify({
-          sourceEventId: row.source_event_id,
-          resolvedOutcome: winner.outcome_key,
-        }), resolvedAt),
-      ]);
-      resolved += 1;
-      continue;
-    }
-    const response = await fetch(`${GAMMA_API}/markets/${encodeURIComponent(row.market_id)}`, {
-      headers: { accept: "application/json", "user-agent": "AggregationArena/1.0" },
-      signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
-    });
-    if (!response.ok) continue;
-    const market = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as Record<string, unknown>;
-    const prices = parseJsonList(market.outcomePrices).map(Number);
-    const outcomes = parseJsonList(market.outcomes).map(String);
-    const yesIndex = outcomes.findIndex((value) => value.toLowerCase() === "yes");
-    const yesPrice = prices[yesIndex >= 0 ? yesIndex : 0];
-    if (market.closed !== true || (yesPrice < 0.999 && yesPrice > 0.001)) continue;
-    const outcome = yesPrice >= 0.999 ? 1 : 0;
-    const now = new Date().toISOString();
-    await db.batch([
-      db.prepare(`
-        UPDATE events SET status='resolved', resolution=?, resolved_outcome=?, resolution_note=?,
-          resolved_at=?, updated_at=? WHERE id=? AND status='open'
-      `).bind(outcome, outcome ? "yes" : "no", `Automatically resolved from Polymarket market ${row.market_id}.`, now, now, row.event_id),
-      db.prepare(`
-        INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
-        VALUES ('curation.event_resolved', 'event', ?, ?, 'market-curation-cron', ?)
-      `).bind(row.event_id, JSON.stringify({ marketId: row.market_id, resolution: outcome }), now),
-    ]);
-    resolved += 1;
   }
-  return { checked: rows.results.length, resolved };
+  return { checked: checkRows.length, available: rows.results.length, locked, resolved, failed };
+}
+
+async function resolveSelectedEvent(
+  db: D1Database,
+  options: {
+    eventId: string;
+    resolution: number | null;
+    resolvedOutcome: string;
+    note: string;
+    detail: Record<string, unknown>;
+  },
+) {
+  const resolvedAt = new Date().toISOString();
+  const result = await db.prepare(`
+    UPDATE events SET status='resolved', resolution=?, resolved_outcome=?, resolution_note=?,
+      locked_at=COALESCE(locked_at, ?), lock_reason=COALESCE(lock_reason, 'source_resolved'),
+      resolved_at=?, updated_at=? WHERE id=? AND status IN ('open','locked')
+  `).bind(
+    options.resolution,
+    options.resolvedOutcome,
+    options.note,
+    resolvedAt,
+    resolvedAt,
+    resolvedAt,
+    options.eventId,
+  ).run();
+  if (!Number(result.meta.changes || 0)) return false;
+  await db.prepare(`
+    INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
+    VALUES ('curation.event_resolved', 'event', ?, ?, 'market-curation-cron', ?)
+  `).bind(options.eventId, JSON.stringify(options.detail), resolvedAt).run();
+  return true;
+}
+
+function deadlinePassed(closeTime: string | null) {
+  if (!closeTime) return false;
+  const timestamp = Date.parse(closeTime);
+  return !Number.isFinite(timestamp) || timestamp <= Date.now();
 }
 
 export const resolveSelectedPolymarketMarkets = resolveSelectedMarkets;
@@ -750,7 +810,7 @@ async function fetchPolymarketCandidates(now: Date): Promise<SourceFetchResult> 
     url.searchParams.set("limit", String(EVENT_PAGE_SIZE));
     if (cursor) url.searchParams.set("after_cursor", cursor);
     const response = await fetch(url, {
-      headers: { accept: "application/json", "user-agent": "AggregationArena/1.0" },
+      headers: { accept: "application/json", "user-agent": "Aggrena/1.0" },
       signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
     });
     if (!response.ok) throw new Error(`Polymarket Gamma returned ${response.status}`);
@@ -780,13 +840,10 @@ async function fetchKalshiCandidates(now: Date): Promise<SourceFetchResult> {
     const url = new URL(`${KALSHI_API}/events`);
     url.searchParams.set("status", "open");
     url.searchParams.set("with_nested_markets", "true");
-    url.searchParams.set("mve_filter", "exclude");
+    url.searchParams.set("min_close_ts", String(Math.floor((now.getTime() + CURATION_CONFIG.kalshiMinimumCloseHours * 3_600_000) / 1000)));
     url.searchParams.set("limit", String(KALSHI_EVENT_PAGE_SIZE));
     if (cursor) url.searchParams.set("cursor", cursor);
-    const response = await fetch(url, {
-      headers: { accept: "application/json", "user-agent": "AggregationArena/1.0" },
-      signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
-    });
+    const response = await fetchKalshiWithRetry(url);
     if (!response.ok) throw new Error(`Kalshi returned ${response.status}`);
     const payload = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as {
       events?: Record<string, unknown>[];
@@ -805,6 +862,23 @@ async function fetchKalshiCandidates(now: Date): Promise<SourceFetchResult> {
     return markets.map((market) => normalizeKalshiMarket(event, market, now));
   }).filter((candidate) => candidate.marketId !== "kalshi:");
   return { source: "kalshi", eventCount: events.length, pages, candidates };
+}
+
+async function fetchKalshiWithRetry(url: URL) {
+  let response: Response | null = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    response = await fetch(url, {
+      headers: { accept: "application/json", "user-agent": "Aggrena/1.0" },
+      signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
+    });
+    if (response.status !== 429 || attempt === 2) return response;
+    const retryAfterSeconds = Number(response.headers.get("retry-after"));
+    const delayMs = Number.isFinite(retryAfterSeconds)
+      ? Math.min(2_000, Math.max(250, retryAfterSeconds * 1_000))
+      : 250 * 2 ** attempt;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return response!;
 }
 
 async function readJsonLimited(response: Response, maximumBytes: number) {

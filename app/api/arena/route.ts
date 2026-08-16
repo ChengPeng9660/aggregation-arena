@@ -92,7 +92,15 @@ export async function POST(request: Request) {
         actor,
       );
     } else if (action === "run_forecast_batch") {
-      result = await runForecastBatch(env as unknown as Parameters<typeof runForecastBatch>[0], 1);
+      const eventIds = Array.isArray(payload.eventIds)
+        ? payload.eventIds.map((value) => String(value || "").trim()).filter(Boolean)
+        : payload.eventId ? [String(payload.eventId).trim()] : [];
+      const jobLimit = Math.max(1, Math.min(72, Number(payload.jobLimit || 1)));
+      result = await runForecastBatch(
+        env as unknown as Parameters<typeof runForecastBatch>[0],
+        jobLimit,
+        eventIds,
+      );
     } else if (action === "run_daily_forecast_batch") {
       const runtime = env as unknown as Parameters<typeof runForecastBatch>[0];
       const selection = await selectDailyBalancedSlate(runtime.DB);
@@ -106,6 +114,16 @@ export async function POST(request: Request) {
       result = await runAgentHarnessBatch(runtime, {
         resolvedOnly: true,
         eventLimit: Math.max(1, Math.min(10, Number(payload.eventLimit || 3))),
+      });
+    } else if (action === "run_agent_harness_batch") {
+      const runtime = env as unknown as Parameters<typeof runAgentHarnessBatch>[0];
+      const eventIds = Array.isArray(payload.eventIds)
+        ? payload.eventIds.map((value) => String(value || "").trim()).filter(Boolean)
+        : payload.eventId ? [String(payload.eventId).trim()] : [];
+      result = await runAgentHarnessBatch(runtime, {
+        resolvedOnly: false,
+        eventLimit: Math.max(1, Math.min(3, Number(payload.eventLimit || 1))),
+        eventIds,
       });
     } else {
       throw new ArenaError(400, "Unknown operation");

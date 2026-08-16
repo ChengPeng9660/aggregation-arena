@@ -1,14 +1,14 @@
-# Aggregation Arena
+# Aggrena
 
-![Aggregation Arena](public/og.png)
+![Aggrena](public/og.png)
 
 一个支持 Polymarket + Kalshi 自动选题、共享信息检索、LLM 自动预测、手工概率录入、自动聚合、结果结算、实时排名和审计追踪的预测聚合 Benchmark 平台。
 
 系统每小时从 Polymarket Gamma API 和 Kalshi 公开 Market API 同步活跃市场，应用平台对应的成交活跃度、截止窗口、概率区间和规则完整性筛选。每天只在两个平台都能提供足够多样的合格题时发布一个严格的 20 题批次：Polymarket 10 题、Kalshi 10 题。系统在平台内部、跨平台和最近 7 天历史之间去除同一现实事件及高度相似题目，并按五个固定类别维持软均衡。结算后以 Event Brier Score 实时更新 Leaderboard。
 
-Cloudflare Worker 版本：
+生产站点：
 
-<https://aggregation-arena.chengpeng9660.workers.dev>
+<https://www.aggrena.com>
 
 ## 目录
 
@@ -56,7 +56,9 @@ Cloudflare Worker 版本：
 - Pipeline 页面显示自动化健康状态、最后成功同步时间和最近一次运行状态。
 - 每轮仍以完整 800 个 Event / 全部 Market 计算门槛和类别统计，但 D1 只持久化至少含一个合格 Market 的 Event，并保留其全部 outcomes，避免无意义的大规模小时写入。
 - 超过 20 分钟仍未完成的同步会在下一轮自动标记为 `failed`，不会永久停在 `running`。
-- 临近截止的已选题会分别检查 Polymarket 和 Kalshi 最终状态；明确结算后自动写回 Arena 事件。
+- 每个整点都会检查全部已选且尚未结算的 Polymarket / Kalshi 事件，不再只检查计划截止时间前 12 小时的题目。
+- 事件到达本地 `close_time`，或来源平台提前关闭时，会先从 `open` 变为 `locked` 并立即停止接受预测；来源平台给出明确 outcome 后再变为 `resolved` 并进入评分。
+- Forecast 写入入口同时校验事件状态和 `close_time`，即使定时任务延迟，也不会接受计划截止时间之后的预测。
 
 ### 事件管理
 
@@ -75,7 +77,7 @@ Cloudflare Worker 版本：
 - 设置名称、所属组织和展示颜色。
 - 在同一事件中为多个 Forecaster 批量输入概率。
 - 输入范围固定为 `0–1`。
-- 同一个 Forecaster 可以更新尚未结算事件的概率。
+- 同一个 Forecaster 可以更新仍为 `open` 且尚未到达截止时间的事件概率；`locked` 和 `resolved` 事件均不可修改。
 
 ### LLM 自动预测
 
@@ -156,7 +158,7 @@ Cloudflare Worker 版本：
 
 直接打开：
 
-<https://aggregation-arena.chengpeng9660.workers.dev/?view=history>
+<https://www.aggrena.com/?view=history>
 
 ## 完整数据流程
 
@@ -171,7 +173,9 @@ Cloudflare Worker 版本：
       ↓
 事件保持 Open，可继续修改概率并保留 History
       ↓
-手工结算 Yes / No
+计划截止或来源市场提前关闭 → Locked
+      ↓
+来源确认最终结果 → Resolved
       ↓
 计算每个 Forecaster 与 Aggregator 的 Brier Loss
       ↓
@@ -244,7 +248,7 @@ Prediction History → Deterministic + Harness Aggregators → Brier Leaderboard
 
 ### 配置 API 密钥
 
-先在 <https://app.tavily.com> 获取 Tavily Key，并准备一个 OpenAI Chat Completions-compatible Gateway。推荐使用私有 LiteLLM Gateway：它可以把稳定的 Prophet slug 映射到不同供应商的真实 deployment，并在 Worker 侧保留一套统一请求协议。不要把任何 Key 写入 `wrangler.jsonc`、README、Git commit 或前端代码。
+先在 <https://app.tavily.com> 获取 Tavily Key，并准备一个 OpenAI Chat Completions-compatible Gateway。当前生产环境使用 Poe 的统一 API；Worker 中只保存 Poe endpoint 和公开 bot 映射，API Key 只进入 Cloudflare 加密 Secret。不要把任何 Key 写入 `wrangler.jsonc`、README、Git commit 或前端代码。
 
 在正确的 Cloudflare 账户登录后执行：
 
@@ -252,25 +256,28 @@ Prediction History → Deterministic + Harness Aggregators → Brier Leaderboard
 npx wrangler login
 npx wrangler whoami
 npx wrangler secret put TAVILY_API_KEY
-npx wrangler secret put PROPHET_MODEL_GATEWAY_URL
 npx wrangler secret put PROPHET_MODEL_GATEWAY_API_KEY
 ```
 
-`PROPHET_MODEL_GATEWAY_URL` 必须是完整 endpoint，例如：
+`PROPHET_MODEL_GATEWAY_URL` 必须是完整 endpoint。Poe 使用：
 
 ```text
-https://models.example.com/v1/chat/completions
+https://api.poe.com/v1/chat/completions
 ```
 
-18 个基础预测模型、Blind Harness 和 Evidence-Aware Harness 共用这一个 Gateway 和 API Key；Harness 默认调用 `qwen-3.6-plus`。默认情况下，请让 Gateway 直接暴露 Prophet slug（例如 `gpt-5.6-sol` 和 `qwen-3.6-plus`），此时不需要设置 `PROPHET_MODEL_ID_MAP`。某个供应商 deployment 名不同时，再把这个可选变量设置为单行 JSON 映射：
+18 个基础预测模型、Blind Harness 和 Evidence-Aware Harness 共用这一个 Gateway 和 API Key；Harness 默认调用 `qwen-3.6-plus`，在 Poe 上解析为 `Qwen3.6-Plus`。`PROPHET_MODEL_ID_MAP` 将稳定的 Prophet slug 映射到 Poe 的公开 bot ID；模型显示名、participant ID、ranking 和 score calculation 不随供应商映射改变。
 
 ```json
-{"gpt-5.6-sol":"openai/gpt-5.6-sol-prod","claude-fable-5":"anthropic/claude-fable-5-prod"}
+{"gpt-5.6-sol":"GPT-5.6-Sol","claude-fable-5":"Claude-Fable-5","qwen-3.6-plus":"Qwen3.6-Plus"}
 ```
 
-没有公开 provider endpoint 的模型也必须由这个私有 Gateway 提供对应 alias；应用不会用相近型号静默替代。若 Gateway 不支持某个 alias，该 model-event 会记录为 `failed`，其他模型继续运行。
+应用不会用相近型号静默替代。若 Poe 不支持某个精确 bot ID，该 model-event 会记录为 `failed`，其他模型继续运行；维护者应更新公开 bot 映射，而不是把另一型号冒充成原模型。
 
-两种 Harness 会在同一个事件的 18 个基础模型均完成后自动运行。Gateway 的网络错误、超时或上游错误会记录为可重试的 `failed`，不会永久替换为聚合结果；只有两次成功请求都返回无法解析的权重 JSON 时，才会记录 equal-mean fallback。已解决事件的维护者回填允许从至少两个完整基础预测开始。
+`PROPHET_DISABLED_MODEL_IDS` 记录 Poe 当前 API 没有开放的精确型号。它只控制供应商任务队列和 Harness 所需的基础预测数量，不删除公共 18-model registry，也不改历史 individual-model scores。2026-08-15 的真实探测结果是：Poe UI 已展示 Claude Fable 5、GPT-5.6 Sol 和 GPT-5.5，但三者的 Bot Query API 明确返回 `This bot does not support API access`，OpenAI-compatible API 也返回 model not found；Inkling Small 返回 unavailable，Foresight V3 返回 bot does not exist。因此生产 active provider panel 暂为其余 13 个精确模型。Poe 真正开放对应 API 后，应从该数组移除并逐模型 smoke test，不能仅依据 UI 页面或模型目录解除禁用。
+
+Poe 同一开源模型可能由多个官方 provider bot 托管。当前 `qwen-3.6-plus` 映射到 Together AI 的 `qwen3.6-plus-t`，因为主 `qwen3.6-plus` bot 在生产 smoke test 中连续返回临时 unavailable；两者均明确服务 Qwen 3.6 Plus，而不是用不同型号替代。
+
+两种 Harness 会在同一个事件的全部 active exact models 完成后自动运行（当前为 13 个；供应商开放全部型号后自动恢复为 18 个）。Gateway 的网络错误、超时或上游错误会记录为可重试的 `failed`，不会永久替换为聚合结果；只有两次成功请求都返回无法解析的权重 JSON 时，才会记录 equal-mean fallback。已解决事件的维护者回填允许从至少两个完整基础预测开始。
 
 本地开发先复制 [`.dev.vars.example`](.dev.vars.example) 为 `.dev.vars` 再填入真实值；`.dev.vars` 已被 Git 忽略。部署后打开网站的 `Pipeline` 页面查看配置状态，也可以在 `Forecasts` 页面检查模型任务。配置正常时可等待每小时 `:20` 的预测 Cron，或登录后点击 `Run next forecast`。
 
@@ -385,7 +392,7 @@ Coverage 表示某个 Forecaster 或聚合方法在当前筛选样本中拥有�
 
 - 本地开发使用 Wrangler 的本地 D1。
 - 生产网站使用 `wrangler.jsonc` 绑定的 ChengPeng 账户 D1。
-- `aggregation-arena.chengpeng9660.workers.dev` 使用 `aggregation-arena-production`。
+- `aggrena.com` 使用现有的 `aggregation-arena-production` D1 数据库。
 - Git 仓库不包含任何 D1 数据文件。
 
 ## 本地安装和运行
@@ -411,7 +418,7 @@ npm --version
 ### 2. 进入项目目录
 
 ```bash
-cd /path/to/aggregation-benchmark-platform
+cd /path/to/aggrena
 ```
 
 ### 3. 安装依赖
@@ -477,7 +484,7 @@ npm test
 
 当前自动化测试覆盖：
 
-1. Cloudflare Worker 生产构建可以真实启动并返回 Aggregation Arena 页面。
+1. Cloudflare Worker 生产构建可以真实启动并返回 Aggrena 页面。
 2. 三 outcome Event 的 Prophet Event Brier 公式和概率 simplex 归一化正确。
 3. 代码中存在并实现六种确定性聚合方法。
 4. 低成交量和非二元市场会被硬筛选拒绝。
@@ -621,7 +628,7 @@ git remote -v
 #### 4. 创建私有 GitHub 仓库并推送
 
 ```bash
-gh repo create aggregation-arena-benchmark \
+gh repo create aggrena \
   --private \
   --source=. \
   --remote=origin \
@@ -662,7 +669,7 @@ sites   Sites deployment repository
 
 填写：
 
-- Repository name: `aggregation-arena-benchmark`
+- Repository name: `aggrena`
 - Visibility: `Private`
 
 不要勾选以下选项：
@@ -678,13 +685,13 @@ sites   Sites deployment repository
 HTTPS：
 
 ```bash
-git remote add origin https://github.com/YOUR_USERNAME/aggregation-arena-benchmark.git
+git remote add origin https://github.com/YOUR_USERNAME/aggrena.git
 ```
 
 或者 SSH：
 
 ```bash
-git remote add origin git@github.com:YOUR_USERNAME/aggregation-arena-benchmark.git
+git remote add origin git@github.com:YOUR_USERNAME/aggrena.git
 ```
 
 把 `YOUR_USERNAME` 替换成你的 GitHub 用户名。
@@ -875,7 +882,7 @@ POST /api/arena
 ## 项目结构
 
 ```text
-aggregation-benchmark-platform/
+aggrena/
 ├── app/
 │   ├── api/arena/route.ts    # GET Snapshot 与 POST Actions
 │   ├── arena-client.tsx      # Leaderboard、事件、方法和审计 UI
@@ -973,7 +980,7 @@ git push -u origin main
 如果指向错误仓库，先确认目标地址，再修改：
 
 ```bash
-git remote set-url origin https://github.com/YOUR_USERNAME/aggregation-arena-benchmark.git
+git remote set-url origin https://github.com/YOUR_USERNAME/aggrena.git
 ```
 
 ### GitHub 仓库创建后第一次 Push 被拒绝

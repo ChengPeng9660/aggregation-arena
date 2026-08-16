@@ -12,7 +12,7 @@ import {
   parseHarnessDecision,
   shrinkHarnessWeights,
 } from "@/lib/agent-harness-core.js";
-import { FORECAST_MODELS } from "@/lib/forecast-core.js";
+import { FORECAST_MODELS, getActiveForecastModels } from "@/lib/forecast-core.js";
 import {
   ModelGatewayRequestError,
   modelGatewayConfigurationProblem,
@@ -24,6 +24,7 @@ type HarnessEnv = {
   PROPHET_MODEL_GATEWAY_URL?: string;
   PROPHET_MODEL_GATEWAY_API_KEY?: string;
   PROPHET_MODEL_ID_MAP?: string;
+  PROPHET_DISABLED_MODEL_IDS?: string;
 };
 
 type HarnessInformationSet = "blind" | "evidence-aware";
@@ -124,7 +125,7 @@ export async function ensureAgentHarnessReady(db: D1Database = getD1()) {
 
 export async function runAgentHarnessBatch(
   env: HarnessEnv,
-  options: { resolvedOnly?: boolean; eventLimit?: number } = {},
+  options: { resolvedOnly?: boolean; eventLimit?: number; eventIds?: string[] } = {},
 ) {
   await ensureAgentHarnessReady(env.DB);
   const gatewayProblem = modelGatewayConfigurationProblem(env);
@@ -132,8 +133,13 @@ export async function runAgentHarnessBatch(
     return { configured: false, processedEvents: 0, completed: 0, fallback: 0, failed: 0, message: gatewayProblem };
   }
   const eventLimit = Math.max(1, Math.min(10, Number(options.eventLimit || 3)));
-  const requiredForecasts = options.resolvedOnly ? 2 : FORECAST_MODELS.length;
-  const modelPlaceholders = FORECAST_MODELS.map(() => "?").join(", ");
+  const targetEventIds = [...new Set((options.eventIds || []).map((value) => String(value).trim()).filter(Boolean))].slice(0, 10);
+  const targetEventClause = targetEventIds.length
+    ? `AND e.id IN (${targetEventIds.map(() => "?").join(", ")})`
+    : "";
+  const activeModels = getActiveForecastModels(env.PROPHET_DISABLED_MODEL_IDS);
+  const requiredForecasts = options.resolvedOnly ? 2 : activeModels.length;
+  const modelPlaceholders = activeModels.map(() => "?").join(", ");
   const statusClause = options.resolvedOnly ? "e.status='resolved'" : "e.status IN ('resolved','open')";
   const rows = await env.DB.prepare(`
     SELECT e.id, e.title, e.description, e.category, e.close_time, e.event_type,
@@ -149,6 +155,7 @@ export async function runAgentHarnessBatch(
       AND (SELECT COUNT(*) FROM model_forecast_runs mfr
            WHERE mfr.context_id=rc.id AND mfr.status='completed'
              AND mfr.participant_id IN (${modelPlaceholders})) >= ?
+      ${targetEventClause}
       AND (
         NOT EXISTS (
           SELECT 1 FROM aggregation_harness_runs ahr
@@ -164,12 +171,17 @@ export async function runAgentHarnessBatch(
       )
     ORDER BY CASE e.status WHEN 'resolved' THEN 0 ELSE 1 END, rc.as_of_time, e.id
     LIMIT ?
-  `).bind(...FORECAST_MODELS.map((model) => model.participantId), requiredForecasts, eventLimit).all<Record<string, unknown>>();
+  `).bind(
+    ...activeModels.map((model) => model.participantId),
+    requiredForecasts,
+    ...targetEventIds,
+    eventLimit,
+  ).all<Record<string, unknown>>();
 
   const outcomes = [];
   for (const row of rows.results) {
     const event = rowToCandidate(row);
-    const pool = await loadHarnessPool(env.DB, event);
+    const pool = await loadHarnessPool(env.DB, event, activeModels);
     if (!pool || pool.forecasters.length < 2) {
       outcomes.push({ eventId: event.id, status: "skipped", reason: "fewer than two complete frozen forecasts" });
       continue;
@@ -188,6 +200,7 @@ export async function runAgentHarnessBatch(
     resolvedOnly: Boolean(options.resolvedOnly),
     requiredForecasts,
     eventLimit,
+    targetEventIds,
     processedEvents: new Set(outcomes.map((item) => item.eventId)).size,
     completed: outcomes.filter((item) => item.status === "completed").length,
     fallback: outcomes.filter((item) => item.status === "fallback").length,
@@ -197,14 +210,18 @@ export async function runAgentHarnessBatch(
   };
 }
 
-async function loadHarnessPool(db: D1Database, event: CandidateEvent): Promise<HarnessPool | null> {
-  const modelPlaceholders = FORECAST_MODELS.map(() => "?").join(", ");
+async function loadHarnessPool(
+  db: D1Database,
+  event: CandidateEvent,
+  activeModels: typeof FORECAST_MODELS,
+): Promise<HarnessPool | null> {
+  const modelPlaceholders = activeModels.map(() => "?").join(", ");
   const runRows = await db.prepare(`
     SELECT participant_id, rationale
     FROM model_forecast_runs
     WHERE context_id=? AND status='completed' AND participant_id IN (${modelPlaceholders})
     ORDER BY participant_id
-  `).bind(event.contextId, ...FORECAST_MODELS.map((model) => model.participantId)).all<Record<string, unknown>>();
+  `).bind(event.contextId, ...activeModels.map((model) => model.participantId)).all<Record<string, unknown>>();
   const runMap = new Map(runRows.results.map((row) => [String(row.participant_id), String(row.rationale || "")]));
   const participantIds = [...runMap.keys()];
   if (participantIds.length < 2) return null;

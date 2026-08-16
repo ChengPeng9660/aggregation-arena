@@ -1,34 +1,28 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { headers } from "next/headers";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
-export async function generateMetadata(): Promise<Metadata> {
-  const requestHeaders = await headers();
-  const host =
-    requestHeaders.get("x-forwarded-host") ??
-    requestHeaders.get("host") ??
-    "aggregation-arena.openai.site";
-  const protocol =
-    requestHeaders.get("x-forwarded-proto") ??
-    (host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
-  const socialImage = `${protocol}://${host}/og.png`;
+export function generateMetadata(): Metadata {
+  const socialImage = "https://www.aggrena.com/og.png";
 
   return {
-    title: "Aggregation Arena — Forecast Benchmark",
+    metadataBase: new URL("https://www.aggrena.com"),
+    title: "Aggrena — Forecast Aggregation Benchmark",
     description: "A live, auditable benchmark for probability aggregation methods.",
     openGraph: {
-      title: "Aggregation Arena",
+      title: "Aggrena",
       description: "Live Forecast Aggregation Benchmark",
+      url: "https://www.aggrena.com",
+      siteName: "Aggrena",
       type: "website",
-      images: [{ url: socialImage, width: 1200, height: 630, alt: "Aggregation Arena" }],
+      images: [{ url: socialImage, width: 1200, height: 630, alt: "Aggrena" }],
     },
     twitter: {
       card: "summary_large_image",
-      title: "Aggregation Arena",
+      title: "Aggrena",
       description: "Live Forecast Aggregation Benchmark",
       images: [socialImage],
     },
