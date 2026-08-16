@@ -69,7 +69,7 @@ type HarnessPool = {
 };
 
 export const AGENT_HARNESS_MODEL = "qwen-3.6-plus";
-export const AGENT_HARNESS_PROMPT_VERSION = "agent-weight-router-gateway-v2";
+export const AGENT_HARNESS_PROMPT_VERSION = "agent-weight-router-gateway-v3";
 
 export const AGENT_HARNESS_METHODS: HarnessMethod[] = [
   {
