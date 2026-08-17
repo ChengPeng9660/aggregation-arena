@@ -105,7 +105,7 @@ test("historical model count is user-adjustable across the published model panel
   const inputOneStart = historicalSource.indexOf('<section className="model-picker"');
   const inputTwoStart = historicalSource.indexOf('<div className="history-controls">');
   assert.match(historicalSource, /className="k-stepper"/);
-  assert.match(historicalSource, /min="2" max=\{data\.models\.length\}/);
+  assert.match(historicalSource, /min="0" max=\{data\.models\.length\}/);
   assert.match(historicalSource, /setModelCount/);
   assert.match(historicalSource, /className="picker-count-control"/);
   assert.match(historicalSource, /className="model-preset-block"/);
@@ -113,6 +113,18 @@ test("historical model count is user-adjustable across the published model panel
   assert.doesNotMatch(historicalSource, /className="k-control"/);
   assert.doesNotMatch(historicalSource, /<aside className="model-picker">/);
   assert.ok(resultsStart >= 0 && resultsStart < inputOneStart && inputOneStart < inputTwoStart);
+});
+
+test("historical model picker can explicitly select or clear every model", () => {
+  assert.match(historicalSource, /const selectAllModels = \(\) => setSelected\(data\.models\.map\(\(model\) => model\.id\)\)/);
+  assert.match(historicalSource, /const clearAllModels = \(\) => setSelected\(\[\]\)/);
+  assert.match(historicalSource, />Select all<\/button>/);
+  assert.match(historicalSource, />Clear all<\/button>/);
+  assert.match(historicalSource, /disabled=\{selected\.length === data\.models\.length\}/);
+  assert.match(historicalSource, /disabled=\{selected\.length === 0\}/);
+  assert.match(historicalSource, /const hasRequestedModels = params\.has\("models"\)/);
+  assert.match(historicalSource, /url\.searchParams\.set\("models", selected\.join\(","\)\)/);
+  assert.match(publicCss, /\.model-presets \{[^}]*repeat\(5, minmax\(0, 1fr\)\)/);
 });
 
 test("historical model picker ranks performance and disables incompatible additions", () => {

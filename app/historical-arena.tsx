@@ -78,24 +78,25 @@ export function HistoricalArena() {
       .then((payload) => {
         setData(payload);
         const params = new URLSearchParams(window.location.search);
+        const hasRequestedModels = params.has("models");
         const requested = params.get("models")?.split(",").filter((id) => payload.models.some((model) => model.id === id));
         const requestedWeightParam = params.get("cptec_w");
         const requestedWeight = requestedWeightParam === null ? Number.NaN : Number(requestedWeightParam);
         if (Number.isFinite(requestedWeight) && requestedWeight >= 0 && requestedWeight <= 1) setCptecWeight(requestedWeight);
-        setSelected(requested?.length ? requested : commonCoverageModels(payload, 6).map((model) => model.id));
+        setSelected(hasRequestedModels ? requested ?? [] : commonCoverageModels(payload, 6).map((model) => model.id));
       })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Historical dataset could not be loaded."));
   }, []);
 
   useEffect(() => {
-    if (!selected.length) return;
+    if (!data) return;
     const url = new URL(window.location.href);
     url.searchParams.set("view", "history");
     url.searchParams.set("models", selected.join(","));
     if (selected.length === 2) url.searchParams.set("cptec_w", cptecWeight.toFixed(2));
     else url.searchParams.delete("cptec_w");
     window.history.replaceState({}, "", url);
-  }, [selected, cptecWeight]);
+  }, [data, selected, cptecWeight]);
 
   const sources = useMemo(() => data ? Array.from(new Set(data.events
     .filter((event) => questionType === "all" || event.questionType === questionType)
@@ -111,21 +112,22 @@ export function HistoricalArena() {
   if (!data || !analysis) return <section className="history-page history-loading"><span />Loading ForecastBench history…</section>;
 
   const setModelCount = (requestedCount: number) => {
-    const count = Math.min(data.models.length, Math.max(2, Math.round(requestedCount)));
+    const count = Math.min(data.models.length, Math.max(0, Math.round(requestedCount)));
     setSelected((current) => {
       const retained = current.slice(0, count);
       if (retained.length === count) return retained;
       return extendCompatibleSelection(retained, modelPickerRows, filteredEvents, count);
     });
   };
-  const setPreset = (preset: "diverse" | "top" | "all" | "openai") => {
+  const setPreset = (preset: "diverse" | "top" | "openai") => {
     const count = Math.max(2, selected.length);
     const models = preset === "diverse" ? commonCoverageModels(data, count)
       : preset === "top" ? data.models.slice(0, count)
-      : preset === "all" ? data.models
       : data.models.filter((model) => model.organization.toLowerCase() === preset);
     setSelected(extendCompatibleSelection([], models, filteredEvents, models.length));
   };
+  const selectAllModels = () => setSelected(data.models.map((model) => model.id));
+  const clearAllModels = () => setSelected([]);
   const toggleModel = (id: string) => {
     const row = modelPickerRows.find((model) => model.id === id);
     if (row?.unavailable) return;
@@ -168,8 +170,8 @@ export function HistoricalArena() {
           <div className="picker-count-control" aria-label="Number of selected models">
             <div><span>Selected models</span><b>{selected.length} {selected.length === 1 ? "forecaster" : "forecasters"}</b></div>
             <span className="k-stepper">
-              <button type="button" onClick={() => setModelCount(selected.length - 1)} disabled={selected.length <= 2} aria-label="Select one fewer model">−</button>
-              <input aria-label="Selected model count" type="number" min="2" max={data.models.length} value={selected.length} onChange={(event) => setModelCount(Number(event.target.value))} />
+              <button type="button" onClick={() => setModelCount(selected.length - 1)} disabled={selected.length === 0} aria-label="Select one fewer model">−</button>
+              <input aria-label="Selected model count" type="number" min="0" max={data.models.length} value={selected.length} onChange={(event) => setModelCount(Number(event.target.value))} />
               <button type="button" onClick={() => setModelCount(selected.length + 1)} disabled={!hasCompatibleCandidate} aria-label="Select one more compatible model">+</button>
             </span>
           </div>
@@ -179,7 +181,8 @@ export function HistoricalArena() {
               <button onClick={() => setPreset("diverse")}>Cross-provider</button>
               <button onClick={() => setPreset("top")}>Top by coverage</button>
               <button onClick={() => setPreset("openai")}>OpenAI</button>
-              <button onClick={() => setPreset("all")}>All models</button>
+              <button type="button" onClick={selectAllModels} disabled={selected.length === data.models.length}>Select all</button>
+              <button type="button" onClick={clearAllModels} disabled={selected.length === 0}>Clear all</button>
             </div>
           </div>
           <input className="model-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search models" aria-label="Search models" />

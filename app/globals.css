@@ -1028,9 +1028,10 @@ td { font-size: 12px; }
 .picker-count-control > div span, .model-preset-block > span { display: block; color: var(--quiet); font: 8px var(--font-geist-mono), monospace; letter-spacing: .1em; text-transform: uppercase; }
 .picker-count-control > div b { display: block; margin-top: 5px; font-size: 11px; }
 .model-preset-block { grid-area: presets; display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: center; gap: 22px; margin-top: 22px; padding: 13px 0; border-block: 1px solid var(--line); }
-.model-presets { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.model-presets { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
 .model-presets button { min-height: 34px; padding: 0 11px; border: 1px solid var(--line); border-radius: 5px; background: #fff; cursor: pointer; color: var(--muted); font-size: 10px; text-align: left; }
 .model-presets button:hover { border-color: var(--purple-deep); color: var(--purple-deep); background: var(--purple-soft); }
+.model-presets button:disabled { border-color: var(--line); color: var(--line-strong); background: #faf9fa; cursor: default; }
 .model-search { grid-area: search; width: 100%; min-height: 42px; padding: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: #fff; font-size: 11px; }
 .model-options { grid-area: options; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); max-height: 248px; margin-top: 8px; overflow-y: auto; border-block: 1px solid var(--line); }
 .model-options label { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 9px; align-items: start; padding: 10px 12px; border-right: 1px solid rgba(231,225,234,.75); border-bottom: 1px solid rgba(231,225,234,.75); cursor: pointer; transition: background .18s ease, color .18s ease, opacity .18s ease; }
