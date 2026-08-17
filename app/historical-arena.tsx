@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { DEFAULT_CPTEC_WEIGHT, cptecProbability } from "@/lib/cptec-core.js";
+import { piecewiseOddsProbability } from "@/lib/piecewise-odds-core.js";
 
 type HistoricalModel = { id: string; name: string; organization: string; n: number; variants: number };
 type HistoricalEvent = {
@@ -38,7 +39,15 @@ const CPTEC_METHOD = {
   rule: "Available only for two selected models. CPTEC computes sigmoid(w × logit(p₁) + (1 − w) × logit(p₂)); w applies to the first selected model.",
 } as const;
 
-const METHODS = [...BASE_METHODS, CPTEC_METHOD] as const;
+const PIECEWISE_ODDS_METHOD = {
+  id: "piecewise-odds",
+  name: "Piecewise Odds Pool",
+  short: "Piecewise Odds",
+  color: "#7A3E9D",
+  rule: "Available only for two selected models. Multiplies their odds, uses the geometric-mean odds when 1/5 ≤ T ≤ 5, and preserves more joint evidence outside that range: √5T below 1/5 and T/√5 above 5.",
+} as const;
+
+const METHODS = [...BASE_METHODS, CPTEC_METHOD, PIECEWISE_ODDS_METHOD] as const;
 
 const HISTORY_DATA_VERSION = "2026-08-09-source-aware";
 
@@ -317,6 +326,7 @@ function aggregate(values: number[], weights: number[], cptecWeight: number): Re
     extreme: logistic(logit(arithmetic) * 1.35),
     weighted: values.reduce((sum, value, index) => sum + value * weights[index], 0) / weightTotal,
     cptec: values.length === 2 ? cptecProbability(values, cptecWeight) : logitPool,
+    "piecewise-odds": values.length === 2 ? piecewiseOddsProbability(values) : logitPool,
   };
 }
 

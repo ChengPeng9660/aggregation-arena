@@ -134,6 +134,14 @@ test("historical leaderboard exposes CPTEC only for an exactly two-model selecti
   assert.match(historicalSource, /url\.searchParams\.set\("cptec_w", cptecWeight\.toFixed\(2\)\)/);
 });
 
+test("historical leaderboard exposes Piecewise Odds Pool only for an exactly two-model selection", () => {
+  assert.match(historicalSource, /name: "Piecewise Odds Pool"/);
+  assert.match(historicalSource, /1\/5 ≤ T ≤ 5/);
+  assert.match(historicalSource, /selected\.length === 2 \? METHODS : BASE_METHODS/);
+  assert.match(historicalSource, /piecewiseOddsProbability\(values\)/);
+  assert.match(historicalSource, /"piecewise-odds": values\.length === 2/);
+});
+
 test("production arena cannot seed or display synthetic demo events", () => {
   assert.doesNotMatch(arenaSource, /seedDemoIfEmpty|Demo Season initialized|Seeded example event/);
   assert.match(arenaSource, /id NOT LIKE 'demo-%'/);
