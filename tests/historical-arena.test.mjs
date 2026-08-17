@@ -124,7 +124,22 @@ test("historical model picker can explicitly select or clear every model", () =>
   assert.match(historicalSource, /disabled=\{selected\.length === 0\}/);
   assert.match(historicalSource, /const hasRequestedModels = params\.has\("models"\)/);
   assert.match(historicalSource, /url\.searchParams\.set\("models", selected\.join\(","\)\)/);
-  assert.match(publicCss, /\.model-presets \{[^}]*repeat\(5, minmax\(0, 1fr\)\)/);
+  assert.match(publicCss, /\.model-presets \{[^}]*repeat\(4, minmax\(0, 1fr\)\)/);
+});
+
+test("historical model picker offers a data-driven provider tab for every organization", () => {
+  const providers = Array.from(new Set(dataset.models.map((model) => model.organization))).sort();
+  assert.ok(providers.length >= 8);
+  assert.ok(providers.includes("OpenAI"));
+  assert.match(historicalSource, /const groups = new Map<string, string\[\]>\(\)/);
+  assert.match(historicalSource, /groups\.set\(model\.organization/);
+  assert.match(historicalSource, /className="model-provider-tabs"/);
+  assert.match(historicalSource, /aria-label="Select all models from a provider"/);
+  assert.match(historicalSource, /onClick=\{\(\) => selectProviderModels\(provider\.modelIds\)\}/);
+  assert.match(historicalSource, /aria-pressed=\{activeProvider === provider\.name\}/);
+  assert.doesNotMatch(historicalSource, /setPreset\("openai"\)/);
+  assert.match(publicCss, /\.model-provider-tabs \{[^}]*overflow-x: auto/);
+  assert.match(publicCss, /\.model-provider-tabs button\.active::after/);
 });
 
 test("historical model picker ranks performance and disables incompatible additions", () => {

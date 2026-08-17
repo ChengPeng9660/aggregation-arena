@@ -107,6 +107,12 @@ export function HistoricalArena() {
   const analysis = useMemo(() => data ? analyze(filteredEvents, selected, data.models, cptecWeight) : null, [data, filteredEvents, selected, cptecWeight]);
   const modelPickerRows = useMemo(() => data ? makeModelPickerRows(data.models, filteredEvents, selected) : [], [data, filteredEvents, selected]);
   const visibleModels = useMemo(() => modelPickerRows.filter((model) => `${model.organization} ${model.name}`.toLowerCase().includes(search.toLowerCase())), [modelPickerRows, search]);
+  const providerGroups = useMemo(() => {
+    if (!data) return [];
+    const groups = new Map<string, string[]>();
+    for (const model of data.models) groups.set(model.organization, [...(groups.get(model.organization) ?? []), model.id]);
+    return Array.from(groups, ([name, modelIds]) => ({ name, modelIds })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [data]);
 
   if (error) return <section className="history-page"><div className="history-error">{error}</div></section>;
   if (!data || !analysis) return <section className="history-page history-loading"><span />Loading ForecastBench history…</section>;
@@ -119,13 +125,13 @@ export function HistoricalArena() {
       return extendCompatibleSelection(retained, modelPickerRows, filteredEvents, count);
     });
   };
-  const setPreset = (preset: "diverse" | "top" | "openai") => {
+  const setPreset = (preset: "diverse" | "top") => {
     const count = Math.max(2, selected.length);
     const models = preset === "diverse" ? commonCoverageModels(data, count)
-      : preset === "top" ? data.models.slice(0, count)
-      : data.models.filter((model) => model.organization.toLowerCase() === preset);
+      : data.models.slice(0, count);
     setSelected(extendCompatibleSelection([], models, filteredEvents, models.length));
   };
+  const selectProviderModels = (modelIds: string[]) => setSelected(modelIds);
   const selectAllModels = () => setSelected(data.models.map((model) => model.id));
   const clearAllModels = () => setSelected([]);
   const toggleModel = (id: string) => {
@@ -135,6 +141,7 @@ export function HistoricalArena() {
   };
   const hasCompatibleCandidate = modelPickerRows.some((model) => !selected.includes(model.id) && !model.unavailable);
   const visibleRanking = leaderboardView === "combined" ? analysis.combinedRanking : analysis.ranking;
+  const activeProvider = providerGroups.find((provider) => provider.modelIds.length === selected.length && provider.modelIds.every((id) => selected.includes(id)))?.name ?? null;
   const firstSelectedModel = data.models.find((model) => model.id === selected[0]);
   const secondSelectedModel = data.models.find((model) => model.id === selected[1]);
   const updateCptecWeight = (value: number) => {
@@ -176,13 +183,30 @@ export function HistoricalArena() {
             </span>
           </div>
           <div className="model-preset-block">
-            <span>Quick select</span>
-            <div className="model-presets">
-              <button onClick={() => setPreset("diverse")}>Cross-provider</button>
-              <button onClick={() => setPreset("top")}>Top by coverage</button>
-              <button onClick={() => setPreset("openai")}>OpenAI</button>
-              <button type="button" onClick={selectAllModels} disabled={selected.length === data.models.length}>Select all</button>
-              <button type="button" onClick={clearAllModels} disabled={selected.length === 0}>Clear all</button>
+            <div className="model-quick-select-row">
+              <span>Quick select</span>
+              <div className="model-presets">
+                <button type="button" onClick={() => setPreset("diverse")}>Cross-provider</button>
+                <button type="button" onClick={() => setPreset("top")}>Top by coverage</button>
+                <button type="button" onClick={selectAllModels} disabled={selected.length === data.models.length}>Select all</button>
+                <button type="button" onClick={clearAllModels} disabled={selected.length === 0}>Clear all</button>
+              </div>
+            </div>
+            <div className="model-provider-filter">
+              <span>Provider</span>
+              <div className="model-provider-tabs" role="group" aria-label="Select all models from a provider">
+                {providerGroups.map((provider) => (
+                  <button
+                    type="button"
+                    key={provider.name}
+                    className={activeProvider === provider.name ? "active" : ""}
+                    aria-pressed={activeProvider === provider.name}
+                    onClick={() => selectProviderModels(provider.modelIds)}
+                  >
+                    <b>{provider.name}</b><small>{provider.modelIds.length}</small>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           <input className="model-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search models" aria-label="Search models" />
