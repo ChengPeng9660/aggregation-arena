@@ -1202,11 +1202,18 @@ td { font-size: 12px; }
   cursor: pointer;
 }
 .public-brand strong { font-size: 15px; letter-spacing: -.025em; }
-.public-mark { position: relative; width: 27px; height: 27px; border: 1px solid var(--purple-deep); border-radius: 50%; }
-.public-mark i { position: absolute; width: 6px; height: 6px; border-radius: 50%; background: var(--purple-deep); }
-.public-mark i:nth-child(1) { left: 4px; top: 10px; }
-.public-mark i:nth-child(2) { left: 14px; top: 4px; background: var(--gold); }
-.public-mark i:nth-child(3) { left: 15px; top: 15px; }
+.public-mark { position: relative; isolation: isolate; width: 30px; height: 25px; }
+.public-mark i { position: absolute; left: 1px; width: 5px; height: 5px; border-radius: 50%; background: var(--purple); }
+.public-mark i::after { content: ""; position: absolute; z-index: -1; left: 4px; top: 2px; width: 20px; height: 1px; background: rgba(79,32,127,.28); transform-origin: left center; transition: background .18s ease; }
+.public-mark i:nth-child(1) { top: 3px; }
+.public-mark i:nth-child(1)::after { transform: rotate(18deg); }
+.public-mark i:nth-child(2) { top: 10px; background: var(--gold); }
+.public-mark i:nth-child(3) { top: 17px; background: var(--purple-deep); }
+.public-mark i:nth-child(3)::after { transform: rotate(-18deg); }
+.public-mark em { position: absolute; right: 0; top: 7px; width: 11px; height: 11px; border: 2px solid var(--purple-deep); border-radius: 50%; background: #fff; box-shadow: 0 0 0 3px rgba(79,32,127,.05); transition: transform .18s ease, box-shadow .18s ease; }
+.public-mark em::after { content: ""; position: absolute; inset: 2px; border-radius: 50%; background: var(--purple); }
+.public-brand:hover .public-mark i::after { background: rgba(79,32,127,.48); }
+.public-brand:hover .public-mark em { transform: scale(1.09); box-shadow: 0 0 0 4px rgba(79,32,127,.08); }
 .public-header nav { display: flex; align-items: center; gap: 28px; }
 .public-header nav button {
   position: relative;

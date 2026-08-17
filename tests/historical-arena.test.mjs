@@ -190,6 +190,16 @@ test("public leaderboard keeps compact method and individual model standings", (
   assert.match(publicArenaSource, /row\.pending/);
 });
 
+test("Aggrena brand mark shows three forecasts converging into one aggregate", () => {
+  assert.match(publicArenaSource, /className="public-mark" aria-hidden="true"><i \/><i \/><i \/><em \/><\/span>/);
+  assert.match(publicCss, /\.public-mark i::after \{[^}]*width: 20px/);
+  assert.match(publicCss, /\.public-mark i:nth-child\(1\)::after \{ transform: rotate\(18deg\); \}/);
+  assert.match(publicCss, /\.public-mark i:nth-child\(3\)::after \{ transform: rotate\(-18deg\); \}/);
+  assert.match(publicCss, /\.public-mark em \{[^}]*border: 2px solid var\(--purple-deep\)/);
+  assert.match(publicCss, /\.public-brand:hover \.public-mark em \{[^}]*transform: scale\(1\.09\)/);
+  assert.doesNotMatch(publicCss, /\.public-mark \{[^}]*border-radius: 50%/);
+});
+
 test("aggregation method table keeps method, pair, and numeric columns aligned", () => {
   assert.match(publicArenaSource, /<col className="methods-name-column" \/>/);
   assert.match(publicArenaSource, /<col className="methods-pair-column" \/>/);

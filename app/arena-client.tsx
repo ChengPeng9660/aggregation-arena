@@ -360,7 +360,7 @@ export function ArenaClient() {
       <header className="public-header">
         <div className="public-header-inner">
           <button className="public-brand" onClick={() => navigateView("leaderboard")} aria-label="Aggrena home">
-            <span className="public-mark" aria-hidden="true"><i /><i /><i /></span>
+            <span className="public-mark" aria-hidden="true"><i /><i /><i /><em /></span>
             <strong>Aggrena</strong>
           </button>
           <nav aria-label="Public benchmark navigation">
