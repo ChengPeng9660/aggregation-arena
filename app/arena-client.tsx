@@ -667,6 +667,14 @@ function LeaderboardView({
           </div>
           <div className="table-scroll">
             <table className={isMethods ? "methods-table" : undefined}>
+              {isMethods && <colgroup>
+                <col className="methods-rank-column" />
+                <col className="methods-name-column" />
+                <col className="methods-pair-column" />
+                <col className="methods-score-column" />
+                <col className="methods-resolved-column" />
+                <col className="methods-coverage-column" />
+              </colgroup>}
               <thead><tr><th>Rank</th><th>{isMethods ? "Method" : "Model"}</th>{isMethods && <th>Model pair / panel</th>}<th>Event Brier ↓</th><th>{isMethods ? "Common resolved" : "Resolved / live"}</th><th>Coverage</th></tr></thead>
               <tbody>
                 {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} showInputs={isMethods} />) : (

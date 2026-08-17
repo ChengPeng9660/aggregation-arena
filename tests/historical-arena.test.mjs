@@ -6,6 +6,7 @@ const datasetPath = new URL("../public/forecastbench/history.json", import.meta.
 const dataset = JSON.parse(await readFile(datasetPath, "utf8"));
 const historicalSource = await readFile(new URL("../app/historical-arena.tsx", import.meta.url), "utf8");
 const publicArenaSource = await readFile(new URL("../app/arena-client.tsx", import.meta.url), "utf8");
+const publicCss = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 const arenaSource = await readFile(new URL("../lib/arena.ts", import.meta.url), "utf8");
 
 test("historical arena publishes a multi-provider resolved binary panel", () => {
@@ -160,6 +161,16 @@ test("public leaderboard keeps compact method and individual model standings", (
   assert.match(publicArenaSource, /All registered models are shown/);
   assert.match(publicArenaSource, /Awaiting outcome/);
   assert.match(publicArenaSource, /row\.pending/);
+});
+
+test("aggregation method table keeps method, pair, and numeric columns aligned", () => {
+  assert.match(publicArenaSource, /<col className="methods-name-column" \/>/);
+  assert.match(publicArenaSource, /<col className="methods-pair-column" \/>/);
+  assert.match(publicCss, /\.public-ranking-table \.methods-table \{ min-width: 1060px; table-layout: fixed; \}/);
+  assert.match(publicCss, /\.methods-table \.methods-pair-column \{ width: 342px; \}/);
+  assert.match(publicCss, /\.public-ranking-table \.methods-table td:nth-child\(3\) \{ text-align: left; \}/);
+  assert.match(publicCss, /grid-template-columns: minmax\(0, 1fr\) auto minmax\(0, 1fr\)/);
+  assert.doesNotMatch(publicCss, /\.model-pair-cell \{[^}]*min-width: 300px/);
 });
 
 test("live benchmark clears a transient load error after a successful retry", () => {

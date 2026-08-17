@@ -1307,7 +1307,18 @@ td { font-size: 12px; }
 .public-ranking-table { border: 0; border-radius: 0; box-shadow: none; }
 .public-ranking-table .table-caption { padding: 12px 0; border-bottom-color: var(--line-strong); }
 .public-ranking-table table { min-width: 820px; }
-.public-ranking-table .methods-table { min-width: 1060px; }
+.public-ranking-table .methods-table { min-width: 1060px; table-layout: fixed; }
+.methods-table .methods-rank-column { width: 64px; }
+.methods-table .methods-name-column { width: 210px; }
+.methods-table .methods-pair-column { width: 342px; }
+.methods-table .methods-score-column { width: 136px; }
+.methods-table .methods-resolved-column { width: 158px; }
+.methods-table .methods-coverage-column { width: 150px; }
+.public-ranking-table .methods-table th:nth-child(3),
+.public-ranking-table .methods-table td:nth-child(3) { text-align: left; }
+.public-ranking-table .methods-table td { vertical-align: middle; }
+.public-ranking-table .methods-table .method-cell { min-width: 0; }
+.public-ranking-table .methods-table .method-cell > div { min-width: 0; }
 .public-ranking-table th { padding: 10px 12px; background: #fbfafc; }
 .public-ranking-table th:first-child, .public-ranking-table td:first-child { padding-left: 8px; }
 .public-ranking-table th:last-child, .public-ranking-table td:last-child { padding-right: 8px; }
@@ -1330,10 +1341,10 @@ td { font-size: 12px; }
 .public-ranking-table .forecast-count { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 7px; font-family: var(--font-geist-mono), monospace; }
 .public-ranking-table .forecast-count b { color: var(--muted); font-size: 10px; font-weight: 500; }
 .public-ranking-table .forecast-count small { color: var(--purple-deep); font-size: 8px; white-space: nowrap; }
-.model-pair-cell { display: flex; align-items: center; gap: 8px; min-width: 300px; }
+.model-pair-cell { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; }
 .model-pair-cell > span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .model-pair-cell > span > i { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; }
-.model-pair-cell b { overflow: hidden; max-width: 128px; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.model-pair-cell b { overflow: hidden; min-width: 0; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .model-pair-cell > em { color: var(--gold); font: 11px var(--font-geist-mono), monospace; font-style: normal; }
 .model-panel-cell b, .model-panel-cell small { display: block; }
 .model-panel-cell b { font-size: 11px; font-weight: 600; }
