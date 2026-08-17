@@ -1360,11 +1360,11 @@ td { font-size: 12px; }
 .public-ranking-table .forecast-count { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 7px; font-family: var(--font-geist-mono), monospace; }
 .public-ranking-table .forecast-count b { color: var(--muted); font-size: 10px; font-weight: 500; }
 .public-ranking-table .forecast-count small { color: var(--purple-deep); font-size: 8px; white-space: nowrap; }
-.model-pair-cell { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; }
-.model-pair-cell > span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.model-pair-cell { display: inline-flex; align-items: center; justify-content: flex-start; gap: 5px; max-width: 100%; min-width: 0; }
+.model-pair-cell > span { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 4px; max-width: calc((100% - 18px) / 2); min-width: 0; }
 .model-pair-cell > span > i { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; }
 .model-pair-cell b { overflow: hidden; min-width: 0; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.model-pair-cell > em { color: var(--gold); font: 11px var(--font-geist-mono), monospace; font-style: normal; }
+.model-pair-cell > em { flex: 0 0 auto; color: var(--gold); font: 10px var(--font-geist-mono), monospace; font-style: normal; }
 .model-panel-cell b, .model-panel-cell small { display: block; }
 .model-panel-cell b { font-size: 11px; font-weight: 600; }
 .model-panel-cell small { margin-top: 4px; color: var(--quiet); font-size: 9px; }

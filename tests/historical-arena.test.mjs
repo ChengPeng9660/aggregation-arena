@@ -206,7 +206,8 @@ test("aggregation method table keeps method, pair, and numeric columns aligned",
   assert.match(publicCss, /\.public-ranking-table \.methods-table \{ min-width: 1060px; table-layout: fixed; \}/);
   assert.match(publicCss, /\.methods-table \.methods-pair-column \{ width: 342px; \}/);
   assert.match(publicCss, /\.public-ranking-table \.methods-table td:nth-child\(3\) \{ text-align: left; \}/);
-  assert.match(publicCss, /grid-template-columns: minmax\(0, 1fr\) auto minmax\(0, 1fr\)/);
+  assert.match(publicCss, /\.model-pair-cell \{ display: inline-flex;[^}]*gap: 5px/);
+  assert.match(publicCss, /\.model-pair-cell > span \{[^}]*max-width: calc\(\(100% - 18px\) \/ 2\)/);
   assert.doesNotMatch(publicCss, /\.model-pair-cell \{[^}]*min-width: 300px/);
 });
 
