@@ -170,6 +170,29 @@ test("historical leaderboard exposes Piecewise Odds Pool only for an exactly two
   assert.match(historicalSource, /"piecewise-odds": values\.length === 2/);
 });
 
+test("historical leaderboard exposes outcome-blind DASH-Hedge-2 and SafeMix-2 only for two models", () => {
+  assert.match(historicalSource, /name: "DASH-Hedge-2"/);
+  assert.match(historicalSource, /name: "Dependence-Adaptive SafeMix-2"/);
+  assert.match(historicalSource, /selected\.length === 2 \? METHODS : BASE_METHODS/);
+  assert.match(historicalSource, /selected\.length === 2\s*\? makePriorDatePairPredictions/);
+  assert.match(historicalSource, /values\["dash-hedge-2"\] = pairPrediction\.dashHedge/);
+  assert.match(historicalSource, /values\["safemix-2"\] = pairPrediction\.safeMix/);
+  assert.match(historicalSource, /current-date outcomes are revealed only after all predictions for that date are frozen/);
+});
+
+test("DASH-2 browser replay freezes a complete date before applying feedback", () => {
+  const replay = historicalSource.slice(
+    historicalSource.indexOf("function makePriorDatePairPredictions("),
+    historicalSource.indexOf("function makeRanking("),
+  );
+  assert.match(replay, /forecastDash2Pair\(/);
+  assert.match(replay, /frozenExpertPredictions\.push\(forecast\.expertPredictions\)/);
+  assert.match(replay, /outcomes\.push\(event\.outcome\)/);
+  assert.match(replay, /state = updateDash2State\(state, frozenExpertPredictions, outcomes\)/);
+  assert.ok(replay.indexOf("forecastDash2Pair(") < replay.indexOf("updateDash2State("));
+  assert.doesNotMatch(replay.slice(0, replay.indexOf("forecastDash2Pair(")), /event\.outcome/);
+});
+
 test("production arena cannot seed or display synthetic demo events", () => {
   assert.doesNotMatch(arenaSource, /seedDemoIfEmpty|Demo Season initialized|Seeded example event/);
   assert.match(arenaSource, /id NOT LIKE 'demo-%'/);

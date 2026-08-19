@@ -4,6 +4,8 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { HistoricalArena } from "./historical-arena";
 
 const PROPHET_CATEGORIES = ["Politics", "Economics", "Science", "Sports", "Entertainment"] as const;
+const FORECASTBENCH_CORRELATION_URL =
+  "https://chengpeng9660.github.io/forecastbench-event-type-correlation/?type=finance_economics&metric=adjusted_pog&min_n=50&near_bi=1";
 
 type Prediction = {
   id: string;
@@ -298,6 +300,10 @@ export function ArenaClient() {
     return () => window.clearTimeout(initialView);
   }, []);
 
+  const openForecastbenchCorrelation = () => {
+    window.location.href = FORECASTBENCH_CORRELATION_URL;
+  };
+
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     if (!silent) setError("");
@@ -369,6 +375,11 @@ export function ArenaClient() {
             <PublicNavButton active={view === "events"} label="Events" onClick={() => navigateView("events")} />
             <PublicNavButton active={view === "pipeline"} label="How it works" onClick={() => navigateView("pipeline")} />
             <PublicNavButton active={view === "methods"} label="Methodology" onClick={() => navigateView("methods")} />
+            <PublicNavButton
+              active={false}
+              label="ForecastBench Correlation"
+              onClick={openForecastbenchCorrelation}
+            />
           </nav>
           <div className="public-live"><span />Live benchmark</div>
         </div>
@@ -415,7 +426,11 @@ export function ArenaClient() {
 
       <footer className="public-footer">
         <div><strong>Aggrena</strong><span>Open forecasting aggregation benchmark</span></div>
-        <p>{view === "history" ? "ForecastBench history · interactive model selection · resolved Brier scoring" : "Polymarket + Kalshi questions · frozen research context · public Event Brier scoring"}</p>
+        <p>
+          {view === "history"
+            ? "ForecastBench history · interactive model selection · resolved Brier scoring"
+            : "Polymarket + Kalshi questions · frozen research context · public Event Brier scoring"}
+        </p>
       </footer>
 
       {dialog && (

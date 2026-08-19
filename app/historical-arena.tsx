@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { DEFAULT_CPTEC_WEIGHT, cptecProbability } from "@/lib/cptec-core.js";
+import { createDash2State, forecastDash2Pair, updateDash2State } from "@/lib/dash2-core.js";
 import { piecewiseOddsProbability } from "@/lib/piecewise-odds-core.js";
 
 type HistoricalModel = { id: string; name: string; organization: string; n: number; variants: number };
@@ -20,6 +21,17 @@ type HistoricalData = {
   meta: { dataset: string; generated: string; rawSourceRows: number; matchedForecastRows: number; events: number; models: number; providers: number; providerNames: string[]; questionTypes: Record<"Dataset" | "Market", number>; sourceCounts: Record<string, number>; rounds: number; firstRound: string; lastRound: string; rule: string; joinKey: string; officialQuestionMatches: number; missingOfficialQuestions: number };
   models: HistoricalModel[];
   events: HistoricalEvent[];
+};
+type Dash2Record = [string, string, string, string, number, number, "a" | "b", number];
+type Dash2History = {
+  schema_version: "1.0.0";
+  protocol: "outcome_blind_all_pair_round_ordered";
+  outcome_visibility: "strictly_prior_forecast_dates_only";
+  history_sha256: string;
+  fields: string[];
+  config: { min_history_targets: number; min_history_dates: number; min_test_targets: number };
+  audit: { records: number; unique_pairs: number; date_min: string; date_max: string; all_history_dates_strictly_prior: boolean };
+  records: Dash2Record[];
 };
 
 const BASE_METHODS = [
@@ -47,9 +59,25 @@ const PIECEWISE_ODDS_METHOD = {
   rule: "Available only for two selected models. Multiplies their odds, uses the geometric-mean odds when 1/5 ≤ T ≤ 5, and preserves more joint evidence outside that range: √5T below 1/5 and T/√5 above 5.",
 } as const;
 
-const METHODS = [...BASE_METHODS, CPTEC_METHOD, PIECEWISE_ODDS_METHOD] as const;
+const SAFEMIX_METHOD = {
+  id: "safemix-2",
+  name: "Dependence-Adaptive SafeMix-2",
+  short: "SafeMix-2",
+  color: "#6F35B1",
+  rule: "Available only for two selected models. At forecast date t, SafeMix uses outcomes from dates strictly earlier than t to estimate model quality and error dependence, then shrinks toward the historical-best model. It falls back to Equal Mean until 200 prior common forecasts across at least three dates are available. This is forecast-round replay because exact outcome-reveal timestamps are unavailable.",
+} as const;
 
-const HISTORY_DATA_VERSION = "2026-08-09-source-aware";
+const DASH_HEDGE_METHOD = {
+  id: "dash-hedge-2",
+  name: "DASH-Hedge-2",
+  short: "DASH-Hedge-2",
+  color: "#B97900",
+  rule: "Available only for two selected models. A chronological exponential-weights pool over both models, Equal Mean, Log-odds, history-oriented CPTEC, Piecewise Odds, and SafeMix-2. Every forecast for date t is frozen before any outcome from date t updates the expert weights. This is forecast-round replay because exact outcome-reveal timestamps are unavailable.",
+} as const;
+
+const METHODS = [...BASE_METHODS, CPTEC_METHOD, PIECEWISE_ODDS_METHOD, SAFEMIX_METHOD, DASH_HEDGE_METHOD] as const;
+
+const HISTORY_DATA_VERSION = "2026-08-20-dash2-prior-date";
 
 type MethodId = (typeof METHODS)[number]["id"];
 type ScoredEvent = { event: HistoricalEvent; values: Record<MethodId, number> };
@@ -60,6 +88,7 @@ type HistorySeries = { id: MethodId; name: string; short: string; color: string;
 
 export function HistoricalArena() {
   const [data, setData] = useState<HistoricalData | null>(null);
+  const [dash2History, setDash2History] = useState<Dash2History | null>(null);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [questionType, setQuestionType] = useState("all");
@@ -70,13 +99,18 @@ export function HistoricalArena() {
   const [cptecWeight, setCptecWeight] = useState(DEFAULT_CPTEC_WEIGHT);
 
   useEffect(() => {
-    fetch(`/forecastbench/history.json?v=${HISTORY_DATA_VERSION}`, { cache: "no-store" })
-      .then((response) => {
-        if (!response.ok) throw new Error("Historical dataset could not be loaded.");
-        return response.json() as Promise<HistoricalData>;
+    Promise.all([
+      fetch(`/forecastbench/history.json?v=${HISTORY_DATA_VERSION}`, { cache: "no-store" }),
+      fetch(`/forecastbench/dash2-history.json?v=${HISTORY_DATA_VERSION}`, { cache: "no-store" }),
+    ])
+      .then(async ([historyResponse, dash2Response]) => {
+        if (!historyResponse.ok || !dash2Response.ok) throw new Error("Historical dataset could not be loaded.");
+        return [await historyResponse.json() as HistoricalData, await dash2Response.json() as Dash2History] as const;
       })
-      .then((payload) => {
+      .then(([payload, dash2Payload]) => {
+        if (!dash2Payload.audit.all_history_dates_strictly_prior) throw new Error("Prior-date aggregation audit failed.");
         setData(payload);
+        setDash2History(dash2Payload);
         const params = new URLSearchParams(window.location.search);
         const hasRequestedModels = params.has("models");
         const requested = params.get("models")?.split(",").filter((id) => payload.models.some((model) => model.id === id));
@@ -104,7 +138,9 @@ export function HistoricalArena() {
   const filteredEvents = useMemo(() => data?.events.filter((event) =>
     (questionType === "all" || event.questionType === questionType) && (source === "all" || event.source === source)
   ) ?? [], [data, questionType, source]);
-  const analysis = useMemo(() => data ? analyze(filteredEvents, selected, data.models, cptecWeight) : null, [data, filteredEvents, selected, cptecWeight]);
+  const analysis = useMemo(() => data && dash2History
+    ? analyze(filteredEvents, data.events, selected, data.models, cptecWeight, dash2History)
+    : null, [data, dash2History, filteredEvents, selected, cptecWeight]);
   const modelPickerRows = useMemo(() => data ? makeModelPickerRows(data.models, filteredEvents, selected) : [], [data, filteredEvents, selected]);
   const visibleModels = useMemo(() => modelPickerRows.filter((model) => `${model.organization} ${model.name}`.toLowerCase().includes(search.toLowerCase())), [modelPickerRows, search]);
   const providerGroups = useMemo(() => {
@@ -115,7 +151,7 @@ export function HistoricalArena() {
   }, [data]);
 
   if (error) return <section className="history-page"><div className="history-error">{error}</div></section>;
-  if (!data || !analysis) return <section className="history-page history-loading"><span />Loading ForecastBench history…</section>;
+  if (!data || !dash2History || !analysis) return <section className="history-page history-loading"><span />Loading ForecastBench history…</section>;
 
   const setModelCount = (requestedCount: number) => {
     const count = Math.min(data.models.length, Math.max(0, Math.round(requestedCount)));
@@ -241,7 +277,7 @@ export function HistoricalArena() {
           </div>
 
           <section className="history-ranking" aria-label="Historical aggregation leaderboard">
-            <div className="history-section-title history-leaderboard-heading"><span>OUTPUT 01</span><div><h2>Leaderboard</h2><p>Lower Brier is better. Every entry is scored on the same complete-intersection event sample.</p></div></div>
+            <div className="history-section-title history-leaderboard-heading"><span>OUTPUT 01</span><div><h2>Leaderboard</h2><p>Lower Brier is better. Every entry is scored on the same complete-intersection event sample.{selected.length === 2 && " DASH-Hedge-2 and SafeMix-2 use strictly earlier forecast dates; current-date outcomes are revealed only after all predictions for that date are frozen."}</p></div></div>
             <div className="leaderboard-view-tabs" role="tablist" aria-label="Leaderboard entries">
               <button type="button" role="tab" aria-selected={leaderboardView === "methods"} className={leaderboardView === "methods" ? "active" : ""} onClick={() => { setLeaderboardView("methods"); setExpanded(null); }}>Aggregation methods</button>
               <button type="button" role="tab" aria-selected={leaderboardView === "combined"} className={leaderboardView === "combined" ? "active" : ""} onClick={() => { setLeaderboardView("combined"); setExpanded(null); }}>Methods + individual models</button>
@@ -270,9 +306,19 @@ export function HistoricalArena() {
   );
 }
 
-function analyze(events: HistoricalEvent[], selected: string[], models: HistoricalModel[], cptecWeight: number) {
+function analyze(
+  events: HistoricalEvent[],
+  allEvents: HistoricalEvent[],
+  selected: string[],
+  models: HistoricalModel[],
+  cptecWeight: number,
+  dash2History: Dash2History,
+) {
   if (selected.length < 2) return emptyAnalysis();
   const methods = selected.length === 2 ? METHODS : BASE_METHODS;
+  const priorDatePredictions = selected.length === 2
+    ? makePriorDatePairPredictions(allEvents, selected, models, dash2History)
+    : new Map<string, { dashHedge: number; safeMix: number }>();
   const byDate = new Map<string, HistoricalEvent[]>();
   for (const event of events) byDate.set(event.date, [...(byDate.get(event.date) ?? []), event]);
   const history = new Map<string, { loss: number; n: number }>();
@@ -288,7 +334,13 @@ function analyze(events: HistoricalEvent[], selected: string[], models: Historic
         const prior = history.get(id);
         return prior?.n ? 1 / (0.02 + prior.loss / prior.n) : 1;
       });
-      scored.push({ event, values: aggregate(probabilities, weights, cptecWeight) });
+      const values = aggregate(probabilities, weights, cptecWeight);
+      const pairPrediction = priorDatePredictions.get(event.id);
+      if (pairPrediction) {
+        values["dash-hedge-2"] = pairPrediction.dashHedge;
+        values["safemix-2"] = pairPrediction.safeMix;
+      }
+      scored.push({ event, values });
     }
     for (const event of round) for (const id of selected) {
       const probability = event.forecasts[id];
@@ -354,7 +406,55 @@ function aggregate(values: number[], weights: number[], cptecWeight: number): Re
     weighted: values.reduce((sum, value, index) => sum + value * weights[index], 0) / weightTotal,
     cptec: values.length === 2 ? cptecProbability(values, cptecWeight) : logitPool,
     "piecewise-odds": values.length === 2 ? piecewiseOddsProbability(values) : logitPool,
+    "safemix-2": arithmetic,
+    "dash-hedge-2": arithmetic,
   };
+}
+
+function makePriorDatePairPredictions(
+  events: HistoricalEvent[],
+  selected: string[],
+  models: HistoricalModel[],
+  dash2History: Dash2History,
+) {
+  const modelOrder = new Map(models.map((model, index) => [model.id, index]));
+  const canonical = [...selected].sort((first, second) =>
+    (modelOrder.get(first) ?? Number.MAX_SAFE_INTEGER) - (modelOrder.get(second) ?? Number.MAX_SAFE_INTEGER)
+  );
+  const [modelA, modelB] = canonical;
+  const parametersByDate = new Map<string, { historyBestSide: "a" | "b"; safeAlpha: number }>();
+  for (const record of dash2History.records) {
+    const [date, historyLastDate, recordA, recordB, , , historyBestSide, safeAlpha] = record;
+    if (recordA !== modelA || recordB !== modelB) continue;
+    if (historyLastDate >= date) throw new Error(`Prior-date leakage detected for ${recordA} / ${recordB} on ${date}`);
+    parametersByDate.set(date, { historyBestSide, safeAlpha });
+  }
+
+  const byDate = new Map<string, HistoricalEvent[]>();
+  for (const event of events) {
+    if (event.forecasts[modelA] === undefined || event.forecasts[modelB] === undefined) continue;
+    byDate.set(event.date, [...(byDate.get(event.date) ?? []), event]);
+  }
+  const predictions = new Map<string, { dashHedge: number; safeMix: number }>();
+  let state = createDash2State();
+  for (const date of Array.from(byDate.keys()).sort()) {
+    const round = byDate.get(date) ?? [];
+    const frozenExpertPredictions: number[][] = [];
+    const outcomes: number[] = [];
+    for (const event of round) {
+      const forecast = forecastDash2Pair(
+        event.forecasts[modelA],
+        event.forecasts[modelB],
+        state,
+        parametersByDate.get(date) ?? null,
+      );
+      predictions.set(event.id, { dashHedge: forecast.dashHedge, safeMix: forecast.safeMix });
+      frozenExpertPredictions.push(forecast.expertPredictions);
+      outcomes.push(event.outcome);
+    }
+    state = updateDash2State(state, frozenExpertPredictions, outcomes);
+  }
+  return predictions;
 }
 
 function makeRanking(rows: ScoredEvent[], methods: readonly (typeof METHODS)[number][]): RankingRow[] {
