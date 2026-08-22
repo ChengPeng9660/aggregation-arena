@@ -1,0 +1,135 @@
+{
+  "schemaVersion": "1.0.0-freeze",
+  "status": "frozen_for_future_confirmatory_evaluation",
+  "frozenAt": "2026-08-23",
+  "discovery": {
+    "forecastDateCutoffInclusive": "2026-03-29",
+    "parentDiscoveryCommit": "046af209155d04858eb2bbc36daac8643b5f282c",
+    "historyPath": "public/forecastbench/history.json",
+    "historySha256": "ada4df15b05d428295951a2dbcf9d6e3e2150717fddeefb20ef312dcfee96e58",
+    "dashParameterPath": "public/forecastbench/dash2-history.json",
+    "dashParameterSha256": "6787ef970d2f03e920db32c1bb991ad0c1911a5a404484c2ce4dd6c6483a9ab1",
+    "explorationScriptPath": "scripts/explore-quality-aware-dash.mjs",
+    "explorationScriptSha256": "6b3bf214a05fb314466cefddd330cdb4806df692a686a9daf848094fba63cfc1",
+    "outputSchemaVersion": "0.7.0-exploration",
+    "sourceEvents": 8620,
+    "sourceDates": 25,
+    "scoredDates": 21,
+    "eligiblePairs": 421,
+    "scoredPairDateCells": 1567,
+    "scoredTargetEvaluations": 465074
+  },
+  "protocol": {
+    "metric": "target-weighted Raw Brier",
+    "sotaBaselines": [
+      "no-dependence-4",
+      "two-model-hedge",
+      "full-7",
+      "core-5"
+    ],
+    "predictionBoundary": "all date-t forecasts and weights are frozen before any date-t outcome update",
+    "confirmationBoundary": "only forecast dates strictly after 2026-03-29 are confirmatory",
+    "retuningAllowed": false,
+    "difficultyAdjustedBIAvailable": false
+  },
+  "frozenParameters": {
+    "supportThresholdCommonTargets": 1000,
+    "coldStartFallback": {
+      "id": "hier-model-cal-source-m20-p200-x0p5-ridge20-nodep50",
+      "groupingFeature": "sourceKey",
+      "probabilityBins": 10,
+      "discount": 0.95,
+      "modelLambda": 20,
+      "providerLambda": 200,
+      "calibrationMix": 0.5,
+      "pairRidgeLambda": 20,
+      "noDependenceShrink": 0.5
+    },
+    "hierarchicalSkillPool": {
+      "id": "hier-skill-source-m50-p200-g25-r30",
+      "groupingFeature": "sourceKey",
+      "discount": 0.95,
+      "modelLambda": 50,
+      "providerLambda": 200,
+      "skillTemperature": 25,
+      "pairRidgeLambda": 30
+    },
+    "skillShares": [0.1, 0.2, 0.3],
+    "onlineSelection": {
+      "discount": 0.5,
+      "ftlInitialShare": 0.1,
+      "hedgeEtaScale": 1,
+      "hedgePrior": [0.5, 0.3, 0.2]
+    },
+    "rollingStrongQualityQuantile": 0.25
+  },
+  "finalists": [
+    {
+      "role": "overall_mean_and_temporal_sota",
+      "id": "support-gate-nHistory-t1000-modelcal-skill-ftl",
+      "overallRawBrier": 0.15265467132111024,
+      "strongestQ1RawBrier": 0.14916547930815638,
+      "dateSota": "18/21",
+      "pairSota": "310/421",
+      "strongestQ1PairSota": "95/118"
+    },
+    {
+      "role": "strongest_group_mean",
+      "id": "support-gate-nHistory-t1000-modelcal-skill-strong-w0p1",
+      "overallRawBrier": 0.1527307509299474,
+      "strongestQ1RawBrier": 0.14913638747952318,
+      "dateSota": "16/21",
+      "pairSota": "305/421",
+      "strongestQ1PairSota": "97/118"
+    },
+    {
+      "role": "overall_pair_sota_coverage",
+      "id": "support-gate-nHistory-t1000-modelcal-skill-strong-w0p3",
+      "overallRawBrier": 0.15293592575852524,
+      "strongestQ1RawBrier": 0.14915682425857849,
+      "dateSota": "18/21",
+      "pairSota": "314/421",
+      "strongestQ1PairSota": "97/118"
+    },
+    {
+      "role": "strongest_group_pair_sota_coverage",
+      "id": "support-gate-nHistory-t1000-modelcal-quality-skill-ftl",
+      "overallRawBrier": 0.15265593329499633,
+      "strongestQ1RawBrier": 0.14918037381467,
+      "dateSota": "18/21",
+      "pairSota": "311/421",
+      "strongestQ1PairSota": "98/118"
+    },
+    {
+      "role": "stable_online_balance",
+      "id": "support-gate-nHistory-t1000-modelcal-skill-hedge",
+      "overallRawBrier": 0.1527285583124493,
+      "strongestQ1RawBrier": 0.1491365362621866,
+      "dateSota": "17/21",
+      "pairSota": "310/421",
+      "strongestQ1PairSota": "97/118"
+    }
+  ],
+  "futureConfirmation": {
+    "minimumNewScoredDatesBeforePrimaryReadout": 5,
+    "reportAtNewScoredDates": [3, 5, 8, 10],
+    "primaryEndpoints": [
+      "overall_target_weighted_raw_brier",
+      "strongest_q1_target_weighted_raw_brier",
+      "date_sota_rate",
+      "pair_sota_rate",
+      "strongest_q1_pair_sota_rate"
+    ],
+    "requiredControls": [
+      "no-dependence-4",
+      "full-7",
+      "fixed-hslop-coverage-strong-s0p45",
+      "support-gate-nHistory-t1000-modelcal-ridge20-nodep50-meta-balanced"
+    ],
+    "decisionRule": "Do not alter any frozen parameter after observing post-cutoff outcomes; report every finalist and endpoint, including regressions."
+  },
+  "reproduce": {
+    "command": "node scripts/explore-quality-aware-dash.mjs",
+    "outputPath": "output/research/quality-aware-dash-exploration-2026-08-23.json"
+  }
+}

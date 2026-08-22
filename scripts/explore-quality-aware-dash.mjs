@@ -74,6 +74,13 @@ const CROSS_SKILL_QUALITY_ID = "quality-gate-q0.25-skill-w0p1-skill-ftl";
 const CROSS_SKILL_ONLINE_HEDGE_GATE_ID = "support-gate-nHistory-t1000-modelcal-skill-hedge";
 const CROSS_SKILL_QUALITY_GATE_ID = "support-gate-nHistory-t1000-modelcal-quality-skill-ftl";
 const HSLOP_SUPPORT_OVERALL_ID = "support-gate-nHistory-t1000-modelcal-skill-ftl";
+const FROZEN_FINALIST_IDS = [
+  HSLOP_SUPPORT_OVERALL_ID,
+  CROSS_SKILL_FIXED_MEAN_GATE_ID,
+  CROSS_SKILL_COVERAGE_ID,
+  CROSS_SKILL_QUALITY_GATE_ID,
+  CROSS_SKILL_ONLINE_HEDGE_GATE_ID,
+];
 const SELECTOR_EXPERTS = [
   "no-dependence-4",
   "no-dependence-shrink-1.025",
@@ -1557,6 +1564,19 @@ function subsetAggregates(unitAggregates, keys) {
   return new Map([...unitAggregates].filter(([key]) => keys.has(key)));
 }
 
+function summarizeAggregateSubset(unitAggregates, methods) {
+  const combined = { n: 0, loss: {} };
+  for (const aggregate of unitAggregates.values()) {
+    combined.n += aggregate.n;
+    for (const method of methods) addLoss(combined, method, aggregate.loss[method]);
+  }
+  if (combined.n === 0) return { targetEvaluations: 0, brier: null };
+  return {
+    targetEvaluations: combined.n,
+    brier: Object.fromEntries(methods.map((method) => [method, combined.loss[method] / combined.n])),
+  };
+}
+
 function dateBlockBootstrap(dateAggregates, baseline, comparison, replicates = 20_000, seed = 20_260_823) {
   const dates = [...dateAggregates.keys()].sort();
   const random = mulberry32(seed);
@@ -1856,6 +1876,25 @@ function evaluateStrategies(cellsByDate) {
   const lateDateAggregates = subsetAggregates(dateAggregates, lateDates);
   const q1EarlyDateAggregates = subsetAggregates(q1DateAggregates, earlyDates);
   const q1LateDateAggregates = subsetAggregates(q1DateAggregates, lateDates);
+  const trailingWindowRobustness = Object.fromEntries([3, 5, 8].map((windowSize) => {
+    const windowDates = dates.slice(-windowSize);
+    const windowDateSet = new Set(windowDates);
+    const overallDates = subsetAggregates(dateAggregates, windowDateSet);
+    const q1Dates = subsetAggregates(q1DateAggregates, windowDateSet);
+    return [windowSize, {
+      dates: windowDates,
+      overall: {
+        ...summarizeAggregateSubset(overallDates, FROZEN_FINALIST_IDS),
+        dateSota: Object.fromEntries(FROZEN_FINALIST_IDS.map((method) => [method, sotaRate(overallDates, method)])),
+      },
+      strongestQ1: {
+        ...summarizeAggregateSubset(q1Dates, FROZEN_FINALIST_IDS),
+        dateSota: q1Dates.size
+          ? Object.fromEntries(FROZEN_FINALIST_IDS.map((method) => [method, sotaRate(q1Dates, method)]))
+          : null,
+      },
+    }];
+  }));
   const candidateRows = configs.map((config) => ({
     ...config,
     overallBrier: brierBySlice.overall.brier[config.id],
@@ -2211,6 +2250,7 @@ function evaluateStrategies(cellsByDate) {
       unifiedQ1PairComparisonVsNoDependence: pairComparison(q1PairAggregates, "no-dependence-4", HSLOP_SUPPORT_OVERALL_ID),
     },
     globalSelectionTrace: Object.fromEntries(globalSelectionTrace),
+    trailingWindowRobustness,
     supportGateUsage: Object.fromEntries(supportGateUsage),
     selectedDateBreakdown: unitBreakdown(dateAggregates, [
       "no-dependence-4",
@@ -2219,6 +2259,7 @@ function evaluateStrategies(cellsByDate) {
       balancedRecommendationId,
       strongestGroupChampionId,
       coverageChampionId,
+      ...FROZEN_FINALIST_IDS,
     ]),
     selectedQ1DateBreakdown: unitBreakdown(q1DateAggregates, [
       "no-dependence-4",
@@ -2227,6 +2268,7 @@ function evaluateStrategies(cellsByDate) {
       balancedRecommendationId,
       strongestGroupChampionId,
       coverageChampionId,
+      ...FROZEN_FINALIST_IDS,
     ]),
     selectedPairBreakdown: unitBreakdown(pairAggregates, [
       ...SOTA_BASELINES,

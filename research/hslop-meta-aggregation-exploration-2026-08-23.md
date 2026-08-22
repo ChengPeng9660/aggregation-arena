@@ -167,6 +167,20 @@ The online FTL reduction versus the fixed 10% gate is 0.0000761, but its paired-
 
 It improves them, but **not by a larger average margin**. Unified mean mode reduces Raw Brier by 2.75% overall and by 0.76% in the strongest quartile. Strong pairs have less remaining error to remove. Nevertheless, the improvement is unusually consistent: it beats No-Dependence-4 on 108/118 strongest-Q1 pairs, is strictly current-baseline SOTA on 97/118, and is current-baseline SOTA on 7/8 late strongest-group dates. The rolling-quality online mode raises strongest-pair coverage further to 98/118, at the cost of a higher strongest-Q1 mean.
 
+## Frozen trailing-window stress test
+
+The finalist set was frozen before inspecting these summaries. The windows contain the last 3, 5, and 8 scored dates and are not used to retune any share, threshold, or discount.
+
+| Frozen finalist | Last 3 Raw Brier / Date-SOTA | Last 5 | Last 8 |
+|---|---:|---:|---:|
+| Online overall FTL | 0.1600940 / 2/3 | 0.1555407 / 4/5 | 0.1552423 / 7/8 |
+| Fixed 10% strongest-mean | 0.1600940 / 2/3 | **0.1552343** / 4/5 | 0.1553361 / 5/8 |
+| Fixed 30% overall-coverage | **0.1599528** / 2/3 | 0.1554569 / 4/5 | **0.1552010** / 7/8 |
+| Rolling-quality FTL | 0.1600940 / 2/3 | 0.1555402 / 4/5 | 0.1552420 / 7/8 |
+| Online Hedge | 0.1600257 / 2/3 | 0.1553034 / 4/5 | 0.1552571 / 6/8 |
+
+The last-eight window contains five dates with strongest-Q1 cells; every frozen finalist is SOTA on all five. The last-five window contains two such dates; every finalist is SOTA on both. The last-three window has no cells belonging to the replay-wide strongest-Q1 definition and is explicitly reported as unavailable rather than zero. These are stability diagnostics on the discovery replay, not a substitute for future confirmation.
+
 ## Freeze recommendation
 
 For a future confirmatory block, freeze:
