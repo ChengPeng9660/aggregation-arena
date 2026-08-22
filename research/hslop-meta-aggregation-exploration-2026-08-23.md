@@ -52,7 +52,8 @@ The online selectors also include DASH-No-Dependence-4 as a safety expert. Fixed
 | Global FTL, d=0.5 | 0.1529419 | 0.1493077 | 0.1546432 | 16/21 | 288/421 | 87/118 |
 | **Stable online: global Hedge, d=0.5, eta=1** | 0.1529697 | 0.1492331 | 0.1545426 | 17/21 | 289/421 | 90/118 |
 | **Balanced fixed: 55% coverage + 45% strong** | 0.1529700 | 0.1491887 | 0.1545315 | **17/21** | 286/421 | 93/118 |
-| **Overall mean: support gate + balanced fixed** | **0.1528035** | 0.1491887 | **0.1543450** | **17/21** | 281/421 (279 strict) | 93/118 |
+| Previous support gate: No-Dependence cold start + balanced fixed | 0.1528035 | 0.1491887 | 0.1543450 | **17/21** | 281/421 (279 strict) | 93/118 |
+| **Overall mean: calibrated cold start + balanced fixed** | **0.1527558** | 0.1491887 | **0.1542916** | **17/21** | **308/421 strict** | 93/118 |
 | **Strongest mean: 25% balanced + 75% strong** | 0.1531663 | **0.1491539** | 0.1548858 | 15/21 | 275/421 | 93/118 |
 | **Strongest SOTA: 30% balanced + 70% strong** | 0.1531409 | 0.1491545 | 0.1548506 | 15/21 | 277/421 | **94/118** |
 
@@ -76,9 +77,11 @@ Paired forecast-date bootstrap, 20,000 draws:
 | Balanced fixed mixture vs No-Dependence-4, overall | 0.0040856 | [0.0012812, 0.0086018] | 99.8% |
 | Balanced fixed mixture vs No-Dependence-4, strongest Q1 | 0.0010851 | [0.0003942, 0.0017190] | 100.0% |
 | Strongest-mean mixture vs No-Dependence-4, strongest Q1 | 0.0011199 | [0.0004065, 0.0018239] | 100.0% |
+| Calibrated support gate vs No-Dependence-4, overall | 0.0042998 | [0.0018204, 0.0085628] | 100.0% |
+| Calibrated support gate vs previous No-Dependence support gate, overall | 0.0000477 | [-0.0000815, 0.0001880] | 74.8% |
 | Balanced fixed mixture vs base balanced HSLOP-2, overall | 0.0000830 | [-0.0000753, 0.0002595] | 84.9% |
 
-The gain over No-Dependence-4 is stable in the historical date bootstrap. The much smaller incremental gain from meta-aggregation over base HSLOP-2 is not independently resolved and must not be presented as confirmed.
+The gain over No-Dependence-4 is stable in the historical date bootstrap. The much smaller incremental gains from meta-aggregation over base HSLOP-2 and from calibrated rather than plain No-Dependence cold-start fallback are not independently resolved and must not be presented as confirmed.
 
 ## Why global FTL lowers the historical mean
 
@@ -103,7 +106,7 @@ Across the four underlying HSLOP experts:
 
 The base coverage expert remains the best single method for overall pair-SOTA at 296/421 = 70.3%. Pair-specific FTL and Hedge do not beat it. Therefore adding more selector complexity over this same expert set is unlikely to materially raise overall pair coverage; the remaining 12-pair oracle gap requires new predictive features or a genuinely different expert, not a more aggressive online selector.
 
-## Cold-start support gate
+## Cold-start support gate and a smaller expert set
 
 Failure-pair inspection shows a strong support imbalance: the 113 pairs missed by every base HSLOP expert have median 501 evaluated targets, versus 1,234.5 for the 308 covered pairs. This motivated a strictly-prior gate that uses No-Dependence-4 below 1,000 common historical targets and the balanced fixed HSLOP mixture thereafter.
 
@@ -111,15 +114,32 @@ The gate falls back on 137 of 1,567 pair-date cells and 35,935 of 465,074 target
 
 Against No-Dependence-4, its overall date-bootstrap reduction is 0.0042521 with interval [0.0018203, 0.0085050]. Its incremental reduction versus the balanced fixed mixture is 0.0001665 with interval [-0.0004230, 0.0009202], so the cold-start increment itself remains unconfirmed.
 
+The follow-up experiment tested whether DASH should receive every candidate method or only a small set of complementary specialists. A new cold-start expert estimates 10-bin calibration from strictly earlier dates at the provider and individual-model levels, conditions those statistics on the official source, applies the pair's strictly-prior ridge weight, and then shrinks the result 50% toward No-Dependence-4. Used globally, this expert harms strongest-Q1 performance, so it is not admitted as a general expert. It is used only below 1,000 prior common targets; above the threshold, the gate uses the 55% coverage + 45% strong HSLOP mixture.
+
+This two-expert gate is the new historical overall-mean candidate:
+
+- overall Raw Brier 0.1527558, a reduction of 0.0042998 or 2.74% versus No-Dependence-4;
+- late-half Raw Brier 0.1542916;
+- strongest-Q1 Raw Brier unchanged at 0.1491887, a reduction of 0.0010851 or 0.72% versus No-Dependence-4;
+- strictly SOTA on 308/421 pairs and 93/118 strongest-Q1 pairs;
+- better than No-Dependence-4 on 329/421 exact pairs and 103/118 strongest-Q1 pairs; and
+- cold-start routing on 137/1,567 pair-date cells and 35,935/465,074 target evaluations.
+
+The incremental improvement over the previous support gate is only 0.0000477, with paired-date bootstrap interval [-0.0000815, 0.0001880]. The result is promising discovery evidence for a smaller, specialized expert set, not confirmation that the calibrated fallback is superior. Its 308/421 strict pair-SOTA count equals the observed ex-post union ceiling of the four base HSLOP experts, but that equality is also measured on the discovery replay.
+
+## Does aggregation improve already-strong pairs more?
+
+It improves them, but **not by a larger average margin**. The new overall candidate reduces Raw Brier by 2.74% overall and by 0.72% in the strongest quartile. Strong pairs have less remaining error to remove. Nevertheless, the improvement is unusually consistent: it beats No-Dependence-4 on 103/118 strongest-Q1 pairs, is strictly current-baseline SOTA on 93/118, and is current-baseline SOTA on 7/8 late strongest-group dates. If the paper objective is the lowest strongest-group mean rather than overall mean, the frozen 25% balanced + 75% strong mixture reaches 0.1491539; if the objective is strongest-pair coverage, the 30% balanced + 70% strong mixture reaches 94/118.
+
 ## Freeze recommendation
 
 For a future confirmatory block, freeze:
 
 1. **Primary balanced candidate:** 55% coverage HSLOP + 45% strongest HSLOP.
-2. **Overall-average challenger:** support gate at 1,000 prior common targets, then the balanced fixed mixture.
+2. **Overall-average challenger:** calibrated two-expert support gate at 1,000 prior common targets, then the balanced fixed mixture.
 3. **Temporal selector challenger:** global FTL with discount 0.5.
 4. **Stable online challenger:** global Hedge with discount 0.5 and eta scale 1.
 5. **Strong-group coverage challenger:** 30% balanced HSLOP + 70% strongest HSLOP.
 6. **Overall pair-coverage control:** base coverage HSLOP-2.
 
-Retain No-Dependence-4, Full-7, the bounded convex source pool, and base balanced HSLOP-2 as controls. The next algorithmic work should target the 113 pairs for which none of the four HSLOP experts is SOTA, using strictly-prior pair/source/type/dependence features. It should not continue tuning selector learning rates on this replay.
+Retain the previous No-Dependence support gate, No-Dependence-4, Full-7, the bounded convex source pool, and base balanced HSLOP-2 as controls. Freeze all calibration constants, mixture weights, and the 1,000-target threshold before the next confirmatory time block. Do not continue tuning selector learning rates on this replay.

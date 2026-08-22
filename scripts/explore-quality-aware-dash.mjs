@@ -27,6 +27,17 @@ const GROUP_LINEAR_LAMBDAS = [5, 20, 50, 100, 500];
 const GROUP_LINEAR_DISCOUNTS = [1, 0.95];
 const GROUP_LOGIT_LAMBDAS = [5, 20, 50, 100];
 const GROUP_LOGIT_DISCOUNT = 0.95;
+const MODEL_CALIBRATION_BINS = 10;
+const MODEL_CALIBRATION_DISCOUNT = 0.95;
+const MODEL_CALIBRATION_CONFIGS = ["sourceKey", "questionType"].flatMap((feature) => (
+  [20, 100, 500].flatMap((modelLambda) => [0.5, 1].map((mix) => ({
+    feature,
+    modelLambda,
+    providerLambda: 200,
+    mix,
+  })))
+));
+const MODEL_CALIBRATION_PILOT_ID = "hier-model-cal-source-m20-p200-x0p5";
 const VARIANT_EXPERTS = {
   "no-dependence-4": ["model-a", "model-b", "two-model-hedge", "cptec"],
   "core-5": ["model-a", "model-b", "two-model-hedge", "safemix-2", "cptec"],
@@ -42,7 +53,8 @@ const HSLOP_META_STABLE_ID = "global-hslop-hedge-d0.5-e1";
 const HSLOP_META_BALANCED_ID = "fixed-hslop-coverage-strong-s0p45";
 const HSLOP_META_STRONG_MEAN_ID = "fixed-hslop-balanced-strong-s0p75";
 const HSLOP_META_STRONG_SOTA_ID = "fixed-hslop-balanced-strong-s0p7";
-const HSLOP_SUPPORT_OVERALL_ID = "support-gate-nHistory-t1000-nodep-meta-balanced";
+const HSLOP_SUPPORT_NODEP_ID = "support-gate-nHistory-t1000-nodep-meta-balanced";
+const HSLOP_SUPPORT_OVERALL_ID = "support-gate-nHistory-t1000-modelcal-ridge20-nodep50-meta-balanced";
 const SELECTOR_EXPERTS = [
   "no-dependence-4",
   "no-dependence-shrink-1.025",
@@ -82,6 +94,97 @@ function parseArgs(argv) {
 
 function pairKey(first, second) {
   return `${first}\u0000${second}`;
+}
+
+function modelProvider(model) {
+  return model.startsWith("z-ai-") ? "z-ai" : model.split("-")[0];
+}
+
+function calibrationBin(probability) {
+  return Math.min(MODEL_CALIBRATION_BINS - 1, Math.max(0, Math.floor(probability * MODEL_CALIBRATION_BINS)));
+}
+
+function calibrationConfigId(config) {
+  const feature = config.feature === "sourceKey" ? "source" : "type";
+  return `hier-model-cal-${feature}-m${config.modelLambda}-p${config.providerLambda}-x${formatParameter(config.mix)}`;
+}
+
+function calibrationStatsKey(feature, entity, group, bin) {
+  return `${feature}\u0000${entity}\u0000${group}\u0000${bin}`;
+}
+
+function cloneCalibrationStats(stats) {
+  return new Map([...stats].map(([key, value]) => [key, { ...value }]));
+}
+
+function discountCalibrationStats(stats) {
+  for (const value of stats.values()) {
+    value.n *= MODEL_CALIBRATION_DISCOUNT;
+    value.outcomes *= MODEL_CALIBRATION_DISCOUNT;
+  }
+}
+
+function updateCalibrationStats(stats, key, outcome) {
+  if (!stats.has(key)) stats.set(key, { n: 0, outcomes: 0 });
+  const value = stats.get(key);
+  value.n += 1;
+  value.outcomes += outcome;
+}
+
+function buildModelCalibrationSnapshots(history) {
+  const providerStats = new Map();
+  const modelStats = new Map();
+  const snapshots = new Map();
+  const eventsByDate = new Map();
+  for (const event of history.events) {
+    if (!eventsByDate.has(event.date)) eventsByDate.set(event.date, []);
+    eventsByDate.get(event.date).push(event);
+  }
+  for (const date of [...eventsByDate.keys()].sort()) {
+    snapshots.set(date, {
+      provider: cloneCalibrationStats(providerStats),
+      model: cloneCalibrationStats(modelStats),
+    });
+    discountCalibrationStats(providerStats);
+    discountCalibrationStats(modelStats);
+    for (const event of eventsByDate.get(date)) {
+      for (const [model, probability] of Object.entries(event.forecasts)) {
+        const bin = calibrationBin(probability);
+        for (const feature of ["sourceKey", "questionType"]) {
+          const group = event[feature];
+          updateCalibrationStats(
+            providerStats,
+            calibrationStatsKey(feature, modelProvider(model), group, bin),
+            event.outcome,
+          );
+          updateCalibrationStats(
+            modelStats,
+            calibrationStatsKey(feature, model, group, bin),
+            event.outcome,
+          );
+        }
+      }
+    }
+  }
+  return snapshots;
+}
+
+function hierarchicalModelCalibration(snapshot, model, probability, event, config) {
+  const bin = calibrationBin(probability);
+  const group = event[config.feature];
+  const providerStats = snapshot.provider.get(calibrationStatsKey(
+    config.feature,
+    modelProvider(model),
+    group,
+    bin,
+  )) ?? { n: 0, outcomes: 0 };
+  const providerRate = (providerStats.outcomes + config.providerLambda * probability)
+    / (providerStats.n + config.providerLambda);
+  const modelStats = snapshot.model.get(calibrationStatsKey(config.feature, model, group, bin))
+    ?? { n: 0, outcomes: 0 };
+  const modelRate = (modelStats.outcomes + config.modelLambda * providerRate)
+    / (modelStats.n + config.modelLambda);
+  return (1 - config.mix) * probability + config.mix * modelRate;
 }
 
 function brier(probability, outcome) {
@@ -385,7 +488,7 @@ function summarizeAggregate(aggregate) {
   return Object.fromEntries(Object.entries(aggregate.loss).map(([method, loss]) => [method, loss / aggregate.n]));
 }
 
-async function buildFrozenCells(history, parameters) {
+async function buildFrozenCells(history, parameters, modelCalibrationSnapshots) {
   const parametersByPair = new Map();
   for (const [date, historyLastDate, modelA, modelB, nHistory, nHistoryDates, historyBestSide, safeAlpha] of parameters.records) {
     if (historyLastDate >= date) throw new Error(`Non-prior parameter row for ${modelA} / ${modelB} on ${date}`);
@@ -437,6 +540,8 @@ async function buildFrozenCells(history, parameters) {
     for (let roundIndex = 0; roundIndex < sortedPairDates.length; roundIndex += 1) {
       const date = sortedPairDates[roundIndex];
       const round = eventsByDate.get(date);
+      const modelCalibrationSnapshot = modelCalibrationSnapshots.get(date);
+      if (!modelCalibrationSnapshot) throw new Error(`Missing model calibration snapshot for ${date}`);
       const priorParameters = pairParameters.get(date) ?? null;
       const fullVectors = [];
       const noDependenceVectors = [];
@@ -558,6 +663,21 @@ async function buildFrozenCells(history, parameters) {
           "core-5": metaPrediction(coreVector, coreState),
           "historical-best": priorParameters?.historyBestSide === "b" ? second : first,
         };
+        const hierarchicalModelPredictions = {};
+        for (const config of MODEL_CALIBRATION_CONFIGS) {
+          const method = calibrationConfigId(config);
+          const calibratedFirst = hierarchicalModelCalibration(modelCalibrationSnapshot, modelA, first, event, config);
+          const calibratedSecond = hierarchicalModelCalibration(modelCalibrationSnapshot, modelB, second, event, config);
+          const equalPrediction = (calibratedFirst + calibratedSecond) / 2;
+          hierarchicalModelPredictions[method] = equalPrediction;
+          if (method === MODEL_CALIBRATION_PILOT_ID) {
+            const ridgeWeight = cell?.ridgeWeights["ridge-linear-20"] ?? 0.5;
+            const ridgePrediction = ridgeWeight * calibratedFirst + (1 - ridgeWeight) * calibratedSecond;
+            hierarchicalModelPredictions[`${method}-nodep50`] = (equalPrediction + basePredictions["no-dependence-4"]) / 2;
+            hierarchicalModelPredictions[`${method}-ridge20`] = ridgePrediction;
+            hierarchicalModelPredictions[`${method}-ridge20-nodep50`] = (ridgePrediction + basePredictions["no-dependence-4"]) / 2;
+          }
+        }
         noDependencePredictions.push(basePredictions["no-dependence-4"]);
         for (const discount of AFFINE_DISCOUNTS) {
           for (const lambda of AFFINE_LAMBDAS) {
@@ -590,6 +710,7 @@ async function buildFrozenCells(history, parameters) {
           sourceKey: event.sourceKey,
           questionType: event.questionType,
           basePredictions,
+          hierarchicalModelPredictions,
         });
         fullVectors.push(baseForecast.expertPredictions);
         noDependenceVectors.push(noDependenceVector);
@@ -1172,6 +1293,22 @@ function pairStackConfigs() {
       });
     }
   }
+  for (const threshold of [500, 750, 1000, 1500]) {
+    for (const [fallbackName, fallback] of [
+      ["modelcal-ridge20", `${MODEL_CALIBRATION_PILOT_ID}-ridge20`],
+      ["modelcal-ridge20-nodep50", `${MODEL_CALIBRATION_PILOT_ID}-ridge20-nodep50`],
+    ]) {
+      configs.push({
+        id: `support-gate-nHistory-t${threshold}-${fallbackName}-meta-balanced`,
+        family: "strictly-prior-cross-pair-calibration-gate",
+        rule: "support-gate",
+        discount: 1,
+        field: "nHistory",
+        threshold,
+        experts: [fallback, HSLOP_META_BALANCED_ID],
+      });
+    }
+  }
   return configs;
 }
 
@@ -1350,6 +1487,8 @@ function evaluateStrategies(cellsByDate) {
     q1_late_half: { n: 0, loss: {} },
     early_half: { n: 0, loss: {} },
     q1_early_half: { n: 0, loss: {} },
+    low_support: { n: 0, loss: {} },
+    low_support_late: { n: 0, loss: {} },
   };
   const dateAggregates = new Map();
   const q1DateAggregates = new Map();
@@ -1393,7 +1532,7 @@ function evaluateStrategies(cellsByDate) {
         if (cell[config.field] < config.threshold) usage.fallbackPairDateCells += 1;
       }
       for (const row of cell.rows) {
-        const predictions = { ...row.basePredictions };
+        const predictions = { ...row.basePredictions, ...row.hierarchicalModelPredictions };
         for (const [method, weight] of Object.entries(cell.ridgeWeights)) {
           predictions[method] = weight * row.first + (1 - weight) * row.second;
         }
@@ -1498,6 +1637,8 @@ function evaluateStrategies(cellsByDate) {
         if (isQ1 && lateDates.has(date)) targets.push(aggregates.q1_late_half);
         if (earlyDates.has(date)) targets.push(aggregates.early_half);
         if (isQ1 && earlyDates.has(date)) targets.push(aggregates.q1_early_half);
+        if (cell.nHistory < 1000) targets.push(aggregates.low_support);
+        if (cell.nHistory < 1000 && lateDates.has(date)) targets.push(aggregates.low_support_late);
         addPredictionLoss(targets, predictions, row.outcome);
       }
     }
@@ -1631,6 +1772,7 @@ function evaluateStrategies(cellsByDate) {
       HSLOP_META_BALANCED_ID,
       HSLOP_META_STRONG_MEAN_ID,
       HSLOP_META_STRONG_SOTA_ID,
+      HSLOP_SUPPORT_NODEP_ID,
       HSLOP_SUPPORT_OVERALL_ID,
     ].map((method, index) => [method, {
       vsNoDependenceDateBootstrap: dateBlockBootstrap(dateAggregates, "no-dependence-4", method, 20_000, 20_260_823 + index),
@@ -1796,7 +1938,8 @@ function evaluateStrategies(cellsByDate) {
     supportGateRecommendation: {
       overallMeanChampion: candidatesById.get(HSLOP_SUPPORT_OVERALL_ID),
       usage: supportGateUsage.get(HSLOP_SUPPORT_OVERALL_ID),
-      interpretation: "use No-Dependence-4 while strictly-prior common-target support is below 1000, then use the balanced HSLOP fixed mixture",
+      previousNoDependenceFallback: candidatesById.get(HSLOP_SUPPORT_NODEP_ID),
+      interpretation: "below 1000 strictly-prior common targets, use a conservative source-conditioned model calibration with pair ridge weighting and 50% No-Dependence shrinkage; otherwise use the 55/45 coverage/strong HSLOP mixture",
       vsNoDependenceDateBootstrap: dateBlockBootstrap(
         dateAggregates,
         "no-dependence-4",
@@ -1817,6 +1960,13 @@ function evaluateStrategies(cellsByDate) {
         HSLOP_SUPPORT_OVERALL_ID,
         20_000,
         20_260_895,
+      ),
+      vsPreviousNoDependenceFallbackDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        HSLOP_SUPPORT_NODEP_ID,
+        HSLOP_SUPPORT_OVERALL_ID,
+        20_000,
+        20_260_896,
       ),
       pairComparisonVsNoDependence: pairComparison(pairAggregates, "no-dependence-4", HSLOP_SUPPORT_OVERALL_ID),
     },
@@ -1846,6 +1996,7 @@ function evaluateStrategies(cellsByDate) {
       coverageChampionId,
       HSLOP_META_BALANCED_ID,
       HSLOP_META_STRONG_SOTA_ID,
+      HSLOP_SUPPORT_NODEP_ID,
       HSLOP_SUPPORT_OVERALL_ID,
     ]),
     selectedQ1PairBreakdown: unitBreakdown(q1PairAggregates, [
@@ -1856,6 +2007,7 @@ function evaluateStrategies(cellsByDate) {
       coverageChampionId,
       HSLOP_META_BALANCED_ID,
       HSLOP_META_STRONG_SOTA_ID,
+      HSLOP_SUPPORT_NODEP_ID,
       HSLOP_SUPPORT_OVERALL_ID,
     ]),
     scoredPairDateCells: allCells.length,
@@ -1872,10 +2024,11 @@ async function main() {
   if (historySha256 !== parameters.history_sha256) throw new Error("History hash does not match published DASH parameters");
   if (!parameters.audit.all_history_dates_strictly_prior) throw new Error("Parameter audit does not guarantee strictly prior dates");
 
-  const { cellsByDate, affineDiagnostics } = await buildFrozenCells(history, parameters);
+  const modelCalibrationSnapshots = buildModelCalibrationSnapshots(history);
+  const { cellsByDate, affineDiagnostics } = await buildFrozenCells(history, parameters, modelCalibrationSnapshots);
   const summary = evaluateStrategies(cellsByDate);
   const result = {
-    schemaVersion: "0.4.0-exploration",
+    schemaVersion: "0.5.0-exploration",
     generatedAt: new Date().toISOString(),
     status: "post_hoc_candidate_search_not_independent_oos",
     protocol: {
@@ -1887,6 +2040,7 @@ async function main() {
       dependenceFeature: "safeAlpha is the published strictly-prior synthesis of Adjusted POG, High-Loss Lift, Adjusted-Loss Correlation, quality gap, and support",
       metaAggregation: "fixed mixtures use no outcomes at prediction time; FTL and Hedge weights on date t are frozen from losses on strictly earlier dates",
       supportGate: "cold-start routing uses only strictly-prior common-target count or prior-date count; reported SOTA includes both no-worse and strictly-better rates",
+      crossPairCalibration: "model and provider probability-bin calibration snapshots use only earlier forecast dates; the selected cold-start expert is pair-ridge weighted and shrunk 50% toward No-Dependence-4",
       candidateSearchWarning: "candidate families and hyperparameters are compared on the same replay and must be frozen before confirmatory evaluation",
       metric: "target-weighted Raw Brier; difficulty-adjusted BI unavailable in this artifact",
     },
