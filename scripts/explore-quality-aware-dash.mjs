@@ -38,6 +38,16 @@ const MODEL_CALIBRATION_CONFIGS = ["sourceKey", "questionType"].flatMap((feature
   })))
 ));
 const MODEL_CALIBRATION_PILOT_ID = "hier-model-cal-source-m20-p200-x0p5";
+const MODEL_SKILL_CONFIGS = ["global", "sourceKey"].flatMap((feature) => (
+  [10, 30].map((pairLambda) => ({
+    feature,
+    modelLambda: 50,
+    providerLambda: 200,
+    temperature: 25,
+    pairLambda,
+  }))
+));
+const MODEL_SKILL_PILOT_ID = "hier-skill-source-m50-p200-g25-r30";
 const VARIANT_EXPERTS = {
   "no-dependence-4": ["model-a", "model-b", "two-model-hedge", "cptec"],
   "core-5": ["model-a", "model-b", "two-model-hedge", "safemix-2", "cptec"],
@@ -54,7 +64,10 @@ const HSLOP_META_BALANCED_ID = "fixed-hslop-coverage-strong-s0p45";
 const HSLOP_META_STRONG_MEAN_ID = "fixed-hslop-balanced-strong-s0p75";
 const HSLOP_META_STRONG_SOTA_ID = "fixed-hslop-balanced-strong-s0p7";
 const HSLOP_SUPPORT_NODEP_ID = "support-gate-nHistory-t1000-nodep-meta-balanced";
-const HSLOP_SUPPORT_OVERALL_ID = "support-gate-nHistory-t1000-modelcal-ridge20-nodep50-meta-balanced";
+const HSLOP_SUPPORT_CALIBRATED_ID = "support-gate-nHistory-t1000-modelcal-ridge20-nodep50-meta-balanced";
+const CROSS_SKILL_STRONG_MEAN_ID = "fixed-skill-strong-sota-w0p1";
+const CROSS_SKILL_COVERAGE_ID = "support-gate-nHistory-t1000-modelcal-skill-strong-w0p3";
+const HSLOP_SUPPORT_OVERALL_ID = "support-gate-nHistory-t1000-modelcal-skill-strong-w0p1";
 const SELECTOR_EXPERTS = [
   "no-dependence-4",
   "no-dependence-shrink-1.025",
@@ -131,22 +144,72 @@ function updateCalibrationStats(stats, key, outcome) {
   value.outcomes += outcome;
 }
 
+function skillStatsKey(feature, entity, group) {
+  return `${feature}\u0000${entity}\u0000${group}`;
+}
+
+function updateSkillStats(stats, key, loss) {
+  if (!stats.has(key)) stats.set(key, { n: 0, loss: 0 });
+  const value = stats.get(key);
+  value.n += 1;
+  value.loss += loss;
+}
+
+function discountSkillStats(stats) {
+  for (const value of stats.values()) {
+    value.n *= MODEL_CALIBRATION_DISCOUNT;
+    value.loss *= MODEL_CALIBRATION_DISCOUNT;
+  }
+}
+
+function modelSkillMethodId(config) {
+  const feature = config.feature === "sourceKey" ? "source" : "global";
+  return `hier-skill-${feature}-m${config.modelLambda}-p${config.providerLambda}-g${config.temperature}-r${config.pairLambda}`;
+}
+
+function hierarchicalModelSkill(snapshot, model, event, config) {
+  const group = config.feature === "global" ? "all" : event[config.feature];
+  const globalRate = snapshot.skillGlobal.n > 0 ? snapshot.skillGlobal.loss / snapshot.skillGlobal.n : 0.2;
+  const providerStats = snapshot.skillProvider.get(skillStatsKey(
+    config.feature,
+    modelProvider(model),
+    group,
+  )) ?? { n: 0, loss: 0 };
+  const providerRate = (providerStats.loss + config.providerLambda * globalRate)
+    / (providerStats.n + config.providerLambda);
+  const modelStats = snapshot.skillModel.get(skillStatsKey(config.feature, model, group))
+    ?? { n: 0, loss: 0 };
+  return (modelStats.loss + config.modelLambda * providerRate) / (modelStats.n + config.modelLambda);
+}
+
 function buildModelCalibrationSnapshots(history) {
   const providerStats = new Map();
   const modelStats = new Map();
+  const skillProviderStats = new Map();
+  const skillModelStats = new Map();
+  const skillGlobalStats = { n: 0, loss: 0 };
   const snapshots = new Map();
   const eventsByDate = new Map();
+  let historyLastDate = null;
   for (const event of history.events) {
     if (!eventsByDate.has(event.date)) eventsByDate.set(event.date, []);
     eventsByDate.get(event.date).push(event);
   }
   for (const date of [...eventsByDate.keys()].sort()) {
     snapshots.set(date, {
+      historyLastDate,
       provider: cloneCalibrationStats(providerStats),
       model: cloneCalibrationStats(modelStats),
+      skillProvider: cloneCalibrationStats(skillProviderStats),
+      skillModel: cloneCalibrationStats(skillModelStats),
+      skillGlobal: { ...skillGlobalStats },
     });
     discountCalibrationStats(providerStats);
     discountCalibrationStats(modelStats);
+    discountSkillStats(skillProviderStats);
+    discountSkillStats(skillModelStats);
+    skillGlobalStats.n *= MODEL_CALIBRATION_DISCOUNT;
+    skillGlobalStats.loss *= MODEL_CALIBRATION_DISCOUNT;
     for (const event of eventsByDate.get(date)) {
       for (const [model, probability] of Object.entries(event.forecasts)) {
         const bin = calibrationBin(probability);
@@ -163,8 +226,25 @@ function buildModelCalibrationSnapshots(history) {
             event.outcome,
           );
         }
+        const loss = brier(probability, event.outcome);
+        skillGlobalStats.n += 1;
+        skillGlobalStats.loss += loss;
+        for (const feature of ["global", "sourceKey"]) {
+          const group = feature === "global" ? "all" : event[feature];
+          updateSkillStats(
+            skillProviderStats,
+            skillStatsKey(feature, modelProvider(model), group),
+            loss,
+          );
+          updateSkillStats(
+            skillModelStats,
+            skillStatsKey(feature, model, group),
+            loss,
+          );
+        }
       }
     }
+    historyLastDate = date;
   }
   return snapshots;
 }
@@ -542,6 +622,9 @@ async function buildFrozenCells(history, parameters, modelCalibrationSnapshots) 
       const round = eventsByDate.get(date);
       const modelCalibrationSnapshot = modelCalibrationSnapshots.get(date);
       if (!modelCalibrationSnapshot) throw new Error(`Missing model calibration snapshot for ${date}`);
+      if (modelCalibrationSnapshot.historyLastDate !== null && modelCalibrationSnapshot.historyLastDate >= date) {
+        throw new Error(`Non-prior cross-pair snapshot for ${date}`);
+      }
       const priorParameters = pairParameters.get(date) ?? null;
       const fullVectors = [];
       const noDependenceVectors = [];
@@ -677,6 +760,13 @@ async function buildFrozenCells(history, parameters, modelCalibrationSnapshots) 
             hierarchicalModelPredictions[`${method}-ridge20`] = ridgePrediction;
             hierarchicalModelPredictions[`${method}-ridge20-nodep50`] = (ridgePrediction + basePredictions["no-dependence-4"]) / 2;
           }
+        }
+        for (const config of MODEL_SKILL_CONFIGS) {
+          const firstSkill = hierarchicalModelSkill(modelCalibrationSnapshot, modelA, event, config);
+          const secondSkill = hierarchicalModelSkill(modelCalibrationSnapshot, modelB, event, config);
+          const skillPrior = logistic(config.temperature * (secondSkill - firstSkill));
+          const weight = ridgeLinearWeightWithPrior(ridgeStats.get(1), config.pairLambda, skillPrior);
+          hierarchicalModelPredictions[modelSkillMethodId(config)] = weight * first + (1 - weight) * second;
         }
         noDependencePredictions.push(basePredictions["no-dependence-4"]);
         for (const discount of AFFINE_DISCOUNTS) {
@@ -1214,6 +1304,16 @@ function pairStackConfigs() {
       });
     }
   }
+  for (const skillWeight of [0.1, 0.2, 0.3]) {
+    configs.push({
+      id: `fixed-skill-strong-sota-w${formatParameter(skillWeight)}`,
+      family: "fixed-cross-pair-skill-mixture",
+      rule: "fixed",
+      discount: 1,
+      experts: [HSLOP_META_STRONG_SOTA_ID, MODEL_SKILL_PILOT_ID],
+      prior: [1 - skillWeight, skillWeight],
+    });
+  }
   const hslopExperts = [HSLOP_BALANCED_ID, HSLOP_COVERAGE_ID, HSLOP_STRONG_ID, HSLOP_OVERALL_ID, "no-dependence-4"];
   for (const discount of [1, 0.95, 0.8, 0.5]) {
     configs.push({
@@ -1308,6 +1408,20 @@ function pairStackConfigs() {
         experts: [fallback, HSLOP_META_BALANCED_ID],
       });
     }
+  }
+  for (const skillWeight of [0.1, 0.2, 0.3]) {
+    configs.push({
+      id: `support-gate-nHistory-t1000-modelcal-skill-strong-w${formatParameter(skillWeight)}`,
+      family: "strictly-prior-cross-pair-skill-gate",
+      rule: "support-gate",
+      discount: 1,
+      field: "nHistory",
+      threshold: 1000,
+      experts: [
+        `${MODEL_CALIBRATION_PILOT_ID}-ridge20-nodep50`,
+        `fixed-skill-strong-sota-w${formatParameter(skillWeight)}`,
+      ],
+    });
   }
   return configs;
 }
@@ -1773,6 +1887,9 @@ function evaluateStrategies(cellsByDate) {
       HSLOP_META_STRONG_MEAN_ID,
       HSLOP_META_STRONG_SOTA_ID,
       HSLOP_SUPPORT_NODEP_ID,
+      HSLOP_SUPPORT_CALIBRATED_ID,
+      CROSS_SKILL_STRONG_MEAN_ID,
+      CROSS_SKILL_COVERAGE_ID,
       HSLOP_SUPPORT_OVERALL_ID,
     ].map((method, index) => [method, {
       vsNoDependenceDateBootstrap: dateBlockBootstrap(dateAggregates, "no-dependence-4", method, 20_000, 20_260_823 + index),
@@ -1939,7 +2056,8 @@ function evaluateStrategies(cellsByDate) {
       overallMeanChampion: candidatesById.get(HSLOP_SUPPORT_OVERALL_ID),
       usage: supportGateUsage.get(HSLOP_SUPPORT_OVERALL_ID),
       previousNoDependenceFallback: candidatesById.get(HSLOP_SUPPORT_NODEP_ID),
-      interpretation: "below 1000 strictly-prior common targets, use a conservative source-conditioned model calibration with pair ridge weighting and 50% No-Dependence shrinkage; otherwise use the 55/45 coverage/strong HSLOP mixture",
+      previousCalibratedFallback: candidatesById.get(HSLOP_SUPPORT_CALIBRATED_ID),
+      interpretation: "below 1000 strictly-prior common targets, use a conservative calibrated fallback; otherwise use a 90/10 mixture of strong-coverage HSLOP and source-conditioned hierarchical model-skill ridge pooling",
       vsNoDependenceDateBootstrap: dateBlockBootstrap(
         dateAggregates,
         "no-dependence-4",
@@ -1968,7 +2086,37 @@ function evaluateStrategies(cellsByDate) {
         20_000,
         20_260_896,
       ),
+      vsPreviousCalibratedFallbackDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        HSLOP_SUPPORT_CALIBRATED_ID,
+        HSLOP_SUPPORT_OVERALL_ID,
+        20_000,
+        20_260_897,
+      ),
       pairComparisonVsNoDependence: pairComparison(pairAggregates, "no-dependence-4", HSLOP_SUPPORT_OVERALL_ID),
+    },
+    crossPairSkillRecommendation: {
+      directSkillPilot: staticMethods.find((method) => method.method === MODEL_SKILL_PILOT_ID),
+      strongestMeanMixture: candidatesById.get(CROSS_SKILL_STRONG_MEAN_ID),
+      unifiedMeanChampion: candidatesById.get(HSLOP_SUPPORT_OVERALL_ID),
+      unifiedCoverageChampion: candidatesById.get(CROSS_SKILL_COVERAGE_ID),
+      interpretation: "hierarchical model skill is not competitive alone, but a small fixed share supplies complementary pair weighting that improves the mean and SOTA frontiers",
+      unifiedVsPreviousOverallDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        HSLOP_SUPPORT_CALIBRATED_ID,
+        HSLOP_SUPPORT_OVERALL_ID,
+        20_000,
+        20_260_898,
+      ),
+      strongestMeanVsPreviousQ1DateBootstrap: dateBlockBootstrap(
+        q1DateAggregates,
+        HSLOP_META_STRONG_MEAN_ID,
+        CROSS_SKILL_STRONG_MEAN_ID,
+        20_000,
+        20_260_899,
+      ),
+      unifiedPairComparisonVsNoDependence: pairComparison(pairAggregates, "no-dependence-4", HSLOP_SUPPORT_OVERALL_ID),
+      unifiedQ1PairComparisonVsNoDependence: pairComparison(q1PairAggregates, "no-dependence-4", HSLOP_SUPPORT_OVERALL_ID),
     },
     globalSelectionTrace: Object.fromEntries(globalSelectionTrace),
     supportGateUsage: Object.fromEntries(supportGateUsage),
@@ -1997,6 +2145,9 @@ function evaluateStrategies(cellsByDate) {
       HSLOP_META_BALANCED_ID,
       HSLOP_META_STRONG_SOTA_ID,
       HSLOP_SUPPORT_NODEP_ID,
+      HSLOP_SUPPORT_CALIBRATED_ID,
+      CROSS_SKILL_STRONG_MEAN_ID,
+      CROSS_SKILL_COVERAGE_ID,
       HSLOP_SUPPORT_OVERALL_ID,
     ]),
     selectedQ1PairBreakdown: unitBreakdown(q1PairAggregates, [
@@ -2008,6 +2159,9 @@ function evaluateStrategies(cellsByDate) {
       HSLOP_META_BALANCED_ID,
       HSLOP_META_STRONG_SOTA_ID,
       HSLOP_SUPPORT_NODEP_ID,
+      HSLOP_SUPPORT_CALIBRATED_ID,
+      CROSS_SKILL_STRONG_MEAN_ID,
+      CROSS_SKILL_COVERAGE_ID,
       HSLOP_SUPPORT_OVERALL_ID,
     ]),
     scoredPairDateCells: allCells.length,
@@ -2028,7 +2182,7 @@ async function main() {
   const { cellsByDate, affineDiagnostics } = await buildFrozenCells(history, parameters, modelCalibrationSnapshots);
   const summary = evaluateStrategies(cellsByDate);
   const result = {
-    schemaVersion: "0.5.0-exploration",
+    schemaVersion: "0.6.0-exploration",
     generatedAt: new Date().toISOString(),
     status: "post_hoc_candidate_search_not_independent_oos",
     protocol: {
@@ -2041,6 +2195,7 @@ async function main() {
       metaAggregation: "fixed mixtures use no outcomes at prediction time; FTL and Hedge weights on date t are frozen from losses on strictly earlier dates",
       supportGate: "cold-start routing uses only strictly-prior common-target count or prior-date count; reported SOTA includes both no-worse and strictly-better rates",
       crossPairCalibration: "model and provider probability-bin calibration snapshots use only earlier forecast dates; the selected cold-start expert is pair-ridge weighted and shrunk 50% toward No-Dependence-4",
+      crossPairSkill: "model and provider Brier skill snapshots use only earlier forecast dates; pair ridge weights shrink toward source-conditioned hierarchical model-skill priors",
       candidateSearchWarning: "candidate families and hyperparameters are compared on the same replay and must be frozen before confirmatory evaluation",
       metric: "target-weighted Raw Brier; difficulty-adjusted BI unavailable in this artifact",
     },
@@ -2052,6 +2207,9 @@ async function main() {
       scoredTargetEvaluations: summary.slices.overall.targetEvaluations,
       scoredDates: cellsByDate.size,
       allHistoryDatesStrictlyPrior: parameters.audit.all_history_dates_strictly_prior,
+      allCrossPairSnapshotsStrictlyPrior: [...modelCalibrationSnapshots].every(([date, snapshot]) => (
+        snapshot.historyLastDate === null || snapshot.historyLastDate < date
+      )),
     },
     expertNames: {
       base: expertNames(false),

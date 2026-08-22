@@ -19,6 +19,7 @@ This experiment uses the same audited replay as the underlying HSLOP-2 study:
 - 1,567 scored pair-date cells and 465,074 pair-target evaluations;
 - 21 scored dates;
 - date-t predictions and selector weights are frozen before date-t outcomes;
+- cross-pair model, provider, calibration, and skill snapshots explicitly satisfy `historyLastDate < forecastDate`;
 - score is target-weighted Raw Brier; adjusted BI is unavailable in this artifact.
 
 The meta-family and its weights were explored on the same replay. Results are post-hoc discovery, not independent OOS confirmation. No production leaderboard code or score was changed.
@@ -53,9 +54,11 @@ The online selectors also include DASH-No-Dependence-4 as a safety expert. Fixed
 | **Stable online: global Hedge, d=0.5, eta=1** | 0.1529697 | 0.1492331 | 0.1545426 | 17/21 | 289/421 | 90/118 |
 | **Balanced fixed: 55% coverage + 45% strong** | 0.1529700 | 0.1491887 | 0.1545315 | **17/21** | 286/421 | 93/118 |
 | Previous support gate: No-Dependence cold start + balanced fixed | 0.1528035 | 0.1491887 | 0.1543450 | **17/21** | 281/421 (279 strict) | 93/118 |
-| **Overall mean: calibrated cold start + balanced fixed** | **0.1527558** | 0.1491887 | **0.1542916** | **17/21** | **308/421 strict** | 93/118 |
+| Calibrated cold start + balanced fixed | 0.1527558 | 0.1491887 | 0.1542916 | 17/21 | 308/421 strict | 93/118 |
 | **Strongest mean: 25% balanced + 75% strong** | 0.1531663 | **0.1491539** | 0.1548858 | 15/21 | 275/421 | 93/118 |
 | **Strongest SOTA: 30% balanced + 70% strong** | 0.1531409 | 0.1491545 | 0.1548506 | 15/21 | 277/421 | **94/118** |
+| **Unified mean: calibrated cold start + 10% skill prior** | **0.1527308** | **0.1491364** | 0.1542810 | 16/21 | 305/421 | **97/118** |
+| **Unified coverage: calibrated cold start + 30% skill prior** | 0.1529359 | 0.1491568 | **0.1541566** | **18/21** | **314/421** | **97/118** |
 
 Relative to No-Dependence-4, the balanced fixed mixture:
 
@@ -79,9 +82,12 @@ Paired forecast-date bootstrap, 20,000 draws:
 | Strongest-mean mixture vs No-Dependence-4, strongest Q1 | 0.0011199 | [0.0004065, 0.0018239] | 100.0% |
 | Calibrated support gate vs No-Dependence-4, overall | 0.0042998 | [0.0018204, 0.0085628] | 100.0% |
 | Calibrated support gate vs previous No-Dependence support gate, overall | 0.0000477 | [-0.0000815, 0.0001880] | 74.8% |
+| Unified mean gate vs No-Dependence-4, overall | 0.0043248 | [0.0017642, 0.0086815] | 100.0% |
+| Unified mean gate vs previous calibrated gate, overall | 0.0000250 | [-0.0001723, 0.0002550] | 58.6% |
+| 10% skill mixture vs previous strongest-mean mixture, strongest Q1 | 0.0000175 | [-0.0000300, 0.0000522] | 79.5% |
 | Balanced fixed mixture vs base balanced HSLOP-2, overall | 0.0000830 | [-0.0000753, 0.0002595] | 84.9% |
 
-The gain over No-Dependence-4 is stable in the historical date bootstrap. The much smaller incremental gains from meta-aggregation over base HSLOP-2 and from calibrated rather than plain No-Dependence cold-start fallback are not independently resolved and must not be presented as confirmed.
+The gain over No-Dependence-4 is stable in the historical date bootstrap. The much smaller incremental gains from meta-aggregation, calibrated fallback, and hierarchical skill mixing are not independently resolved and must not be presented as confirmed.
 
 ## Why global FTL lowers the historical mean
 
@@ -104,19 +110,19 @@ Across the four underlying HSLOP experts:
 - at least one is strongest-pair SOTA for 94 of 118 pairs, an ex-post union ceiling of 79.7%;
 - all four are strongest-pair SOTA for 82 of 118 pairs.
 
-The base coverage expert remains the best single method for overall pair-SOTA at 296/421 = 70.3%. Pair-specific FTL and Hedge do not beat it. Therefore adding more selector complexity over this same expert set is unlikely to materially raise overall pair coverage; the remaining 12-pair oracle gap requires new predictive features or a genuinely different expert, not a more aggressive online selector.
+The base coverage expert was the best single method for overall pair-SOTA at 296/421 = 70.3%, and pair-specific FTL and Hedge did not beat it. The hierarchical skill experiment validates the stopping rule: a genuinely different cross-pair skill signal raises the observed frontier beyond the old four-expert union, to 314/421 overall and 97/118 in the strongest quartile. Selector complexity over the old expert set was not the missing ingredient.
 
 ## Cold-start support gate and a smaller expert set
 
 Failure-pair inspection shows a strong support imbalance: the 113 pairs missed by every base HSLOP expert have median 501 evaluated targets, versus 1,234.5 for the 308 covered pairs. This motivated a strictly-prior gate that uses No-Dependence-4 below 1,000 common historical targets and the balanced fixed HSLOP mixture thereafter.
 
-The gate falls back on 137 of 1,567 pair-date cells and 35,935 of 465,074 target evaluations. It reaches 0.1528035 overall and 0.1543450 on the late half while leaving strongest-Q1 performance unchanged at 0.1491887. It is the new historical overall-mean champion, but overall strict pair-SOTA falls to 279/421 = 66.3%, below the base coverage expert's 296/421. The gate therefore solves a target-weighted cold-start loss problem, not the pair-coverage objective. Exact fallback ties are reported separately and are not counted as strictly better.
+The gate falls back on 137 of 1,567 pair-date cells and 35,935 of 465,074 target evaluations. It reaches 0.1528035 overall and 0.1543450 on the late half while leaving strongest-Q1 performance unchanged at 0.1491887. At that stage it was the historical overall-mean champion, but overall strict pair-SOTA fell to 279/421 = 66.3%, below the base coverage expert's 296/421. The gate therefore solved a target-weighted cold-start loss problem, not the pair-coverage objective. Exact fallback ties are reported separately and are not counted as strictly better.
 
 Against No-Dependence-4, its overall date-bootstrap reduction is 0.0042521 with interval [0.0018203, 0.0085050]. Its incremental reduction versus the balanced fixed mixture is 0.0001665 with interval [-0.0004230, 0.0009202], so the cold-start increment itself remains unconfirmed.
 
 The follow-up experiment tested whether DASH should receive every candidate method or only a small set of complementary specialists. A new cold-start expert estimates 10-bin calibration from strictly earlier dates at the provider and individual-model levels, conditions those statistics on the official source, applies the pair's strictly-prior ridge weight, and then shrinks the result 50% toward No-Dependence-4. Used globally, this expert harms strongest-Q1 performance, so it is not admitted as a general expert. It is used only below 1,000 prior common targets; above the threshold, the gate uses the 55% coverage + 45% strong HSLOP mixture.
 
-This two-expert gate is the new historical overall-mean candidate:
+This two-expert gate became the next historical overall-mean candidate:
 
 - overall Raw Brier 0.1527558, a reduction of 0.0042998 or 2.74% versus No-Dependence-4;
 - late-half Raw Brier 0.1542916;
@@ -125,21 +131,34 @@ This two-expert gate is the new historical overall-mean candidate:
 - better than No-Dependence-4 on 329/421 exact pairs and 103/118 strongest-Q1 pairs; and
 - cold-start routing on 137/1,567 pair-date cells and 35,935/465,074 target evaluations.
 
-The incremental improvement over the previous support gate is only 0.0000477, with paired-date bootstrap interval [-0.0000815, 0.0001880]. The result is promising discovery evidence for a smaller, specialized expert set, not confirmation that the calibrated fallback is superior. Its 308/421 strict pair-SOTA count equals the observed ex-post union ceiling of the four base HSLOP experts, but that equality is also measured on the discovery replay.
+The incremental improvement over the previous support gate is only 0.0000477, with paired-date bootstrap interval [-0.0000815, 0.0001880]. The result is promising discovery evidence for a smaller, specialized expert set, not confirmation that the calibrated fallback is superior. Its 308/421 strict pair-SOTA count matched the observed ex-post union ceiling of the four base HSLOP experts, motivating a genuinely new expert rather than further selector tuning.
+
+## Hierarchical cross-pair skill prior
+
+The new expert estimates each model's discounted Raw Brier from strictly earlier dates, shrinks model estimates toward provider estimates and provider estimates toward the global panel, and conditions the hierarchy on the official source. For a given pair, the lower estimated Brier receives a larger logistic prior weight; the pair's own strictly-prior linear-pool estimate is then ridge-shrunk toward that prior. This transfers information to pairs with limited shared history without using current outcomes.
+
+The direct skill pool is not competitive alone: its overall Raw Brier is 0.1567236 and strongest-Q1 Raw Brier is 0.1498224. Its errors are nevertheless complementary. Mixing only 10% of it into the previous strong-coverage HSLOP expert lowers strongest-Q1 Raw Brier to 0.1491364 and raises strongest-Q1 pair-SOTA from 94/118 to 97/118. A 30% share maximizes observed coverage among the tested frozen shares.
+
+Combining the calibrated cold-start branch with these mature-pair mixtures yields two new modes:
+
+- **Unified mean mode, 10% skill:** 0.1527308 overall, 0.1491364 strongest-Q1, 305/421 pair-SOTA, and 97/118 strongest-Q1 pair-SOTA. It beats No-Dependence-4 on 328/421 pairs and 108/118 strongest pairs.
+- **Unified coverage mode, 30% skill:** 0.1529359 overall, 0.1491568 strongest-Q1, 18/21 date-SOTA, 314/421 pair-SOTA, 97/118 strongest-Q1 pair-SOTA, and 9/11 late-date SOTA.
+
+The unified mean mode improves historical overall and strongest-Q1 means simultaneously. However, its incremental reductions versus the previous champions are only 0.0000250 overall and 0.0000175 in strongest-Q1, and both paired-date bootstrap intervals cross zero. The larger coverage changes are new discovery evidence, not independent confirmation.
 
 ## Does aggregation improve already-strong pairs more?
 
-It improves them, but **not by a larger average margin**. The new overall candidate reduces Raw Brier by 2.74% overall and by 0.72% in the strongest quartile. Strong pairs have less remaining error to remove. Nevertheless, the improvement is unusually consistent: it beats No-Dependence-4 on 103/118 strongest-Q1 pairs, is strictly current-baseline SOTA on 93/118, and is current-baseline SOTA on 7/8 late strongest-group dates. If the paper objective is the lowest strongest-group mean rather than overall mean, the frozen 25% balanced + 75% strong mixture reaches 0.1491539; if the objective is strongest-pair coverage, the 30% balanced + 70% strong mixture reaches 94/118.
+It improves them, but **not by a larger average margin**. Unified mean mode reduces Raw Brier by 2.75% overall and by 0.76% in the strongest quartile. Strong pairs have less remaining error to remove. Nevertheless, the improvement is unusually consistent: it beats No-Dependence-4 on 108/118 strongest-Q1 pairs, is strictly current-baseline SOTA on 97/118, and is current-baseline SOTA on 7/8 late strongest-group dates. Unified coverage mode preserves the same 97/118 strongest-pair coverage while raising overall date and pair coverage.
 
 ## Freeze recommendation
 
 For a future confirmatory block, freeze:
 
-1. **Primary balanced candidate:** 55% coverage HSLOP + 45% strongest HSLOP.
-2. **Overall-average challenger:** calibrated two-expert support gate at 1,000 prior common targets, then the balanced fixed mixture.
-3. **Temporal selector challenger:** global FTL with discount 0.5.
-4. **Stable online challenger:** global Hedge with discount 0.5 and eta scale 1.
-5. **Strong-group coverage challenger:** 30% balanced HSLOP + 70% strongest HSLOP.
+1. **Unified mean candidate:** calibrated fallback below 1,000 prior common targets; otherwise 90% strong-coverage HSLOP + 10% hierarchical skill pool.
+2. **Unified coverage candidate:** the same gate with a 30% hierarchical skill share above the threshold.
+3. **Primary HSLOP control:** 55% coverage HSLOP + 45% strongest HSLOP.
+4. **Previous calibrated-gate control:** calibrated fallback below 1,000 targets, then the primary HSLOP control.
+5. **Stable online challenger:** global Hedge with discount 0.5 and eta scale 1.
 6. **Overall pair-coverage control:** base coverage HSLOP-2.
 
 Retain the previous No-Dependence support gate, No-Dependence-4, Full-7, the bounded convex source pool, and base balanced HSLOP-2 as controls. Freeze all calibration constants, mixture weights, and the 1,000-target threshold before the next confirmatory time block. Do not continue tuning selector learning rates on this replay.
