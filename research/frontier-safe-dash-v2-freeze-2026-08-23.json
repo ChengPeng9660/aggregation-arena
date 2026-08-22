@@ -1,0 +1,112 @@
+{
+  "schemaVersion": "1.0.0-frontier-v2-freeze",
+  "status": "frozen_for_future_confirmatory_evaluation",
+  "frozenAt": "2026-08-23",
+  "discovery": {
+    "forecastDateCutoffInclusive": "2026-03-29",
+    "parentCommit": "24bd66d540e78b5dedf92d5419805a38e681be68",
+    "historyPath": "public/forecastbench/history.json",
+    "historySha256": "ada4df15b05d428295951a2dbcf9d6e3e2150717fddeefb20ef312dcfee96e58",
+    "dashParameterPath": "public/forecastbench/dash2-history.json",
+    "dashParameterSha256": "6787ef970d2f03e920db32c1bb991ad0c1911a5a404484c2ce4dd6c6483a9ab1",
+    "scriptPath": "scripts/explore-frontier-safe-dash.mjs",
+    "scriptSha256": "90647b702677734eda0c70edac06b82c1feed4e1726cec70d8e891c9dfd69b20",
+    "outputPath": "output/research/frontier-safe-dash-exploration-2026-08-23.json",
+    "outputSchemaVersion": "0.8.0-frontier-exploration",
+    "canonicalOutputSha256ExcludingGeneratedAt": "b46391d393899766453a900878074b17ec60b09d0b24390a1fe77d33340141ec",
+    "sourceEvents": 8620,
+    "sourceDates": 25,
+    "scoredDates": 21,
+    "eligiblePairs": 421,
+    "scoredPairDateCells": 1567,
+    "scoredTargetEvaluations": 465074
+  },
+  "protocol": {
+    "metric": "target-weighted Raw Brier",
+    "predictionBoundary": "all date-t forecasts, rolling thresholds, context buckets, and FTL states are frozen before any date-t outcome update",
+    "strongestQ1Evaluation": "bottom quartile of pair-date cells by the better constituent model's strictly-prior cumulative Raw Brier",
+    "sotaBaselines": [
+      "no-dependence-4",
+      "two-model-hedge",
+      "full-7",
+      "core-5"
+    ],
+    "confirmationBoundary": "only forecast dates strictly after 2026-03-29 are confirmatory",
+    "retuningAllowed": false,
+    "difficultyAdjustedBIAvailable": false
+  },
+  "mechanism": {
+    "contextFeatures": [
+      "strictly-prior pair model-quality gap relative to its rolling median",
+      "strictly-prior safeAlpha relative to its rolling median"
+    ],
+    "contextBuckets": 4,
+    "contextFtlDiscount": 0.8,
+    "contextFtlColdStartExpert": "support-gate-nHistory-t1000-modelcal-skill-strong-w0p1",
+    "contextFtlExperts": [
+      "no-dependence-4",
+      "two-model-hedge",
+      "full-7",
+      "core-5",
+      "support-gate-nHistory-t1000-modelcal-skill-strong-w0p1"
+    ],
+    "jointFallback": "support-gate-nHistory-t1000-modelcal-skill-ftl"
+  },
+  "finalists": [
+    {
+      "role": "joint_overall_and_strongest_group",
+      "id": "frontier-quality-gate-q0p5-ftl-overall",
+      "rollingQualityQuantile": 0.5,
+      "overallRawBrier": 0.1526368740749154,
+      "strongestQ1RawBrier": 0.14912915183904224,
+      "lateRawBrier": 0.1541758033487527,
+      "dateSota": "18/21",
+      "pairSota": "311/421",
+      "strongestQ1PairSota": "100/118"
+    },
+    {
+      "role": "strongest_group_coverage",
+      "id": "frontier-quality-gate-q0p4-ftl-overall",
+      "rollingQualityQuantile": 0.4,
+      "overallRawBrier": 0.15265944776663207,
+      "strongestQ1RawBrier": 0.14918831830686388,
+      "lateRawBrier": 0.1542010927436948,
+      "dateSota": "18/21",
+      "pairSota": "313/421",
+      "strongestQ1PairSota": "101/118"
+    },
+    {
+      "role": "strongest_group_mean",
+      "id": "frontier-quality-gate-q0p5-ftl-strong-mean",
+      "rollingQualityQuantile": 0.5,
+      "overallRawBrier": 0.152723123282278,
+      "strongestQ1RawBrier": 0.14911763448947704,
+      "lateRawBrier": 0.15427242867242263,
+      "dateSota": "16/21",
+      "pairSota": "306/421",
+      "strongestQ1PairSota": "100/118"
+    }
+  ],
+  "futureConfirmation": {
+    "minimumNewScoredDatesBeforePrimaryReadout": 5,
+    "reportAtNewScoredDates": [3, 5, 8, 10],
+    "requiredV1Comparators": [
+      "support-gate-nHistory-t1000-modelcal-skill-ftl",
+      "support-gate-nHistory-t1000-modelcal-skill-strong-w0p1",
+      "support-gate-nHistory-t1000-modelcal-quality-skill-ftl"
+    ],
+    "primaryEndpoints": [
+      "overall_target_weighted_raw_brier",
+      "strongest_q1_target_weighted_raw_brier",
+      "date_sota_rate",
+      "pair_sota_rate",
+      "strongest_q1_pair_sota_rate",
+      "sota_gained_and_lost_vs_v1"
+    ],
+    "decisionRule": "Do not alter any frozen parameter after observing post-cutoff outcomes; report every finalist, comparator, endpoint, and regression."
+  },
+  "reproduce": {
+    "command": "node --max-old-space-size=4096 scripts/explore-frontier-safe-dash.mjs",
+    "verifyCommand": "node scripts/verify-frontier-safe-dash-freeze.mjs --output output/research/frontier-safe-dash-exploration-2026-08-23.json"
+  }
+}
