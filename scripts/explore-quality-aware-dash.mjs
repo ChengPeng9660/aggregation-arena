@@ -20,6 +20,13 @@ const AFFINE_LAMBDAS = [1, 5, 20, 100, 500];
 const AFFINE_DISCOUNTS = [1, 0.95, 0.8, 0.5];
 const CALIBRATION_LAMBDAS = [1, 5, 20, 100];
 const CALIBRATION_DISCOUNTS = [1, 0.95, 0.8, 0.5];
+const GROUP_AFFINE_LAMBDAS = [5, 20, 50, 100, 500];
+const GROUP_AFFINE_DISCOUNTS = [1, 0.95];
+const GROUP_AFFINE_FEATURES = ["sourceKey", "questionType"];
+const GROUP_LINEAR_LAMBDAS = [5, 20, 50, 100, 500];
+const GROUP_LINEAR_DISCOUNTS = [1, 0.95];
+const GROUP_LOGIT_LAMBDAS = [5, 20, 50, 100];
+const GROUP_LOGIT_DISCOUNT = 0.95;
 const VARIANT_EXPERTS = {
   "no-dependence-4": ["model-a", "model-b", "two-model-hedge", "cptec"],
   "core-5": ["model-a", "model-b", "two-model-hedge", "safemix-2", "cptec"],
@@ -40,6 +47,16 @@ const AFFINE_DIAGNOSTIC_METHODS = new Set([
   "ridge-affine-d0.95-l5",
   "ridge-affine-5",
 ]);
+const GROUP_AFFINE_DIAGNOSTIC_METHODS = new Set([
+  "source-affine-d0.95-l50",
+  "source-affine-d0.95-l100",
+  "type-affine-d0.95-l20",
+  "type-affine-d0.95-l50",
+]);
+const DEPENDENCE_RIDGE_CONFIGS = [
+  ...[0, 5, 20].flatMap((ridgeLambda) => [0.5, 1, 1.5].map((alphaScale) => ({ ridgeLambda, alphaScale, alphaPower: 1 }))),
+  ...[0, 20].flatMap((ridgeLambda) => [0.5, 2].map((alphaPower) => ({ ridgeLambda, alphaScale: 1, alphaPower }))),
+];
 
 function parseArgs(argv) {
   const args = { history: DEFAULT_HISTORY, parameters: DEFAULT_PARAMETERS, output: DEFAULT_OUTPUT };
@@ -65,12 +82,27 @@ function clampProbability(probability) {
   return Math.min(1, Math.max(0, probability));
 }
 
+function boundedLogit(probability) {
+  const bounded = Math.min(1 - 1e-6, Math.max(1e-6, probability));
+  return Math.log(bounded / (1 - bounded));
+}
+
+function logistic(value) {
+  if (value >= 0) return 1 / (1 + Math.exp(-value));
+  const exponential = Math.exp(value);
+  return exponential / (1 + exponential);
+}
+
 function shrinkProbability(probability, slope) {
   return clampProbability(0.5 + slope * (probability - 0.5));
 }
 
 function ridgeLinearWeight(stats, lambda) {
   return Math.min(1, Math.max(0, (stats.differenceResidual + 0.5 * lambda) / (stats.differenceSquared + lambda)));
+}
+
+function ridgeLinearWeightWithPrior(stats, lambda, prior) {
+  return Math.min(1, Math.max(0, (stats.differenceResidual + prior * lambda) / (stats.differenceSquared + lambda)));
 }
 
 function ridgeMethodId(discount, lambda) {
@@ -99,6 +131,10 @@ function solveThreeByThree(matrix, vector) {
 
 function ridgeAffineCoefficients(stats, lambda) {
   const prior = [0, 0.5, 0.5];
+  return ridgeAffineCoefficientsWithPrior(stats, lambda, prior);
+}
+
+function ridgeAffineCoefficientsWithPrior(stats, lambda, prior) {
   const matrix = stats.xtx.map((row, index) => row.map((value, column) => value + (index === column ? lambda : 0)));
   const vector = stats.xty.map((value, index) => value + lambda * prior[index]);
   return solveThreeByThree(matrix, vector);
@@ -106,6 +142,70 @@ function ridgeAffineCoefficients(stats, lambda) {
 
 function affineMethodId(discount, lambda) {
   return discount === 1 ? `ridge-affine-${lambda}` : `ridge-affine-d${discount}-l${lambda}`;
+}
+
+function groupAffineMethodId(feature, discount, lambda) {
+  const group = feature === "sourceKey" ? "source" : "type";
+  return discount === 1 ? `${group}-affine-${lambda}` : `${group}-affine-d${discount}-l${lambda}`;
+}
+
+function groupLinearMethodId(feature, discount, lambda) {
+  const group = feature === "sourceKey" ? "source" : "type";
+  return discount === 1 ? `${group}-linear-${lambda}` : `${group}-linear-d${discount}-l${lambda}`;
+}
+
+function groupLogitMethodId(feature, lambda) {
+  const group = feature === "sourceKey" ? "source" : "type";
+  return `${group}-logit-d${GROUP_LOGIT_DISCOUNT}-l${lambda}`;
+}
+
+function fitGroupedLogit(rows, lambda, prior, currentRoundIndex) {
+  if (!rows.length) return [...prior];
+  let coefficients = [...prior];
+  for (let iteration = 0; iteration < 8; iteration += 1) {
+    const hessian = Array.from({ length: 3 }, (_, row) => Array.from(
+      { length: 3 },
+      (_, column) => row === column ? lambda : 0,
+    ));
+    const gradient = coefficients.map((value, index) => -lambda * (value - prior[index]));
+    for (const row of rows) {
+      const features = [1, boundedLogit(row.first), boundedLogit(row.second)];
+      const prediction = logistic(features.reduce((sum, feature, index) => sum + feature * coefficients[index], 0));
+      const timeWeight = GROUP_LOGIT_DISCOUNT ** (currentRoundIndex - row.roundIndex);
+      const varianceWeight = timeWeight * Math.max(1e-6, prediction * (1 - prediction));
+      for (let firstIndex = 0; firstIndex < 3; firstIndex += 1) {
+        gradient[firstIndex] += timeWeight * features[firstIndex] * (row.outcome - prediction);
+        for (let secondIndex = 0; secondIndex < 3; secondIndex += 1) {
+          hessian[firstIndex][secondIndex] += varianceWeight * features[firstIndex] * features[secondIndex];
+        }
+      }
+    }
+    const step = solveThreeByThree(hessian, gradient);
+    coefficients = coefficients.map((value, index) => value + step[index]);
+    if (Math.max(...step.map(Math.abs)) < 1e-7) break;
+  }
+  return coefficients;
+}
+
+function createAffineStats() {
+  return {
+    xtx: Array.from({ length: 3 }, () => Array(3).fill(0)),
+    xty: Array(3).fill(0),
+  };
+}
+
+function discountAffineStats(stats, discount) {
+  stats.xtx = stats.xtx.map((row) => row.map((value) => discount * value));
+  stats.xty = stats.xty.map((value) => discount * value);
+}
+
+function updateAffineStats(stats, features, outcome) {
+  for (let firstIndex = 0; firstIndex < 3; firstIndex += 1) {
+    stats.xty[firstIndex] += features[firstIndex] * outcome;
+    for (let secondIndex = 0; secondIndex < 3; secondIndex += 1) {
+      stats.xtx[firstIndex][secondIndex] += features[firstIndex] * features[secondIndex];
+    }
+  }
 }
 
 function ridgeCalibrationCoefficients(stats, lambda) {
@@ -124,6 +224,14 @@ function ridgeCalibrationCoefficients(stats, lambda) {
 
 function calibrationMethodId(discount, lambda) {
   return discount === 1 ? `calibrated-no-dependence-${lambda}` : `calibrated-no-dependence-d${discount}-l${lambda}`;
+}
+
+function formatParameter(value) {
+  return String(value).replace(".", "p");
+}
+
+function dependenceRidgeMethodId({ ridgeLambda, alphaScale, alphaPower }) {
+  return `dependence-ridge-r${ridgeLambda}-s${formatParameter(alphaScale)}-p${formatParameter(alphaPower)}`;
 }
 
 function quantile(sorted, probability) {
@@ -202,6 +310,27 @@ function strategyPrediction(predictions, state, etaScale) {
   return predictions.reduce((sum, prediction, index) => sum + prediction * weights[index], 0);
 }
 
+function priorWeightedStrategyPrediction(predictions, state, etaScale, prior) {
+  if (!prior || prior.length !== predictions.length || prior.some((value) => !Number.isFinite(value) || value <= 0)) {
+    throw new Error("Pair-stack prior must contain one positive finite weight per expert");
+  }
+  const eta = etaScale * Math.sqrt(8 * Math.log(state.expertLossSum.length) / Math.max(1, state.nFeedback));
+  const scores = state.expertLossSum.map((loss, index) => Math.log(prior[index]) - eta * loss);
+  const maximum = Math.max(...scores);
+  const unnormalized = scores.map((score) => Math.exp(score - maximum));
+  const total = unnormalized.reduce((sum, value) => sum + value, 0);
+  return predictions.reduce((sum, prediction, index) => sum + prediction * unnormalized[index] / total, 0);
+}
+
+function guardianPrediction(predictions, state, tolerance) {
+  if (predictions.length !== 2 || state.expertLossSum.length !== 2) {
+    throw new Error("Guardian requires exactly baseline and candidate experts");
+  }
+  if (state.nFeedback <= 0) return predictions[1];
+  const candidateExcessLoss = (state.expertLossSum[1] - state.expertLossSum[0]) / state.nFeedback;
+  return candidateExcessLoss <= tolerance ? predictions[1] : predictions[0];
+}
+
 function updateStrategyState(state, predictionsByEvent, outcomes, discount) {
   const nextLoss = state.expertLossSum.map((loss) => loss * discount);
   let nextFeedback = state.nFeedback * discount;
@@ -244,8 +373,9 @@ async function buildFrozenCells(history, parameters) {
   }
 
   const cellsByDate = new Map();
-  const affineDiagnostics = new Map([...AFFINE_DIAGNOSTIC_METHODS].map((method) => [method, {
+  const affineDiagnostics = new Map([...AFFINE_DIAGNOSTIC_METHODS, ...GROUP_AFFINE_DIAGNOSTIC_METHODS].map((method) => [method, {
     cells: 0,
+    fits: 0,
     predictions: 0,
     clippedLow: 0,
     clippedHigh: 0,
@@ -264,10 +394,15 @@ async function buildFrozenCells(history, parameters) {
     let noDependenceState = createMetaState(VARIANT_EXPERTS["no-dependence-4"].length);
     let coreState = createMetaState(VARIANT_EXPERTS["core-5"].length);
     const ridgeStats = new Map(RIDGE_DISCOUNTS.map((discount) => [discount, { differenceResidual: 0, differenceSquared: 0 }]));
-    const affineStats = new Map(AFFINE_DISCOUNTS.map((discount) => [discount, {
-      xtx: Array.from({ length: 3 }, () => Array(3).fill(0)),
-      xty: Array(3).fill(0),
-    }]));
+    const affineStats = new Map(AFFINE_DISCOUNTS.map((discount) => [discount, createAffineStats()]));
+    const groupAffineStats = new Map(GROUP_AFFINE_FEATURES.map((feature) => [feature, new Map(
+      GROUP_AFFINE_DISCOUNTS.map((discount) => [discount, new Map()]),
+    )]));
+    const groupLinearStats = new Map(GROUP_AFFINE_FEATURES.map((feature) => [feature, new Map(
+      GROUP_LINEAR_DISCOUNTS.map((discount) => [discount, new Map()]),
+    )]));
+    const logitHistory = [];
+    const groupedLogitHistory = new Map(GROUP_AFFINE_FEATURES.map((feature) => [feature, new Map()]));
     const calibrationStats = new Map(CALIBRATION_DISCOUNTS.map((discount) => [discount, {
       n: 0,
       sumPrediction: 0,
@@ -276,7 +411,9 @@ async function buildFrozenCells(history, parameters) {
       sumPredictionOutcome: 0,
     }]));
 
-    for (const date of [...eventsByDate.keys()].sort()) {
+    const sortedPairDates = [...eventsByDate.keys()].sort();
+    for (let roundIndex = 0; roundIndex < sortedPairDates.length; roundIndex += 1) {
+      const date = sortedPairDates[roundIndex];
       const round = eventsByDate.get(date);
       const priorParameters = pairParameters.get(date) ?? null;
       const fullVectors = [];
@@ -290,6 +427,50 @@ async function buildFrozenCells(history, parameters) {
       const affineCoefficients = new Map(AFFINE_DISCOUNTS.map((discount) => [discount, Object.fromEntries(
         AFFINE_LAMBDAS.map((lambda) => [lambda, ridgeAffineCoefficients(affineStats.get(discount), lambda)]),
       )]));
+      const groupAffineCoefficients = Object.fromEntries(GROUP_AFFINE_FEATURES.flatMap((feature) => (
+        GROUP_AFFINE_DISCOUNTS.flatMap((discount) => {
+          const globalPrior = ridgeAffineCoefficients(affineStats.get(discount), 5);
+          const statsByGroup = groupAffineStats.get(feature).get(discount);
+          const currentGroups = [...new Set(round.map((event) => event[feature]))];
+          return GROUP_AFFINE_LAMBDAS.map((lambda) => [
+            groupAffineMethodId(feature, discount, lambda),
+            Object.fromEntries(currentGroups.map((group) => [
+              group,
+              ridgeAffineCoefficientsWithPrior(statsByGroup.get(group) ?? createAffineStats(), lambda, globalPrior),
+            ])),
+          ]);
+        })
+      )));
+      const groupLinearWeights = Object.fromEntries(GROUP_AFFINE_FEATURES.flatMap((feature) => (
+        GROUP_LINEAR_DISCOUNTS.flatMap((discount) => {
+          const globalPrior = ridgeLinearWeight(ridgeStats.get(discount), 20);
+          const statsByGroup = groupLinearStats.get(feature).get(discount);
+          const currentGroups = [...new Set(round.map((event) => event[feature]))];
+          return GROUP_LINEAR_LAMBDAS.map((lambda) => [
+            groupLinearMethodId(feature, discount, lambda),
+            Object.fromEntries(currentGroups.map((group) => [
+              group,
+              ridgeLinearWeightWithPrior(
+                statsByGroup.get(group) ?? { differenceResidual: 0, differenceSquared: 0 },
+                lambda,
+                globalPrior,
+              ),
+            ])),
+          ]);
+        })
+      )));
+      const globalLogitPrior = fitGroupedLogit(logitHistory, 20, [0, 0.5, 0.5], roundIndex);
+      const groupLogitCoefficients = Object.fromEntries(GROUP_AFFINE_FEATURES.flatMap((feature) => {
+        const historyByGroup = groupedLogitHistory.get(feature);
+        const currentGroups = [...new Set(round.map((event) => event[feature]))];
+        return GROUP_LOGIT_LAMBDAS.map((lambda) => [
+          groupLogitMethodId(feature, lambda),
+          Object.fromEntries(currentGroups.map((group) => [
+            group,
+            fitGroupedLogit(historyByGroup.get(group) ?? [], lambda, globalLogitPrior, roundIndex),
+          ])),
+        ]);
+      }));
       const calibrationCoefficients = new Map(CALIBRATION_DISCOUNTS.map((discount) => [discount, Object.fromEntries(
         CALIBRATION_LAMBDAS.map((lambda) => [lambda, ridgeCalibrationCoefficients(calibrationStats.get(discount), lambda)]),
       )]));
@@ -310,6 +491,9 @@ async function buildFrozenCells(history, parameters) {
           affineMethodId(discount, lambda),
           affineCoefficients.get(discount)[lambda],
         ]))),
+        groupAffineCoefficients,
+        groupLinearWeights,
+        groupLogitCoefficients,
         calibrationCoefficients: Object.fromEntries(CALIBRATION_DISCOUNTS.flatMap((discount) => CALIBRATION_LAMBDAS.map((lambda) => [
           calibrationMethodId(discount, lambda),
           calibrationCoefficients.get(discount)[lambda],
@@ -323,7 +507,17 @@ async function buildFrozenCells(history, parameters) {
             if (!AFFINE_DIAGNOSTIC_METHODS.has(method)) continue;
             const diagnostic = affineDiagnostics.get(method);
             diagnostic.cells += 1;
+            diagnostic.fits += 1;
             const coefficients = affineCoefficients.get(discount)[lambda];
+            for (let index = 0; index < 3; index += 1) diagnostic.coefficients[index].push(coefficients[index]);
+          }
+        }
+        for (const method of GROUP_AFFINE_DIAGNOSTIC_METHODS) {
+          const diagnostic = affineDiagnostics.get(method);
+          diagnostic.cells += 1;
+          const coefficientsByGroup = cell.groupAffineCoefficients[method];
+          for (const coefficients of Object.values(coefficientsByGroup)) {
+            diagnostic.fits += 1;
             for (let index = 0; index < 3; index += 1) diagnostic.coefficients[index].push(coefficients[index]);
           }
         }
@@ -356,7 +550,25 @@ async function buildFrozenCells(history, parameters) {
             }
           }
         }
-        if (cell) cell.rows.push({ outcome: event.outcome, first, second, basePredictions });
+        if (cell) {
+          for (const method of GROUP_AFFINE_DIAGNOSTIC_METHODS) {
+            const feature = method.startsWith("source-") ? "sourceKey" : "questionType";
+            const coefficients = cell.groupAffineCoefficients[method][event[feature]];
+            const rawPrediction = coefficients[0] + coefficients[1] * first + coefficients[2] * second;
+            const diagnostic = affineDiagnostics.get(method);
+            diagnostic.predictions += 1;
+            if (rawPrediction < 0) diagnostic.clippedLow += 1;
+            else if (rawPrediction > 1) diagnostic.clippedHigh += 1;
+          }
+        }
+        if (cell) cell.rows.push({
+          outcome: event.outcome,
+          first,
+          second,
+          sourceKey: event.sourceKey,
+          questionType: event.questionType,
+          basePredictions,
+        });
         fullVectors.push(baseForecast.expertPredictions);
         noDependenceVectors.push(noDependenceVector);
         coreVectors.push(coreVector);
@@ -384,15 +596,56 @@ async function buildFrozenCells(history, parameters) {
       }
       for (const discount of AFFINE_DISCOUNTS) {
         const stats = affineStats.get(discount);
-        stats.xtx = stats.xtx.map((row) => row.map((value) => discount * value));
-        stats.xty = stats.xty.map((value) => discount * value);
+        discountAffineStats(stats, discount);
         for (let index = 0; index < round.length; index += 1) {
           const features = [1, round[index].forecasts[modelA], round[index].forecasts[modelB]];
-          for (let firstIndex = 0; firstIndex < 3; firstIndex += 1) {
-            stats.xty[firstIndex] += features[firstIndex] * outcomes[index];
-            for (let secondIndex = 0; secondIndex < 3; secondIndex += 1) {
-              stats.xtx[firstIndex][secondIndex] += features[firstIndex] * features[secondIndex];
-            }
+          updateAffineStats(stats, features, outcomes[index]);
+        }
+      }
+      for (const feature of GROUP_AFFINE_FEATURES) {
+        for (const discount of GROUP_AFFINE_DISCOUNTS) {
+          const statsByGroup = groupAffineStats.get(feature).get(discount);
+          for (const stats of statsByGroup.values()) discountAffineStats(stats, discount);
+          for (let index = 0; index < round.length; index += 1) {
+            const group = round[index][feature];
+            if (!statsByGroup.has(group)) statsByGroup.set(group, createAffineStats());
+            updateAffineStats(
+              statsByGroup.get(group),
+              [1, round[index].forecasts[modelA], round[index].forecasts[modelB]],
+              outcomes[index],
+            );
+          }
+        }
+      }
+      for (let index = 0; index < round.length; index += 1) {
+        const historyRow = {
+          first: round[index].forecasts[modelA],
+          second: round[index].forecasts[modelB],
+          outcome: outcomes[index],
+          roundIndex,
+        };
+        logitHistory.push(historyRow);
+        for (const feature of GROUP_AFFINE_FEATURES) {
+          const group = round[index][feature];
+          const historyByGroup = groupedLogitHistory.get(feature);
+          if (!historyByGroup.has(group)) historyByGroup.set(group, []);
+          historyByGroup.get(group).push(historyRow);
+        }
+      }
+      for (const feature of GROUP_AFFINE_FEATURES) {
+        for (const discount of GROUP_LINEAR_DISCOUNTS) {
+          const statsByGroup = groupLinearStats.get(feature).get(discount);
+          for (const stats of statsByGroup.values()) {
+            stats.differenceResidual *= discount;
+            stats.differenceSquared *= discount;
+          }
+          for (let index = 0; index < round.length; index += 1) {
+            const group = round[index][feature];
+            if (!statsByGroup.has(group)) statsByGroup.set(group, { differenceResidual: 0, differenceSquared: 0 });
+            const stats = statsByGroup.get(group);
+            const difference = round[index].forecasts[modelA] - round[index].forecasts[modelB];
+            stats.differenceResidual += difference * (outcomes[index] - round[index].forecasts[modelB]);
+            stats.differenceSquared += difference ** 2;
           }
         }
       }
@@ -418,6 +671,7 @@ async function buildFrozenCells(history, parameters) {
     cellsByDate,
     affineDiagnostics: Object.fromEntries([...affineDiagnostics].map(([method, diagnostic]) => [method, {
       cells: diagnostic.cells,
+      fits: diagnostic.fits,
       predictions: diagnostic.predictions,
       clippedLow: diagnostic.clippedLow,
       clippedHigh: diagnostic.clippedHigh,
@@ -501,6 +755,163 @@ function gateConfigs() {
       }
     }
   }
+  for (const strongQuantile of [0.25, 0.4]) {
+    for (const dependenceConfig of DEPENDENCE_RIDGE_CONFIGS) {
+      const strongMethod = dependenceRidgeMethodId(dependenceConfig);
+      for (const otherMethod of ["ridge-affine-d0.95-l1", "ridge-affine-d0.95-l5"]) {
+        configs.push({
+          id: `dependence-gate-q${strongQuantile}-${strongMethod}-${otherMethod}`,
+          family: "rolling-quality-dependence-gate",
+          strongQuantile,
+          strongMethod,
+          otherMethod,
+          dependenceConfig,
+        });
+      }
+    }
+  }
+  for (const strongQuantile of [0.25, 0.4]) {
+    for (const strongMethod of ["ridge-linear-20", "ridge-linear-30"]) {
+      for (const feature of GROUP_AFFINE_FEATURES) {
+        for (const discount of GROUP_LINEAR_DISCOUNTS) {
+          for (const lambda of [20, 50, 100, 500]) {
+            const otherMethod = groupLinearMethodId(feature, discount, lambda);
+            configs.push({
+              id: `bounded-group-gate-q${strongQuantile}-${strongMethod}-${otherMethod}`,
+              family: "rolling-quality-bounded-group-gate",
+              strongQuantile,
+              strongMethod,
+              otherMethod,
+              groupFeature: feature,
+            });
+          }
+        }
+      }
+    }
+  }
+  for (const strongQuantile of [0.25, 0.4]) {
+    for (const strongMethod of ["ridge-linear-20", "ridge-linear-30"]) {
+      for (const feature of GROUP_AFFINE_FEATURES) {
+        for (const discount of GROUP_AFFINE_DISCOUNTS) {
+          for (const lambda of [20, 50, 100, 500]) {
+            const otherMethod = groupAffineMethodId(feature, discount, lambda);
+            configs.push({
+              id: `group-gate-q${strongQuantile}-${strongMethod}-${otherMethod}`,
+              family: "rolling-quality-group-affine-gate",
+              strongQuantile,
+              strongMethod,
+              otherMethod,
+              groupFeature: feature,
+            });
+          }
+        }
+      }
+    }
+  }
+  for (const strongQuantile of [0.1, 0.2, 0.25]) {
+    for (const middleQuantile of [0.4, 0.5]) {
+      for (const strongMethod of ["ridge-linear-20", "ridge-linear-30"]) {
+        for (const middleMethod of ["type-affine-d0.95-l20", "type-affine-d0.95-l50"]) {
+          for (const otherMethod of [
+            "source-affine-d0.95-l50",
+            "source-affine-d0.95-l100",
+            "source-affine-d0.95-l500",
+          ]) {
+            configs.push({
+              id: `hierarchical-gate-q${strongQuantile}-q${middleQuantile}-${strongMethod}-${middleMethod}-${otherMethod}`,
+              family: "rolling-hierarchical-group-gate",
+              strongQuantile,
+              middleQuantile,
+              strongMethod,
+              middleMethod,
+              otherMethod,
+            });
+          }
+        }
+      }
+    }
+  }
+  for (const strongQuantile of [0.1, 0.2, 0.25]) {
+    for (const middleQuantile of [0.4, 0.5]) {
+      for (const strongMethod of ["ridge-linear-20", "ridge-linear-30"]) {
+        for (const middleMethod of ["type-logit-d0.95-l5", "type-logit-d0.95-l20", "type-logit-d0.95-l50"]) {
+          for (const otherMethod of ["source-logit-d0.95-l5", "source-logit-d0.95-l20", "source-logit-d0.95-l50"]) {
+            configs.push({
+              id: `logit-hierarchical-gate-q${strongQuantile}-q${middleQuantile}-${strongMethod}-${middleMethod}-${otherMethod}`,
+              family: "rolling-hierarchical-group-gate",
+              strongQuantile,
+              middleQuantile,
+              strongMethod,
+              middleMethod,
+              otherMethod,
+            });
+          }
+        }
+      }
+    }
+  }
+  for (const strongQuantile of [0.1, 0.2, 0.25]) {
+    for (const middleQuantile of [0.4, 0.5]) {
+      for (const strongMethod of ["ridge-linear-20", "ridge-linear-30"]) {
+        for (const middleMethod of ["type-linear-d0.95-l20", "type-linear-d0.95-l50"]) {
+          for (const otherMethod of ["source-linear-d0.95-l20", "source-linear-d0.95-l50", "source-linear-d0.95-l100"]) {
+            configs.push({
+              id: `bounded-hierarchical-gate-q${strongQuantile}-q${middleQuantile}-${strongMethod}-${middleMethod}-${otherMethod}`,
+              family: "rolling-hierarchical-group-gate",
+              strongQuantile,
+              middleQuantile,
+              strongMethod,
+              middleMethod,
+              otherMethod,
+            });
+          }
+        }
+      }
+    }
+  }
+  for (const alphaThreshold of [0.02, 0.05, 0.075, 0.1, 0.2, 0.35, 0.5]) {
+    for (const highUsesFirst of [true, false]) {
+      for (const [firstMiddleMethod, secondMiddleMethod] of [
+        ["type-affine-d0.95-l20", "type-affine-d0.95-l50"],
+        ["type-affine-d0.95-l20", "source-affine-d0.95-l50"],
+      ]) {
+        configs.push({
+          id: `correlation-gate-a${formatParameter(alphaThreshold)}-${highUsesFirst ? "high-first" : "low-first"}-${firstMiddleMethod}-${secondMiddleMethod}`,
+          family: "rolling-correlation-hierarchical-gate",
+          strongQuantile: 0.2,
+          middleQuantile: 0.5,
+          strongMethod: "ridge-linear-30",
+          firstMiddleMethod,
+          secondMiddleMethod,
+          otherMethod: "source-affine-d0.95-l50",
+          alphaThreshold,
+          highUsesFirst,
+        });
+      }
+    }
+  }
+  for (const alphaThreshold of [0.02, 0.05, 0.075, 0.1, 0.2, 0.35, 0.5]) {
+    for (const highUsesFirst of [true, false]) {
+      for (const [firstMiddleMethod, secondMiddleMethod, otherMethod] of [
+        ["type-logit-d0.95-l5", "source-logit-d0.95-l20", "source-logit-d0.95-l20"],
+        ["type-logit-d0.95-l5", "source-logit-d0.95-l5", "source-logit-d0.95-l20"],
+        ["type-logit-d0.95-l20", "source-logit-d0.95-l20", "source-logit-d0.95-l20"],
+      ]) {
+        configs.push({
+          id: `logit-correlation-gate-a${formatParameter(alphaThreshold)}-${highUsesFirst ? "high-first" : "low-first"}-${firstMiddleMethod}-${secondMiddleMethod}-${otherMethod}`,
+          family: "rolling-correlation-hierarchical-gate",
+          strongQuantile: 0.2,
+          middleQuantile: 0.5,
+          strongMethod: "ridge-linear-20",
+          firstMiddleMethod,
+          secondMiddleMethod,
+          otherMethod,
+          alphaThreshold,
+          highUsesFirst,
+        });
+      }
+    }
+  }
   return configs;
 }
 
@@ -554,6 +965,79 @@ function selectorConfigs() {
       ],
     },
   ];
+}
+
+function pairStackConfigs() {
+  const balanced = "affine-gate-q0.4-ridge-linear-20-ridge-affine-d0.95-l1";
+  const average = "affine-gate-q0.25-ridge-linear-20-ridge-affine-d0.95-l1";
+  const calibrated = "calibration-gate-q0.4-ridge-linear-20-calibrated-no-dependence-d0.95-l1";
+  const configs = [];
+  for (const discount of [1, 0.95, 0.8]) {
+    for (const etaScale of [0.5, 1, 2]) {
+      configs.push({
+        id: `pair-stack-2-d${discount}-e${etaScale}-uniform`,
+        family: "pair-specific-aggregator-hedge",
+        discount,
+        etaScale,
+        experts: ["no-dependence-4", balanced],
+        prior: [0.5, 0.5],
+      });
+      configs.push({
+        id: `pair-stack-2-d${discount}-e${etaScale}-qar75`,
+        family: "pair-specific-aggregator-hedge",
+        discount,
+        etaScale,
+        experts: ["no-dependence-4", balanced],
+        prior: [0.25, 0.75],
+      });
+      for (const qarPrior of [0.9, 0.95, 0.975, 0.99]) {
+        configs.push({
+          id: `pair-stack-2-d${discount}-e${etaScale}-qar${formatParameter(qarPrior * 100)}`,
+          family: "pair-specific-aggregator-hedge",
+          discount,
+          etaScale,
+          experts: ["no-dependence-4", balanced],
+          prior: [1 - qarPrior, qarPrior],
+        });
+      }
+    }
+  }
+  for (const discount of [1, 0.95]) {
+    for (const etaScale of [0.5, 1]) {
+      configs.push({
+        id: `pair-stack-4-d${discount}-e${etaScale}`,
+        family: "pair-specific-aggregator-hedge",
+        discount,
+        etaScale,
+        experts: ["no-dependence-4", average, balanced, calibrated],
+        prior: [0.1, 0.1, 0.7, 0.1],
+      });
+      for (const qarPrior of [0.85, 0.95, 0.975, 0.99]) {
+        const remainder = (1 - qarPrior) / 3;
+        configs.push({
+          id: `pair-stack-4-d${discount}-e${etaScale}-qar${formatParameter(qarPrior * 100)}`,
+          family: "pair-specific-aggregator-hedge",
+          discount,
+          etaScale,
+          experts: ["no-dependence-4", average, balanced, calibrated],
+          prior: [remainder, remainder, qarPrior, remainder],
+        });
+      }
+    }
+  }
+  for (const discount of [1, 0.95, 0.8]) {
+    for (const tolerance of [0, 0.0001, 0.00025, 0.0005, 0.001]) {
+      configs.push({
+        id: `pair-guardian-d${discount}-t${formatParameter(tolerance)}`,
+        family: "pair-specific-guardian",
+        rule: "guardian",
+        discount,
+        tolerance,
+        experts: ["no-dependence-4", balanced],
+      });
+    }
+  }
+  return configs;
 }
 
 function selectorExperts(config) {
@@ -667,10 +1151,25 @@ function pairComparison(pairAggregates, baseline, comparison) {
   };
 }
 
+function unitBreakdown(unitAggregates, methods) {
+  return [...unitAggregates.entries()].sort(([first], [second]) => first.localeCompare(second)).map(([unit, aggregate]) => {
+    const briers = Object.fromEntries(methods.map((method) => [method, aggregate.loss[method] / aggregate.n]));
+    const bestBaseline = Math.min(...SOTA_BASELINES.map((baseline) => aggregate.loss[baseline] / aggregate.n));
+    return {
+      unit,
+      targetEvaluations: aggregate.n,
+      briers,
+      bestCurrentBaseline: bestBaseline,
+      gainVsBestCurrentBaseline: Object.fromEntries(methods.map((method) => [method, bestBaseline - briers[method]])),
+    };
+  });
+}
+
 function evaluateStrategies(cellsByDate) {
   const metaConfigs = strategyConfigs();
   const gates = gateConfigs();
   const selectors = selectorConfigs();
+  const pairStacks = pairStackConfigs();
   const strategies = new Map(metaConfigs.map((config) => [config.id, {
     config,
     states: Array.from({ length: config.bucketCount }, () => createMetaState(expertNames(config.includeShrinkExperts).length)),
@@ -695,16 +1194,19 @@ function evaluateStrategies(cellsByDate) {
   const pairAggregates = new Map();
   const q1PairAggregates = new Map();
   const selectorStates = new Map(selectors.map((selector) => [selector.id, createSelectorState(selectorExperts(selector))]));
+  const pairStackStates = new Map(pairStacks.map((config) => [config.id, new Map()]));
 
   for (const date of dates) {
     const cells = cellsByDate.get(date);
     const thresholdsByBucketCount = new Map([1, 4].map((bucketCount) => [bucketCount, rollingThresholds(priorQualities, bucketCount)]));
     const sortedPriorQualities = [...priorQualities].sort((first, second) => first - second);
-    const gateThresholds = new Map([...new Set(gates.map((gate) => gate.strongQuantile))]
+    const gateThresholds = new Map([...new Set(gates.flatMap((gate) => [gate.strongQuantile, gate.middleQuantile]
+      .filter((value) => value !== undefined)))]
       .map((probability) => [probability, sortedPriorQualities.length ? quantile(sortedPriorQualities, probability) : null]));
     const updates = new Map();
     const selectedExperts = new Map(selectors.map((selector) => [selector.id, selectorExperts(selector)[selectedExpertIndex(selector, selectorStates.get(selector.id))]]));
     const selectorRoundLoss = new Map(selectors.map((selector) => [selector.id, selectorExperts(selector).map(() => 0)]));
+    const pairStackUpdates = new Map(pairStacks.map((config) => [config.id, new Map()]));
     let selectorRoundTargets = 0;
     for (const [id, strategy] of strategies) updates.set(id, Array.from({ length: strategy.config.bucketCount }, () => ({ vectors: [], outcomes: [] })));
 
@@ -718,20 +1220,69 @@ function evaluateStrategies(cellsByDate) {
         for (const [method, coefficients] of Object.entries(cell.affineCoefficients)) {
           predictions[method] = clampProbability(coefficients[0] + coefficients[1] * row.first + coefficients[2] * row.second);
         }
+        for (const [method, coefficientsByGroup] of Object.entries(cell.groupAffineCoefficients)) {
+          const feature = method.startsWith("source-") ? "sourceKey" : "questionType";
+          const coefficients = coefficientsByGroup[row[feature]];
+          predictions[method] = clampProbability(coefficients[0] + coefficients[1] * row.first + coefficients[2] * row.second);
+        }
+        for (const [method, weightsByGroup] of Object.entries(cell.groupLinearWeights)) {
+          const feature = method.startsWith("source-") ? "sourceKey" : "questionType";
+          const weight = weightsByGroup[row[feature]];
+          predictions[method] = weight * row.first + (1 - weight) * row.second;
+        }
+        for (const [method, coefficientsByGroup] of Object.entries(cell.groupLogitCoefficients)) {
+          const feature = method.startsWith("source-") ? "sourceKey" : "questionType";
+          const coefficients = coefficientsByGroup[row[feature]];
+          predictions[method] = logistic(
+            coefficients[0] + coefficients[1] * boundedLogit(row.first) + coefficients[2] * boundedLogit(row.second),
+          );
+        }
         for (const [method, coefficients] of Object.entries(cell.calibrationCoefficients)) {
           predictions[method] = clampProbability(coefficients[0] + coefficients[1] * row.basePredictions["no-dependence-4"]);
         }
         for (const slope of SHRINK_SLOPES) {
           predictions[`no-dependence-shrink-${slope}`] = shrinkProbability(row.basePredictions["no-dependence-4"], slope);
         }
+        for (const config of DEPENDENCE_RIDGE_CONFIGS) {
+          const alpha = clampProbability(config.alphaScale * cell.safeAlpha ** config.alphaPower);
+          predictions[dependenceRidgeMethodId(config)] = (1 - alpha) * row.basePredictions["historical-best"]
+            + alpha * predictions[`ridge-linear-${config.ridgeLambda}`];
+        }
         for (const gate of gates) {
           const threshold = gateThresholds.get(gate.strongQuantile);
           const strong = threshold !== null && cell.priorQuality <= threshold;
-          predictions[gate.id] = gate.family === "rolling-affine-quality-gate" || gate.family === "rolling-calibration-quality-gate"
-            ? predictions[strong ? gate.strongMethod : gate.otherMethod]
-            : strong
-              ? predictions[`ridge-linear-${gate.ridgeLambda}`]
-              : shrinkProbability(row.basePredictions["no-dependence-4"], gate.otherSlope);
+          if (gate.family === "rolling-hierarchical-group-gate" || gate.family === "rolling-correlation-hierarchical-gate") {
+            const middleThreshold = gateThresholds.get(gate.middleQuantile);
+            const middle = middleThreshold !== null && cell.priorQuality <= middleThreshold;
+            if (gate.family === "rolling-correlation-hierarchical-gate" && middle && !strong) {
+              const useFirst = cell.safeAlpha >= gate.alphaThreshold ? gate.highUsesFirst : !gate.highUsesFirst;
+              predictions[gate.id] = predictions[useFirst ? gate.firstMiddleMethod : gate.secondMiddleMethod];
+            } else {
+              predictions[gate.id] = predictions[strong
+                ? gate.strongMethod
+                : middle
+                  ? gate.middleMethod
+                  : gate.otherMethod];
+            }
+          } else {
+            predictions[gate.id] = gate.family !== "rolling-quality-gate"
+              ? predictions[strong ? gate.strongMethod : gate.otherMethod]
+              : strong
+                ? predictions[`ridge-linear-${gate.ridgeLambda}`]
+                : shrinkProbability(row.basePredictions["no-dependence-4"], gate.otherSlope);
+          }
+        }
+        for (const config of pairStacks) {
+          const states = pairStackStates.get(config.id);
+          if (!states.has(cell.pair)) states.set(cell.pair, createMetaState(config.experts.length));
+          const vector = config.experts.map((expert) => predictions[expert]);
+          predictions[config.id] = config.rule === "guardian"
+            ? guardianPrediction(vector, states.get(cell.pair), config.tolerance)
+            : priorWeightedStrategyPrediction(vector, states.get(cell.pair), config.etaScale, config.prior);
+          const updates = pairStackUpdates.get(config.id);
+          if (!updates.has(cell.pair)) updates.set(cell.pair, { vectors: [], outcomes: [] });
+          updates.get(cell.pair).vectors.push(vector);
+          updates.get(cell.pair).outcomes.push(row.outcome);
         }
         for (const [id, strategy] of strategies) {
           const thresholds = thresholdsByBucketCount.get(strategy.config.bucketCount);
@@ -771,6 +1322,12 @@ function evaluateStrategies(cellsByDate) {
     for (const selector of selectors) {
       selectorStates.set(selector.id, updateSelectorState(selector, selectorStates.get(selector.id), selectorRoundLoss.get(selector.id), selectorRoundTargets));
     }
+    for (const config of pairStacks) {
+      const states = pairStackStates.get(config.id);
+      for (const [pair, update] of pairStackUpdates.get(config.id)) {
+        states.set(pair, updateStrategyState(states.get(pair), update.vectors, update.outcomes, config.discount));
+      }
+    }
     priorQualities.push(...cells.map((cell) => cell.priorQuality));
   }
 
@@ -778,7 +1335,12 @@ function evaluateStrategies(cellsByDate) {
     targetEvaluations: aggregate.n,
     brier: summarizeAggregate(aggregate),
   }]));
-  const configs = [...metaConfigs.map((config) => ({ ...config, family: "quality-specialist-hedge" })), ...gates, ...selectors];
+  const configs = [
+    ...metaConfigs.map((config) => ({ ...config, family: "quality-specialist-hedge" })),
+    ...gates,
+    ...pairStacks,
+    ...selectors,
+  ];
   const earlyDateAggregates = subsetAggregates(dateAggregates, earlyDates);
   const lateDateAggregates = subsetAggregates(dateAggregates, lateDates);
   const q1EarlyDateAggregates = subsetAggregates(q1DateAggregates, earlyDates);
@@ -806,10 +1368,26 @@ function evaluateStrategies(cellsByDate) {
   }));
   candidateRows.sort((first, second) => first.overallBrier - second.overallBrier);
   const candidatesById = new Map(candidateRows.map((candidate) => [candidate.id, candidate]));
-  const averageChampionId = "affine-gate-q0.25-ridge-linear-20-ridge-affine-d0.95-l1";
-  const balancedRecommendationId = "affine-gate-q0.4-ridge-linear-20-ridge-affine-d0.95-l1";
+  const legacyAverageChampionId = "affine-gate-q0.25-ridge-linear-20-ridge-affine-d0.95-l1";
+  const legacyBalancedId = "affine-gate-q0.4-ridge-linear-20-ridge-affine-d0.95-l1";
+  const overallChampionId = "logit-correlation-gate-a0p35-low-first-type-logit-d0.95-l5-source-logit-d0.95-l20-source-logit-d0.95-l20";
+  const balancedRecommendationId = "logit-hierarchical-gate-q0.2-q0.5-ridge-linear-20-type-logit-d0.95-l5-source-logit-d0.95-l20";
+  const strongestGroupChampionId = "logit-hierarchical-gate-q0.25-q0.5-ridge-linear-30-type-logit-d0.95-l5-source-logit-d0.95-l5";
+  const coverageChampionId = "logit-hierarchical-gate-q0.2-q0.5-ridge-linear-30-type-logit-d0.95-l5-source-logit-d0.95-l50";
+  const boundedConvexControlId = "source-linear-d0.95-l5";
   const staticMethods = Object.entries(brierBySlice.overall.brier)
-    .filter(([method]) => !method.startsWith("qas-") && !method.startsWith("qgate-") && !method.startsWith("affine-gate-") && !method.startsWith("calibration-gate-"))
+    .filter(([method]) => !method.startsWith("qas-")
+      && !method.startsWith("qgate-")
+      && !method.startsWith("affine-gate-")
+      && !method.startsWith("calibration-gate-")
+      && !method.startsWith("dependence-gate-")
+      && !method.startsWith("group-gate-")
+      && !method.startsWith("hierarchical-gate-")
+      && !method.startsWith("correlation-gate-")
+      && !method.startsWith("bounded-")
+      && !method.startsWith("logit-")
+      && !method.startsWith("pair-stack-")
+      && !method.startsWith("pair-guardian-"))
     .map(([method, overallBrier]) => ({
       method,
       overallBrier,
@@ -835,9 +1413,14 @@ function evaluateStrategies(cellsByDate) {
     selectedOnEarlyOverall: [...candidateRows].sort((first, second) => first.earlyBrier - second.earlyBrier).slice(0, 10),
     selectedOnEarlyQ1: [...candidateRows].sort((first, second) => first.q1EarlyBrier - second.q1EarlyBrier).slice(0, 10),
     researchRecommendation: {
-      averageChampion: candidatesById.get(averageChampionId),
+      overallChampion: candidatesById.get(overallChampionId),
       balancedCandidate: candidatesById.get(balancedRecommendationId),
-      selectionRule: "prefer the balanced candidate when both overall mean and strongest-quartile improvement are objectives",
+      strongestGroupChampion: candidatesById.get(strongestGroupChampionId),
+      coverageChampion: candidatesById.get(coverageChampionId),
+      boundedConvexControl: staticMethods.find((method) => method.method === boundedConvexControlId),
+      legacyAverageChampion: candidatesById.get(legacyAverageChampionId),
+      legacyBalancedCandidate: candidatesById.get(legacyBalancedId),
+      selectionRule: "prefer the hierarchical balanced candidate when overall mean, strongest-quartile improvement, late stability, and SOTA coverage are joint objectives",
       strongestQuartileDefinition: "bottom quartile of scored pair-date cells by the better constituent model's strictly-prior cumulative Raw Brier",
       sotaDefinition: `strictly lower Raw Brier than the best of: ${SOTA_BASELINES.join(", ")}`,
       deploymentStatus: "research candidate only; freeze before independent confirmatory evaluation",
@@ -847,6 +1430,10 @@ function evaluateStrategies(cellsByDate) {
       "affine-gate-q0.4-ridge-linear-20-ridge-affine-d0.95-l1",
       "affine-gate-q0.25-ridge-linear-20-ridge-affine-d0.95-l5",
       "calibration-gate-q0.4-ridge-linear-20-calibrated-no-dependence-d0.95-l1",
+      overallChampionId,
+      balancedRecommendationId,
+      strongestGroupChampionId,
+      coverageChampionId,
     ].map((method, index) => [method, {
       vsNoDependenceDateBootstrap: dateBlockBootstrap(dateAggregates, "no-dependence-4", method, 20_000, 20_260_823 + index),
       vsFull7DateBootstrap: dateBlockBootstrap(dateAggregates, "full-7", method, 20_000, 20_260_833 + index),
@@ -889,6 +1476,86 @@ function evaluateStrategies(cellsByDate) {
         "affine-gate-q0.4-ridge-linear-20-ridge-affine-d0.95-l1",
       ),
     },
+    hierarchicalMechanismComparison: {
+      balancedMethod: balancedRecommendationId,
+      legacyBalancedMethod: legacyBalancedId,
+      overallVsLegacyDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        legacyBalancedId,
+        balancedRecommendationId,
+        20_000,
+        20_260_863,
+      ),
+      lateVsLegacyDateBootstrap: dateBlockBootstrap(
+        lateDateAggregates,
+        legacyBalancedId,
+        balancedRecommendationId,
+        20_000,
+        20_260_864,
+      ),
+      q1VsLegacyDateBootstrap: dateBlockBootstrap(
+        q1DateAggregates,
+        legacyBalancedId,
+        balancedRecommendationId,
+        20_000,
+        20_260_865,
+      ),
+      pairComparisonVsLegacy: pairComparison(pairAggregates, legacyBalancedId, balancedRecommendationId),
+      q1PairComparisonVsLegacy: pairComparison(q1PairAggregates, legacyBalancedId, balancedRecommendationId),
+    },
+    probabilitySafeMechanismComparison: {
+      overallMethod: overallChampionId,
+      balancedMethod: balancedRecommendationId,
+      coverageMethod: coverageChampionId,
+      strongestGroupMethod: strongestGroupChampionId,
+      boundedConvexControl: boundedConvexControlId,
+      overallVsBoundedConvexDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        boundedConvexControlId,
+        overallChampionId,
+        20_000,
+        20_260_873,
+      ),
+      overallVsLegacyAffineDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        legacyBalancedId,
+        overallChampionId,
+        20_000,
+        20_260_874,
+      ),
+      correlationGateVsNoCorrelationDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        balancedRecommendationId,
+        overallChampionId,
+        20_000,
+        20_260_875,
+      ),
+      q1OverallVsNoDependenceDateBootstrap: dateBlockBootstrap(
+        q1DateAggregates,
+        "no-dependence-4",
+        overallChampionId,
+        20_000,
+        20_260_876,
+      ),
+      pairComparisonVsNoDependence: pairComparison(pairAggregates, "no-dependence-4", overallChampionId),
+      q1PairComparisonVsNoDependence: pairComparison(q1PairAggregates, "no-dependence-4", overallChampionId),
+    },
+    selectedDateBreakdown: unitBreakdown(dateAggregates, [
+      "no-dependence-4",
+      legacyBalancedId,
+      overallChampionId,
+      balancedRecommendationId,
+      strongestGroupChampionId,
+      coverageChampionId,
+    ]),
+    selectedQ1DateBreakdown: unitBreakdown(q1DateAggregates, [
+      "no-dependence-4",
+      legacyBalancedId,
+      overallChampionId,
+      balancedRecommendationId,
+      strongestGroupChampionId,
+      coverageChampionId,
+    ]),
     scoredPairDateCells: allCells.length,
   };
 }
@@ -906,13 +1573,16 @@ async function main() {
   const { cellsByDate, affineDiagnostics } = await buildFrozenCells(history, parameters);
   const summary = evaluateStrategies(cellsByDate);
   const result = {
-    schemaVersion: "0.1.0-exploration",
+    schemaVersion: "0.2.0-exploration",
     generatedAt: new Date().toISOString(),
     status: "post_hoc_candidate_search_not_independent_oos",
     protocol: {
       outcomeVisibility: "all forecasts on date t are frozen before any date-t outcome updates pair or cross-pair states",
       qualityFeature: "lower of the two pair-specific cumulative Raw Brier scores from strictly earlier forecast dates",
       rollingBuckets: "quality thresholds at date t use feature values from scored pair-date cells strictly before t",
+      groupingFeatures: "official sourceKey and Dataset/Market questionType; group-specific states use strictly earlier dates only",
+      probabilitySafeMethods: "group-linear predictions are convex combinations; group-logit predictions use a logistic link, so neither requires clipping",
+      dependenceFeature: "safeAlpha is the published strictly-prior synthesis of Adjusted POG, High-Loss Lift, Adjusted-Loss Correlation, quality gap, and support",
       candidateSearchWarning: "candidate families and hyperparameters are compared on the same replay and must be frozen before confirmatory evaluation",
       metric: "target-weighted Raw Brier; difficulty-adjusted BI unavailable in this artifact",
     },
