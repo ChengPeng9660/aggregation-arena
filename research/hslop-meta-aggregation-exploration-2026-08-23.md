@@ -59,6 +59,9 @@ The online selectors also include DASH-No-Dependence-4 as a safety expert. Fixed
 | **Strongest SOTA: 30% balanced + 70% strong** | 0.1531409 | 0.1491545 | 0.1548506 | 15/21 | 277/421 | **94/118** |
 | **Unified mean: calibrated cold start + 10% skill prior** | **0.1527308** | **0.1491364** | 0.1542810 | 16/21 | 305/421 | **97/118** |
 | **Unified coverage: calibrated cold start + 30% skill prior** | 0.1529359 | 0.1491568 | **0.1541566** | **18/21** | **314/421** | **97/118** |
+| **Online overall: calibrated cold start + skill-share FTL** | **0.1526547** | 0.1491655 | 0.1541957 | **18/21** | 310/421 | 95/118 |
+| **Online balanced: calibrated cold start + skill-share Hedge** | 0.1527286 | **0.1491365** | 0.1542098 | 17/21 | 310/421 | **97/118** |
+| **Strong coverage: rolling Q1 proxy + skill-share FTL** | 0.1526559 | 0.1491804 | 0.1541972 | **18/21** | 311/421 | **98/118** |
 
 Relative to No-Dependence-4, the balanced fixed mixture:
 
@@ -85,6 +88,8 @@ Paired forecast-date bootstrap, 20,000 draws:
 | Unified mean gate vs No-Dependence-4, overall | 0.0043248 | [0.0017642, 0.0086815] | 100.0% |
 | Unified mean gate vs previous calibrated gate, overall | 0.0000250 | [-0.0001723, 0.0002550] | 58.6% |
 | 10% skill mixture vs previous strongest-mean mixture, strongest Q1 | 0.0000175 | [-0.0000300, 0.0000522] | 79.5% |
+| Online FTL gate vs fixed 10% mean gate, overall | 0.0000761 | [-0.0002362, 0.0003059] | 69.3% |
+| Online Hedge gate vs fixed 10% mean gate, overall | 0.0000022 | [-0.0001763, 0.0001359] | 50.0% |
 | Balanced fixed mixture vs base balanced HSLOP-2, overall | 0.0000830 | [-0.0000753, 0.0002595] | 84.9% |
 
 The gain over No-Dependence-4 is stable in the historical date bootstrap. The much smaller incremental gains from meta-aggregation, calibrated fallback, and hierarchical skill mixing are not independently resolved and must not be presented as confirmed.
@@ -110,7 +115,7 @@ Across the four underlying HSLOP experts:
 - at least one is strongest-pair SOTA for 94 of 118 pairs, an ex-post union ceiling of 79.7%;
 - all four are strongest-pair SOTA for 82 of 118 pairs.
 
-The base coverage expert was the best single method for overall pair-SOTA at 296/421 = 70.3%, and pair-specific FTL and Hedge did not beat it. The hierarchical skill experiment validates the stopping rule: a genuinely different cross-pair skill signal raises the observed frontier beyond the old four-expert union, to 314/421 overall and 97/118 in the strongest quartile. Selector complexity over the old expert set was not the missing ingredient.
+The base coverage expert was the best single method for overall pair-SOTA at 296/421 = 70.3%, and pair-specific FTL and Hedge did not beat it. The hierarchical skill experiment validates the stopping rule: a genuinely different cross-pair skill signal raises the observed frontier beyond the old four-expert union, to 314/421 overall and 98/118 in the strongest quartile. Selector complexity over the old expert set was not the missing ingredient.
 
 ## Cold-start support gate and a smaller expert set
 
@@ -146,19 +151,31 @@ Combining the calibrated cold-start branch with these mature-pair mixtures yield
 
 The unified mean mode improves historical overall and strongest-Q1 means simultaneously. However, its incremental reductions versus the previous champions are only 0.0000250 overall and 0.0000175 in strongest-Q1, and both paired-date bootstrap intervals cross zero. The larger coverage changes are new discovery evidence, not independent confirmation.
 
+## Strictly-prior online skill-share selection
+
+Fixed 10% and 30% shares optimize different objectives. To avoid requiring one post-hoc share forever, the follow-up treats the frozen 10%, 20%, and 30% mixtures as three experts. Global FTL and Hedge update only after a forecast date resolves and use discount 0.5. The FTL trace selects 10% through most of 2025, switches briefly to 20%, uses 30% from December 2025 through February 2026, and returns to 10% in March 2026.
+
+With the same calibrated fallback below 1,000 prior common targets:
+
+- **Online overall FTL** reaches the lowest observed overall Raw Brier, 0.1526547, with 18/21 date-SOTA, 310/421 pair-SOTA, and 9/11 late-date SOTA.
+- **Online balanced Hedge** nearly preserves the fixed 10% strongest-Q1 mean at 0.1491365 while increasing pair-SOTA from 305 to 310 and date-SOTA from 16 to 17.
+- **Rolling-quality FTL** routes the strongest prior-quality quartile to fixed 10% and other mature pairs to FTL. It reaches 98/118 strongest-pair SOTA, 311/421 overall pair-SOTA, and 18/21 date-SOTA.
+
+The online FTL reduction versus the fixed 10% gate is 0.0000761, but its paired-date interval [-0.0002362, 0.0003059] crosses zero. It is a stronger deployment-oriented candidate because its share selection is outcome-blind at prediction time and visibly adapts across regimes, not because the current replay independently proves the incremental gain.
+
 ## Does aggregation improve already-strong pairs more?
 
-It improves them, but **not by a larger average margin**. Unified mean mode reduces Raw Brier by 2.75% overall and by 0.76% in the strongest quartile. Strong pairs have less remaining error to remove. Nevertheless, the improvement is unusually consistent: it beats No-Dependence-4 on 108/118 strongest-Q1 pairs, is strictly current-baseline SOTA on 97/118, and is current-baseline SOTA on 7/8 late strongest-group dates. Unified coverage mode preserves the same 97/118 strongest-pair coverage while raising overall date and pair coverage.
+It improves them, but **not by a larger average margin**. Unified mean mode reduces Raw Brier by 2.75% overall and by 0.76% in the strongest quartile. Strong pairs have less remaining error to remove. Nevertheless, the improvement is unusually consistent: it beats No-Dependence-4 on 108/118 strongest-Q1 pairs, is strictly current-baseline SOTA on 97/118, and is current-baseline SOTA on 7/8 late strongest-group dates. The rolling-quality online mode raises strongest-pair coverage further to 98/118, at the cost of a higher strongest-Q1 mean.
 
 ## Freeze recommendation
 
 For a future confirmatory block, freeze:
 
-1. **Unified mean candidate:** calibrated fallback below 1,000 prior common targets; otherwise 90% strong-coverage HSLOP + 10% hierarchical skill pool.
-2. **Unified coverage candidate:** the same gate with a 30% hierarchical skill share above the threshold.
-3. **Primary HSLOP control:** 55% coverage HSLOP + 45% strongest HSLOP.
-4. **Previous calibrated-gate control:** calibrated fallback below 1,000 targets, then the primary HSLOP control.
-5. **Stable online challenger:** global Hedge with discount 0.5 and eta scale 1.
-6. **Overall pair-coverage control:** base coverage HSLOP-2.
+1. **Online overall candidate:** calibrated fallback below 1,000 prior common targets; otherwise global FTL over frozen 10%, 20%, and 30% skill shares with discount 0.5.
+2. **Strongest-mean candidate:** the fixed 10% skill-share gate.
+3. **Overall pair-coverage candidate:** the fixed 30% skill-share gate.
+4. **Strongest-pair coverage candidate:** rolling prior-quality quartile gate plus global skill-share FTL.
+5. **Stable online candidate:** calibrated fallback plus global skill-share Hedge with discount 0.5 and eta scale 1.
+6. **Primary controls:** the previous calibrated gate, 55/45 HSLOP mixture, No-Dependence-4, Full-7, and base coverage HSLOP-2.
 
 Retain the previous No-Dependence support gate, No-Dependence-4, Full-7, the bounded convex source pool, and base balanced HSLOP-2 as controls. Freeze all calibration constants, mixture weights, and the 1,000-target threshold before the next confirmatory time block. Do not continue tuning selector learning rates on this replay.

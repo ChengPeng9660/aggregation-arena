@@ -67,7 +67,13 @@ const HSLOP_SUPPORT_NODEP_ID = "support-gate-nHistory-t1000-nodep-meta-balanced"
 const HSLOP_SUPPORT_CALIBRATED_ID = "support-gate-nHistory-t1000-modelcal-ridge20-nodep50-meta-balanced";
 const CROSS_SKILL_STRONG_MEAN_ID = "fixed-skill-strong-sota-w0p1";
 const CROSS_SKILL_COVERAGE_ID = "support-gate-nHistory-t1000-modelcal-skill-strong-w0p3";
-const HSLOP_SUPPORT_OVERALL_ID = "support-gate-nHistory-t1000-modelcal-skill-strong-w0p1";
+const CROSS_SKILL_FIXED_MEAN_GATE_ID = "support-gate-nHistory-t1000-modelcal-skill-strong-w0p1";
+const CROSS_SKILL_FTL_ID = "global-skill-share-ftl-d0.5";
+const CROSS_SKILL_HEDGE_ID = "global-skill-share-hedge-d0.5-e1";
+const CROSS_SKILL_QUALITY_ID = "quality-gate-q0.25-skill-w0p1-skill-ftl";
+const CROSS_SKILL_ONLINE_HEDGE_GATE_ID = "support-gate-nHistory-t1000-modelcal-skill-hedge";
+const CROSS_SKILL_QUALITY_GATE_ID = "support-gate-nHistory-t1000-modelcal-quality-skill-ftl";
+const HSLOP_SUPPORT_OVERALL_ID = "support-gate-nHistory-t1000-modelcal-skill-ftl";
 const SELECTOR_EXPERTS = [
   "no-dependence-4",
   "no-dependence-shrink-1.025",
@@ -1314,6 +1320,35 @@ function pairStackConfigs() {
       prior: [1 - skillWeight, skillWeight],
     });
   }
+  const skillShareExperts = [0.1, 0.2, 0.3].map((skillWeight) => (
+    `fixed-skill-strong-sota-w${formatParameter(skillWeight)}`
+  ));
+  configs.push({
+    id: CROSS_SKILL_FTL_ID,
+    family: "global-skill-share-selector",
+    rule: "ftl",
+    scope: "global",
+    discount: 0.5,
+    experts: skillShareExperts,
+    initialIndex: 0,
+  });
+  configs.push({
+    id: CROSS_SKILL_HEDGE_ID,
+    family: "global-skill-share-hedge",
+    scope: "global",
+    discount: 0.5,
+    etaScale: 1,
+    experts: skillShareExperts,
+    prior: [0.5, 0.3, 0.2],
+  });
+  configs.push({
+    id: CROSS_SKILL_QUALITY_ID,
+    family: "rolling-quality-skill-share-gate",
+    rule: "quality-gate",
+    discount: 1,
+    qualityQuantile: 0.25,
+    experts: ["fixed-skill-strong-sota-w0p1", CROSS_SKILL_FTL_ID],
+  });
   const hslopExperts = [HSLOP_BALANCED_ID, HSLOP_COVERAGE_ID, HSLOP_STRONG_ID, HSLOP_OVERALL_ID, "no-dependence-4"];
   for (const discount of [1, 0.95, 0.8, 0.5]) {
     configs.push({
@@ -1421,6 +1456,21 @@ function pairStackConfigs() {
         `${MODEL_CALIBRATION_PILOT_ID}-ridge20-nodep50`,
         `fixed-skill-strong-sota-w${formatParameter(skillWeight)}`,
       ],
+    });
+  }
+  for (const [selectorName, selector] of [
+    ["skill-ftl", CROSS_SKILL_FTL_ID],
+    ["skill-hedge", CROSS_SKILL_HEDGE_ID],
+    ["quality-skill-ftl", CROSS_SKILL_QUALITY_ID],
+  ]) {
+    configs.push({
+      id: `support-gate-nHistory-t1000-modelcal-${selectorName}`,
+      family: "strictly-prior-online-skill-share-gate",
+      rule: "support-gate",
+      discount: 1,
+      field: "nHistory",
+      threshold: 1000,
+      experts: [`${MODEL_CALIBRATION_PILOT_ID}-ridge20-nodep50`, selector],
     });
   }
   return configs;
@@ -1583,6 +1633,9 @@ function evaluateStrategies(cellsByDate) {
   const gates = gateConfigs();
   const selectors = selectorConfigs();
   const pairStacks = pairStackConfigs();
+  const pairStackQualityQuantiles = [...new Set(pairStacks
+    .filter((config) => config.rule === "quality-gate")
+    .map((config) => config.qualityQuantile))];
   const strategies = new Map(metaConfigs.map((config) => [config.id, {
     config,
     states: Array.from({ length: config.bucketCount }, () => createMetaState(expertNames(config.includeShrinkExperts).length)),
@@ -1621,6 +1674,10 @@ function evaluateStrategies(cellsByDate) {
     const cells = cellsByDate.get(date);
     const thresholdsByBucketCount = new Map([1, 4].map((bucketCount) => [bucketCount, rollingThresholds(priorQualities, bucketCount)]));
     const sortedPriorQualities = [...priorQualities].sort((first, second) => first - second);
+    const pairStackQualityThresholds = new Map(pairStackQualityQuantiles.map((probability) => [
+      probability,
+      sortedPriorQualities.length ? quantile(sortedPriorQualities, probability) : null,
+    ]));
     const gateThresholds = new Map([...new Set(gates.flatMap((gate) => [gate.strongQuantile, gate.middleQuantile]
       .filter((value) => value !== undefined)))]
       .map((probability) => [probability, sortedPriorQualities.length ? quantile(sortedPriorQualities, probability) : null]));
@@ -1721,6 +1778,13 @@ function evaluateStrategies(cellsByDate) {
               ? fixedMixturePrediction(vector, config.prior)
               : config.rule === "ftl"
                 ? followTheLeaderPrediction(vector, states.get(stateKey), config.initialIndex)
+                : config.rule === "quality-gate"
+                  ? vector[
+                    pairStackQualityThresholds.get(config.qualityQuantile) !== null
+                      && cell.priorQuality <= pairStackQualityThresholds.get(config.qualityQuantile)
+                      ? 0
+                      : 1
+                  ]
                 : config.rule === "support-gate"
                   ? supportGatePrediction(vector, cell, config.field, config.threshold)
                 : priorWeightedStrategyPrediction(vector, states.get(stateKey), config.etaScale, config.prior);
@@ -1890,6 +1954,9 @@ function evaluateStrategies(cellsByDate) {
       HSLOP_SUPPORT_CALIBRATED_ID,
       CROSS_SKILL_STRONG_MEAN_ID,
       CROSS_SKILL_COVERAGE_ID,
+      CROSS_SKILL_FIXED_MEAN_GATE_ID,
+      CROSS_SKILL_ONLINE_HEDGE_GATE_ID,
+      CROSS_SKILL_QUALITY_GATE_ID,
       HSLOP_SUPPORT_OVERALL_ID,
     ].map((method, index) => [method, {
       vsNoDependenceDateBootstrap: dateBlockBootstrap(dateAggregates, "no-dependence-4", method, 20_000, 20_260_823 + index),
@@ -2057,7 +2124,8 @@ function evaluateStrategies(cellsByDate) {
       usage: supportGateUsage.get(HSLOP_SUPPORT_OVERALL_ID),
       previousNoDependenceFallback: candidatesById.get(HSLOP_SUPPORT_NODEP_ID),
       previousCalibratedFallback: candidatesById.get(HSLOP_SUPPORT_CALIBRATED_ID),
-      interpretation: "below 1000 strictly-prior common targets, use a conservative calibrated fallback; otherwise use a 90/10 mixture of strong-coverage HSLOP and source-conditioned hierarchical model-skill ridge pooling",
+      previousFixedSkillMeanGate: candidatesById.get(CROSS_SKILL_FIXED_MEAN_GATE_ID),
+      interpretation: "below 1000 strictly-prior common targets, use a conservative calibrated fallback; otherwise use discounted global FTL to select the 10%, 20%, or 30% hierarchical skill share from strictly earlier dates",
       vsNoDependenceDateBootstrap: dateBlockBootstrap(
         dateAggregates,
         "no-dependence-4",
@@ -2093,14 +2161,24 @@ function evaluateStrategies(cellsByDate) {
         20_000,
         20_260_897,
       ),
+      vsPreviousFixedSkillMeanDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        CROSS_SKILL_FIXED_MEAN_GATE_ID,
+        HSLOP_SUPPORT_OVERALL_ID,
+        20_000,
+        20_260_900,
+      ),
       pairComparisonVsNoDependence: pairComparison(pairAggregates, "no-dependence-4", HSLOP_SUPPORT_OVERALL_ID),
     },
     crossPairSkillRecommendation: {
       directSkillPilot: staticMethods.find((method) => method.method === MODEL_SKILL_PILOT_ID),
       strongestMeanMixture: candidatesById.get(CROSS_SKILL_STRONG_MEAN_ID),
-      unifiedMeanChampion: candidatesById.get(HSLOP_SUPPORT_OVERALL_ID),
-      unifiedCoverageChampion: candidatesById.get(CROSS_SKILL_COVERAGE_ID),
-      interpretation: "hierarchical model skill is not competitive alone, but a small fixed share supplies complementary pair weighting that improves the mean and SOTA frontiers",
+      fixedMeanGate: candidatesById.get(CROSS_SKILL_FIXED_MEAN_GATE_ID),
+      onlineOverallChampion: candidatesById.get(HSLOP_SUPPORT_OVERALL_ID),
+      onlineBalancedHedge: candidatesById.get(CROSS_SKILL_ONLINE_HEDGE_GATE_ID),
+      overallCoverageChampion: candidatesById.get(CROSS_SKILL_COVERAGE_ID),
+      strongestCoverageChampion: candidatesById.get(CROSS_SKILL_QUALITY_GATE_ID),
+      interpretation: "hierarchical model skill is not competitive alone, but small fixed or strictly-prior online shares supply complementary pair weighting that expands the mean and SOTA frontiers",
       unifiedVsPreviousOverallDateBootstrap: dateBlockBootstrap(
         dateAggregates,
         HSLOP_SUPPORT_CALIBRATED_ID,
@@ -2114,6 +2192,20 @@ function evaluateStrategies(cellsByDate) {
         CROSS_SKILL_STRONG_MEAN_ID,
         20_000,
         20_260_899,
+      ),
+      onlineOverallVsFixedMeanDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        CROSS_SKILL_FIXED_MEAN_GATE_ID,
+        HSLOP_SUPPORT_OVERALL_ID,
+        20_000,
+        20_260_900,
+      ),
+      onlineHedgeVsFixedMeanDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        CROSS_SKILL_FIXED_MEAN_GATE_ID,
+        CROSS_SKILL_ONLINE_HEDGE_GATE_ID,
+        20_000,
+        20_260_901,
       ),
       unifiedPairComparisonVsNoDependence: pairComparison(pairAggregates, "no-dependence-4", HSLOP_SUPPORT_OVERALL_ID),
       unifiedQ1PairComparisonVsNoDependence: pairComparison(q1PairAggregates, "no-dependence-4", HSLOP_SUPPORT_OVERALL_ID),
@@ -2148,6 +2240,9 @@ function evaluateStrategies(cellsByDate) {
       HSLOP_SUPPORT_CALIBRATED_ID,
       CROSS_SKILL_STRONG_MEAN_ID,
       CROSS_SKILL_COVERAGE_ID,
+      CROSS_SKILL_FIXED_MEAN_GATE_ID,
+      CROSS_SKILL_ONLINE_HEDGE_GATE_ID,
+      CROSS_SKILL_QUALITY_GATE_ID,
       HSLOP_SUPPORT_OVERALL_ID,
     ]),
     selectedQ1PairBreakdown: unitBreakdown(q1PairAggregates, [
@@ -2162,6 +2257,9 @@ function evaluateStrategies(cellsByDate) {
       HSLOP_SUPPORT_CALIBRATED_ID,
       CROSS_SKILL_STRONG_MEAN_ID,
       CROSS_SKILL_COVERAGE_ID,
+      CROSS_SKILL_FIXED_MEAN_GATE_ID,
+      CROSS_SKILL_ONLINE_HEDGE_GATE_ID,
+      CROSS_SKILL_QUALITY_GATE_ID,
       HSLOP_SUPPORT_OVERALL_ID,
     ]),
     scoredPairDateCells: allCells.length,
@@ -2182,7 +2280,7 @@ async function main() {
   const { cellsByDate, affineDiagnostics } = await buildFrozenCells(history, parameters, modelCalibrationSnapshots);
   const summary = evaluateStrategies(cellsByDate);
   const result = {
-    schemaVersion: "0.6.0-exploration",
+    schemaVersion: "0.7.0-exploration",
     generatedAt: new Date().toISOString(),
     status: "post_hoc_candidate_search_not_independent_oos",
     protocol: {
@@ -2196,6 +2294,7 @@ async function main() {
       supportGate: "cold-start routing uses only strictly-prior common-target count or prior-date count; reported SOTA includes both no-worse and strictly-better rates",
       crossPairCalibration: "model and provider probability-bin calibration snapshots use only earlier forecast dates; the selected cold-start expert is pair-ridge weighted and shrunk 50% toward No-Dependence-4",
       crossPairSkill: "model and provider Brier skill snapshots use only earlier forecast dates; pair ridge weights shrink toward source-conditioned hierarchical model-skill priors",
+      onlineSkillShare: "global FTL and Hedge choose among frozen 10%, 20%, and 30% skill shares using only losses from strictly earlier dates; the rolling quality gate uses only prior pair-quality values",
       candidateSearchWarning: "candidate families and hyperparameters are compared on the same replay and must be frozen before confirmatory evaluation",
       metric: "target-weighted Raw Brier; difficulty-adjusted BI unavailable in this artifact",
     },
