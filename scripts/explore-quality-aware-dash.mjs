@@ -33,6 +33,16 @@ const VARIANT_EXPERTS = {
 };
 const SHRINK_SLOPES = [0.8, 0.9, 0.95, 1, 1.025, 1.05, 1.075, 1.1];
 const SOTA_BASELINES = ["no-dependence-4", "two-model-hedge", "full-7", "core-5"];
+const HSLOP_OVERALL_ID = "logit-correlation-gate-a0p35-low-first-type-logit-d0.95-l5-source-logit-d0.95-l20-source-logit-d0.95-l20";
+const HSLOP_BALANCED_ID = "logit-hierarchical-gate-q0.2-q0.5-ridge-linear-20-type-logit-d0.95-l5-source-logit-d0.95-l20";
+const HSLOP_STRONG_ID = "logit-hierarchical-gate-q0.25-q0.5-ridge-linear-30-type-logit-d0.95-l5-source-logit-d0.95-l5";
+const HSLOP_COVERAGE_ID = "logit-hierarchical-gate-q0.2-q0.5-ridge-linear-30-type-logit-d0.95-l5-source-logit-d0.95-l50";
+const HSLOP_META_OVERALL_ID = "global-hslop-ftl-d0.5";
+const HSLOP_META_STABLE_ID = "global-hslop-hedge-d0.5-e1";
+const HSLOP_META_BALANCED_ID = "fixed-hslop-coverage-strong-s0p45";
+const HSLOP_META_STRONG_MEAN_ID = "fixed-hslop-balanced-strong-s0p75";
+const HSLOP_META_STRONG_SOTA_ID = "fixed-hslop-balanced-strong-s0p7";
+const HSLOP_SUPPORT_OVERALL_ID = "support-gate-nHistory-t1000-nodep-meta-balanced";
 const SELECTOR_EXPERTS = [
   "no-dependence-4",
   "no-dependence-shrink-1.025",
@@ -329,6 +339,18 @@ function guardianPrediction(predictions, state, tolerance) {
   if (state.nFeedback <= 0) return predictions[1];
   const candidateExcessLoss = (state.expertLossSum[1] - state.expertLossSum[0]) / state.nFeedback;
   return candidateExcessLoss <= tolerance ? predictions[1] : predictions[0];
+}
+
+function fixedMixturePrediction(predictions, weights) {
+  return predictions.reduce((sum, prediction, index) => sum + weights[index] * prediction, 0);
+}
+
+function followTheLeaderPrediction(predictions, state, initialIndex) {
+  return predictions[state.nFeedback > 0 ? minimumIndex(state.expertLossSum) : initialIndex];
+}
+
+function supportGatePrediction(predictions, cell, field, threshold) {
+  return predictions[cell[field] < threshold ? 0 : 1];
 }
 
 function updateStrategyState(state, predictionsByEvent, outcomes, discount) {
@@ -1037,6 +1059,119 @@ function pairStackConfigs() {
       });
     }
   }
+  for (const balancedWeight of [0.25, 0.5, 0.75]) {
+    configs.push({
+      id: `fixed-hslop-balanced-coverage-b${formatParameter(balancedWeight)}`,
+      family: "fixed-hslop-mixture",
+      rule: "fixed",
+      discount: 1,
+      experts: [HSLOP_BALANCED_ID, HSLOP_COVERAGE_ID],
+      prior: [balancedWeight, 1 - balancedWeight],
+    });
+  }
+  for (const [id, experts, prior] of [
+    ["fixed-hslop-balanced-overall", [HSLOP_BALANCED_ID, HSLOP_OVERALL_ID], [0.5, 0.5]],
+    ["fixed-hslop-balanced-strong-s25", [HSLOP_BALANCED_ID, HSLOP_STRONG_ID], [0.75, 0.25]],
+    ["fixed-hslop-pareto-3", [HSLOP_BALANCED_ID, HSLOP_COVERAGE_ID, HSLOP_STRONG_ID], [0.5, 0.25, 0.25]],
+    ["fixed-hslop-pareto-4", [HSLOP_BALANCED_ID, HSLOP_COVERAGE_ID, HSLOP_STRONG_ID, HSLOP_OVERALL_ID], [0.4, 0.2, 0.2, 0.2]],
+  ]) {
+    configs.push({ id, family: "fixed-hslop-mixture", rule: "fixed", discount: 1, experts, prior });
+  }
+  for (const strongWeight of [0.1, 0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9]) {
+    for (const [anchorName, anchor] of [
+      ["balanced", HSLOP_BALANCED_ID],
+      ["coverage", HSLOP_COVERAGE_ID],
+      ["overall", HSLOP_OVERALL_ID],
+    ]) {
+      configs.push({
+        id: `fixed-hslop-${anchorName}-strong-s${formatParameter(strongWeight)}`,
+        family: "fixed-hslop-strong-mixture",
+        rule: "fixed",
+        discount: 1,
+        experts: [anchor, HSLOP_STRONG_ID],
+        prior: [1 - strongWeight, strongWeight],
+      });
+    }
+  }
+  const hslopExperts = [HSLOP_BALANCED_ID, HSLOP_COVERAGE_ID, HSLOP_STRONG_ID, HSLOP_OVERALL_ID, "no-dependence-4"];
+  for (const discount of [1, 0.95, 0.8, 0.5]) {
+    configs.push({
+      id: `pair-hslop-ftl-d${discount}`,
+      family: "pair-specific-hslop-selector",
+      rule: "ftl",
+      discount,
+      experts: hslopExperts,
+      initialIndex: 0,
+    });
+    for (const etaScale of [0.25, 0.5, 1, 2]) {
+      configs.push({
+        id: `pair-hslop-hedge-d${discount}-e${etaScale}`,
+        family: "pair-specific-hslop-hedge",
+        discount,
+        etaScale,
+        experts: hslopExperts,
+        prior: [0.5, 0.2, 0.1, 0.15, 0.05],
+      });
+    }
+  }
+  for (const discount of [1, 0.95, 0.8, 0.5]) {
+    configs.push({
+      id: `global-hslop-ftl-d${discount}`,
+      family: "global-hslop-selector",
+      rule: "ftl",
+      scope: "global",
+      discount,
+      experts: hslopExperts,
+      initialIndex: 0,
+    });
+    for (const etaScale of [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1]) {
+      configs.push({
+        id: `global-hslop-hedge-d${discount}-e${etaScale}`,
+        family: "global-hslop-hedge",
+        scope: "global",
+        discount,
+        etaScale,
+        experts: hslopExperts,
+        prior: [0.5, 0.2, 0.1, 0.15, 0.05],
+      });
+    }
+  }
+  for (const [field, thresholds] of [
+    ["nHistory", [300, 500, 750, 1000, 1500]],
+    ["nHistoryDates", [4, 6, 8]],
+  ]) {
+    for (const threshold of thresholds) {
+      for (const [fallbackName, fallback] of [["nodep", "no-dependence-4"]]) {
+        for (const [primaryName, primary] of [
+          ["coverage", HSLOP_COVERAGE_ID],
+          ["meta-balanced", HSLOP_META_BALANCED_ID],
+        ]) {
+          configs.push({
+            id: `support-gate-${field}-t${threshold}-${fallbackName}-${primaryName}`,
+            family: "strictly-prior-support-gate",
+            rule: "support-gate",
+            discount: 1,
+            field,
+            threshold,
+            experts: [fallback, primary],
+          });
+        }
+      }
+    }
+  }
+  for (const threshold of [500, 1000]) {
+    for (const [fallbackName, fallback] of [["ridge20", "ridge-linear-20"], ["ridge30", "ridge-linear-30"]]) {
+      configs.push({
+        id: `support-gate-nHistory-t${threshold}-${fallbackName}-coverage`,
+        family: "strictly-prior-support-gate",
+        rule: "support-gate",
+        discount: 1,
+        field: "nHistory",
+        threshold,
+        experts: [fallback, HSLOP_COVERAGE_ID],
+      });
+    }
+  }
   return configs;
 }
 
@@ -1094,6 +1229,7 @@ function addPredictionLoss(aggregates, predictions, outcome) {
 
 function sotaRate(unitAggregates, method, tolerance = 0) {
   let sota = 0;
+  let strictSota = 0;
   let units = 0;
   let gainSum = 0;
   for (const aggregate of unitAggregates.values()) {
@@ -1102,9 +1238,18 @@ function sotaRate(unitAggregates, method, tolerance = 0) {
     const baselineBest = Math.min(...SOTA_BASELINES.map((baseline) => aggregate.loss[baseline] / aggregate.n));
     gainSum += baselineBest - methodBrier;
     if (methodBrier <= baselineBest + tolerance + 1e-15) sota += 1;
+    if (methodBrier < baselineBest - 1e-15) strictSota += 1;
     units += 1;
   }
-  return { units, count: sota, rate: sota / units, meanGainVsBestBaseline: gainSum / units, tolerance };
+  return {
+    units,
+    count: sota,
+    rate: sota / units,
+    strictCount: strictSota,
+    strictRate: strictSota / units,
+    meanGainVsBestBaseline: gainSum / units,
+    tolerance,
+  };
 }
 
 function subsetAggregates(unitAggregates, keys) {
@@ -1151,6 +1296,23 @@ function pairComparison(pairAggregates, baseline, comparison) {
   };
 }
 
+function methodSetCoverage(unitAggregates, methods) {
+  const bestMethodCounts = Object.fromEntries(methods.map((method) => [method, 0]));
+  let atLeastOneSota = 0;
+  let allSota = 0;
+  let units = 0;
+  for (const aggregate of unitAggregates.values()) {
+    if (!aggregate.n || methods.some((method) => aggregate.loss[method] === undefined)) continue;
+    const baselineBest = Math.min(...SOTA_BASELINES.map((baseline) => aggregate.loss[baseline] / aggregate.n));
+    const briers = methods.map((method) => aggregate.loss[method] / aggregate.n);
+    if (briers.some((value) => value <= baselineBest + 1e-15)) atLeastOneSota += 1;
+    if (briers.every((value) => value <= baselineBest + 1e-15)) allSota += 1;
+    bestMethodCounts[methods[minimumIndex(briers)]] += 1;
+    units += 1;
+  }
+  return { units, atLeastOneSota, atLeastOneSotaRate: atLeastOneSota / units, allSota, allSotaRate: allSota / units, bestMethodCounts };
+}
+
 function unitBreakdown(unitAggregates, methods) {
   return [...unitAggregates.entries()].sort(([first], [second]) => first.localeCompare(second)).map(([unit, aggregate]) => {
     const briers = Object.fromEntries(methods.map((method) => [method, aggregate.loss[method] / aggregate.n]));
@@ -1195,6 +1357,12 @@ function evaluateStrategies(cellsByDate) {
   const q1PairAggregates = new Map();
   const selectorStates = new Map(selectors.map((selector) => [selector.id, createSelectorState(selectorExperts(selector))]));
   const pairStackStates = new Map(pairStacks.map((config) => [config.id, new Map()]));
+  const globalSelectionTrace = new Map(pairStacks
+    .filter((config) => config.scope === "global" && config.rule === "ftl")
+    .map((config) => [config.id, []]));
+  const supportGateUsage = new Map(pairStacks
+    .filter((config) => config.rule === "support-gate")
+    .map((config) => [config.id, { pairDateCells: 0, fallbackPairDateCells: 0, targetEvaluations: 0, fallbackTargetEvaluations: 0 }]));
 
   for (const date of dates) {
     const cells = cellsByDate.get(date);
@@ -1207,11 +1375,23 @@ function evaluateStrategies(cellsByDate) {
     const selectedExperts = new Map(selectors.map((selector) => [selector.id, selectorExperts(selector)[selectedExpertIndex(selector, selectorStates.get(selector.id))]]));
     const selectorRoundLoss = new Map(selectors.map((selector) => [selector.id, selectorExperts(selector).map(() => 0)]));
     const pairStackUpdates = new Map(pairStacks.map((config) => [config.id, new Map()]));
+    for (const config of pairStacks.filter((candidate) => candidate.scope === "global" && candidate.rule === "ftl")) {
+      const states = pairStackStates.get(config.id);
+      if (!states.has("__global__")) states.set("__global__", createMetaState(config.experts.length));
+      const state = states.get("__global__");
+      const selectedIndex = state.nFeedback > 0 ? minimumIndex(state.expertLossSum) : config.initialIndex;
+      globalSelectionTrace.get(config.id).push({ date, expert: config.experts[selectedIndex], nFeedback: state.nFeedback });
+    }
     let selectorRoundTargets = 0;
     for (const [id, strategy] of strategies) updates.set(id, Array.from({ length: strategy.config.bucketCount }, () => ({ vectors: [], outcomes: [] })));
 
     for (const cell of cells) {
       const isQ1 = q1Ids.has(cell.id);
+      for (const config of pairStacks.filter((candidate) => candidate.rule === "support-gate")) {
+        const usage = supportGateUsage.get(config.id);
+        usage.pairDateCells += 1;
+        if (cell[config.field] < config.threshold) usage.fallbackPairDateCells += 1;
+      }
       for (const row of cell.rows) {
         const predictions = { ...row.basePredictions };
         for (const [method, weight] of Object.entries(cell.ridgeWeights)) {
@@ -1274,15 +1454,27 @@ function evaluateStrategies(cellsByDate) {
         }
         for (const config of pairStacks) {
           const states = pairStackStates.get(config.id);
-          if (!states.has(cell.pair)) states.set(cell.pair, createMetaState(config.experts.length));
+          const stateKey = config.scope === "global" ? "__global__" : cell.pair;
+          if (!states.has(stateKey)) states.set(stateKey, createMetaState(config.experts.length));
           const vector = config.experts.map((expert) => predictions[expert]);
+          if (config.rule === "support-gate") {
+            const usage = supportGateUsage.get(config.id);
+            usage.targetEvaluations += 1;
+            if (cell[config.field] < config.threshold) usage.fallbackTargetEvaluations += 1;
+          }
           predictions[config.id] = config.rule === "guardian"
-            ? guardianPrediction(vector, states.get(cell.pair), config.tolerance)
-            : priorWeightedStrategyPrediction(vector, states.get(cell.pair), config.etaScale, config.prior);
+            ? guardianPrediction(vector, states.get(stateKey), config.tolerance)
+            : config.rule === "fixed"
+              ? fixedMixturePrediction(vector, config.prior)
+              : config.rule === "ftl"
+                ? followTheLeaderPrediction(vector, states.get(stateKey), config.initialIndex)
+                : config.rule === "support-gate"
+                  ? supportGatePrediction(vector, cell, config.field, config.threshold)
+                : priorWeightedStrategyPrediction(vector, states.get(stateKey), config.etaScale, config.prior);
           const updates = pairStackUpdates.get(config.id);
-          if (!updates.has(cell.pair)) updates.set(cell.pair, { vectors: [], outcomes: [] });
-          updates.get(cell.pair).vectors.push(vector);
-          updates.get(cell.pair).outcomes.push(row.outcome);
+          if (!updates.has(stateKey)) updates.set(stateKey, { vectors: [], outcomes: [] });
+          updates.get(stateKey).vectors.push(vector);
+          updates.get(stateKey).outcomes.push(row.outcome);
         }
         for (const [id, strategy] of strategies) {
           const thresholds = thresholdsByBucketCount.get(strategy.config.bucketCount);
@@ -1370,10 +1562,10 @@ function evaluateStrategies(cellsByDate) {
   const candidatesById = new Map(candidateRows.map((candidate) => [candidate.id, candidate]));
   const legacyAverageChampionId = "affine-gate-q0.25-ridge-linear-20-ridge-affine-d0.95-l1";
   const legacyBalancedId = "affine-gate-q0.4-ridge-linear-20-ridge-affine-d0.95-l1";
-  const overallChampionId = "logit-correlation-gate-a0p35-low-first-type-logit-d0.95-l5-source-logit-d0.95-l20-source-logit-d0.95-l20";
-  const balancedRecommendationId = "logit-hierarchical-gate-q0.2-q0.5-ridge-linear-20-type-logit-d0.95-l5-source-logit-d0.95-l20";
-  const strongestGroupChampionId = "logit-hierarchical-gate-q0.25-q0.5-ridge-linear-30-type-logit-d0.95-l5-source-logit-d0.95-l5";
-  const coverageChampionId = "logit-hierarchical-gate-q0.2-q0.5-ridge-linear-30-type-logit-d0.95-l5-source-logit-d0.95-l50";
+  const overallChampionId = HSLOP_OVERALL_ID;
+  const balancedRecommendationId = HSLOP_BALANCED_ID;
+  const strongestGroupChampionId = HSLOP_STRONG_ID;
+  const coverageChampionId = HSLOP_COVERAGE_ID;
   const boundedConvexControlId = "source-linear-d0.95-l5";
   const staticMethods = Object.entries(brierBySlice.overall.brier)
     .filter(([method]) => !method.startsWith("qas-")
@@ -1422,7 +1614,7 @@ function evaluateStrategies(cellsByDate) {
       legacyBalancedCandidate: candidatesById.get(legacyBalancedId),
       selectionRule: "prefer the hierarchical balanced candidate when overall mean, strongest-quartile improvement, late stability, and SOTA coverage are joint objectives",
       strongestQuartileDefinition: "bottom quartile of scored pair-date cells by the better constituent model's strictly-prior cumulative Raw Brier",
-      sotaDefinition: `strictly lower Raw Brier than the best of: ${SOTA_BASELINES.join(", ")}`,
+      sotaDefinition: `Raw Brier no higher than the best of: ${SOTA_BASELINES.join(", ")}; strictCount separately requires a strictly lower score`,
       deploymentStatus: "research candidate only; freeze before independent confirmatory evaluation",
     },
     finalistRobustness: Object.fromEntries([
@@ -1434,6 +1626,12 @@ function evaluateStrategies(cellsByDate) {
       balancedRecommendationId,
       strongestGroupChampionId,
       coverageChampionId,
+      HSLOP_META_OVERALL_ID,
+      HSLOP_META_STABLE_ID,
+      HSLOP_META_BALANCED_ID,
+      HSLOP_META_STRONG_MEAN_ID,
+      HSLOP_META_STRONG_SOTA_ID,
+      HSLOP_SUPPORT_OVERALL_ID,
     ].map((method, index) => [method, {
       vsNoDependenceDateBootstrap: dateBlockBootstrap(dateAggregates, "no-dependence-4", method, 20_000, 20_260_823 + index),
       vsFull7DateBootstrap: dateBlockBootstrap(dateAggregates, "full-7", method, 20_000, 20_260_833 + index),
@@ -1540,6 +1738,90 @@ function evaluateStrategies(cellsByDate) {
       pairComparisonVsNoDependence: pairComparison(pairAggregates, "no-dependence-4", overallChampionId),
       q1PairComparisonVsNoDependence: pairComparison(q1PairAggregates, "no-dependence-4", overallChampionId),
     },
+    hslopComplementarity: {
+      methods: [overallChampionId, balancedRecommendationId, strongestGroupChampionId, coverageChampionId],
+      pairCoverage: methodSetCoverage(
+        pairAggregates,
+        [overallChampionId, balancedRecommendationId, strongestGroupChampionId, coverageChampionId],
+      ),
+      strongestPairCoverage: methodSetCoverage(
+        q1PairAggregates,
+        [overallChampionId, balancedRecommendationId, strongestGroupChampionId, coverageChampionId],
+      ),
+      dateCoverage: methodSetCoverage(
+        dateAggregates,
+        [overallChampionId, balancedRecommendationId, strongestGroupChampionId, coverageChampionId],
+      ),
+    },
+    metaAggregationRecommendation: {
+      overallMeanChampion: candidatesById.get(HSLOP_META_OVERALL_ID),
+      stableOnlineHedge: candidatesById.get(HSLOP_META_STABLE_ID),
+      balancedFixedMixture: candidatesById.get(HSLOP_META_BALANCED_ID),
+      strongestMeanMixture: candidatesById.get(HSLOP_META_STRONG_MEAN_ID),
+      strongestSotaMixture: candidatesById.get(HSLOP_META_STRONG_SOTA_ID),
+      overallPairCoverageChampion: candidatesById.get(coverageChampionId),
+      interpretation: "fixed mixtures reduce squared-error variance; global FTL/Hedge adapt only from strictly prior dates; all meta hyperparameters remain post-hoc candidates",
+      balancedVsBaseDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        balancedRecommendationId,
+        HSLOP_META_BALANCED_ID,
+        20_000,
+        20_260_883,
+      ),
+      balancedVsNoDependenceDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        "no-dependence-4",
+        HSLOP_META_BALANCED_ID,
+        20_000,
+        20_260_884,
+      ),
+      balancedQ1VsNoDependenceDateBootstrap: dateBlockBootstrap(
+        q1DateAggregates,
+        "no-dependence-4",
+        HSLOP_META_BALANCED_ID,
+        20_000,
+        20_260_885,
+      ),
+      strongestMeanQ1VsNoDependenceDateBootstrap: dateBlockBootstrap(
+        q1DateAggregates,
+        "no-dependence-4",
+        HSLOP_META_STRONG_MEAN_ID,
+        20_000,
+        20_260_886,
+      ),
+      balancedPairComparisonVsNoDependence: pairComparison(pairAggregates, "no-dependence-4", HSLOP_META_BALANCED_ID),
+      balancedQ1PairComparisonVsNoDependence: pairComparison(q1PairAggregates, "no-dependence-4", HSLOP_META_BALANCED_ID),
+      strongestSotaQ1PairComparisonVsNoDependence: pairComparison(q1PairAggregates, "no-dependence-4", HSLOP_META_STRONG_SOTA_ID),
+    },
+    supportGateRecommendation: {
+      overallMeanChampion: candidatesById.get(HSLOP_SUPPORT_OVERALL_ID),
+      usage: supportGateUsage.get(HSLOP_SUPPORT_OVERALL_ID),
+      interpretation: "use No-Dependence-4 while strictly-prior common-target support is below 1000, then use the balanced HSLOP fixed mixture",
+      vsNoDependenceDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        "no-dependence-4",
+        HSLOP_SUPPORT_OVERALL_ID,
+        20_000,
+        20_260_893,
+      ),
+      vsMetaBalancedDateBootstrap: dateBlockBootstrap(
+        dateAggregates,
+        HSLOP_META_BALANCED_ID,
+        HSLOP_SUPPORT_OVERALL_ID,
+        20_000,
+        20_260_894,
+      ),
+      lateVsMetaBalancedDateBootstrap: dateBlockBootstrap(
+        lateDateAggregates,
+        HSLOP_META_BALANCED_ID,
+        HSLOP_SUPPORT_OVERALL_ID,
+        20_000,
+        20_260_895,
+      ),
+      pairComparisonVsNoDependence: pairComparison(pairAggregates, "no-dependence-4", HSLOP_SUPPORT_OVERALL_ID),
+    },
+    globalSelectionTrace: Object.fromEntries(globalSelectionTrace),
+    supportGateUsage: Object.fromEntries(supportGateUsage),
     selectedDateBreakdown: unitBreakdown(dateAggregates, [
       "no-dependence-4",
       legacyBalancedId,
@@ -1555,6 +1837,26 @@ function evaluateStrategies(cellsByDate) {
       balancedRecommendationId,
       strongestGroupChampionId,
       coverageChampionId,
+    ]),
+    selectedPairBreakdown: unitBreakdown(pairAggregates, [
+      ...SOTA_BASELINES,
+      overallChampionId,
+      balancedRecommendationId,
+      strongestGroupChampionId,
+      coverageChampionId,
+      HSLOP_META_BALANCED_ID,
+      HSLOP_META_STRONG_SOTA_ID,
+      HSLOP_SUPPORT_OVERALL_ID,
+    ]),
+    selectedQ1PairBreakdown: unitBreakdown(q1PairAggregates, [
+      ...SOTA_BASELINES,
+      overallChampionId,
+      balancedRecommendationId,
+      strongestGroupChampionId,
+      coverageChampionId,
+      HSLOP_META_BALANCED_ID,
+      HSLOP_META_STRONG_SOTA_ID,
+      HSLOP_SUPPORT_OVERALL_ID,
     ]),
     scoredPairDateCells: allCells.length,
   };
@@ -1573,7 +1875,7 @@ async function main() {
   const { cellsByDate, affineDiagnostics } = await buildFrozenCells(history, parameters);
   const summary = evaluateStrategies(cellsByDate);
   const result = {
-    schemaVersion: "0.2.0-exploration",
+    schemaVersion: "0.4.0-exploration",
     generatedAt: new Date().toISOString(),
     status: "post_hoc_candidate_search_not_independent_oos",
     protocol: {
@@ -1583,6 +1885,8 @@ async function main() {
       groupingFeatures: "official sourceKey and Dataset/Market questionType; group-specific states use strictly earlier dates only",
       probabilitySafeMethods: "group-linear predictions are convex combinations; group-logit predictions use a logistic link, so neither requires clipping",
       dependenceFeature: "safeAlpha is the published strictly-prior synthesis of Adjusted POG, High-Loss Lift, Adjusted-Loss Correlation, quality gap, and support",
+      metaAggregation: "fixed mixtures use no outcomes at prediction time; FTL and Hedge weights on date t are frozen from losses on strictly earlier dates",
+      supportGate: "cold-start routing uses only strictly-prior common-target count or prior-date count; reported SOTA includes both no-worse and strictly-better rates",
       candidateSearchWarning: "candidate families and hyperparameters are compared on the same replay and must be frozen before confirmatory evaluation",
       metric: "target-weighted Raw Brier; difficulty-adjusted BI unavailable in this artifact",
     },

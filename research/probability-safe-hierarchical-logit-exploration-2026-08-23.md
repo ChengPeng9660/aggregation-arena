@@ -56,7 +56,7 @@ D-HSLOP-2 uses the same structure and additionally routes the middle-quality gro
 
 ## Main results
 
-“SOTA” below means strictly lower Raw Brier than the best of the four current replay baselines: DASH-No-Dependence-4, Two-model Hedge, DASH-Full-7, and DASH-Core-5. It is not a claim against every published method.
+“SOTA” below means Raw Brier no higher than the best of the four current replay baselines: DASH-No-Dependence-4, Two-model Hedge, DASH-Full-7, and DASH-Core-5. These probability-safe candidates do not exactly copy a baseline, so their reported no-worse and strictly-better counts coincide. It is not a claim against every published method.
 
 | Method | Overall ↓ | Strongest Q1 ↓ | Late 11 dates ↓ | Date SOTA | Pair SOTA | Q1 pair SOTA |
 |---|---:|---:|---:|---:|---:|---:|

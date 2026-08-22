@@ -77,7 +77,7 @@ The gate, thresholds, regression coefficients, and constituent quality scores ar
 | Average-only champion, q=0.25 | **0.1553283** | 0.1501508 | 0.1560664 | 14/21 (66.7%) | 161/421 (38.2%) | 32/118 (27.1%) |
 | **QAR-Stack-2, q=0.40** | 0.1553548 | **0.1499704** | **0.1559965** | **14/21 (66.7%)** | **188/421 (44.7%)** | **55/118 (46.6%)** |
 
-“SOTA” here has a deliberately narrow operational meaning: strictly lower Raw Brier than the best of the four current replay baselines—DASH-No-Dependence-4, Two-model Hedge, DASH-Full-7, and DASH-Core-5. It is not a claim against every published forecast-aggregation algorithm.
+“SOTA” here has a deliberately narrow operational meaning: Raw Brier no higher than the best of the four current replay baselines—DASH-No-Dependence-4, Two-model Hedge, DASH-Full-7, and DASH-Core-5. The original candidates do not exactly copy a baseline, so their no-worse and strictly-better counts coincide. It is not a claim against every published forecast-aggregation algorithm.
 
 Relative to DASH-No-Dependence-4, QAR-Stack-2:
 
