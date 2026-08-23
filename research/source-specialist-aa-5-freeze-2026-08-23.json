@@ -1,0 +1,134 @@
+{
+  "schemaVersion": "1.0.0",
+  "status": "post_hoc_phase3_challengers_future_confirmation_required",
+  "methods": {
+    "mean": {
+      "id": "square-aa-source5-e2p0-p200p0-s1p0",
+      "name": "Source-Specialist AA-5 Mean",
+      "learningRate": 2.0,
+      "globalPseudoCount": 200.0,
+      "shrink": 1.0,
+      "objective": "target-weighted mean Raw Brier"
+    },
+    "sota": {
+      "id": "square-aa-source5-e2p0-p50p0-s0p75",
+      "name": "Source-Specialist AA-5 SOTA",
+      "learningRate": 2.0,
+      "globalPseudoCount": 50.0,
+      "shrink": 0.75,
+      "objective": "strict pair win rate versus ex-post better constituent"
+    }
+  },
+  "sharedDefinition": {
+    "experts": [
+      "historical-best",
+      "no-dependence-4",
+      "nodep-gap-g5p0",
+      "full-7",
+      "two-model-hedge"
+    ],
+    "state": "exact model pair by official ForecastBench source",
+    "adjustedLoss": "source_cumulative_loss + globalPseudoCount * global_cumulative_loss / global_feedback",
+    "posterior": "exp(-learningRate * adjustedLoss), normalized across experts",
+    "substitution": "qAA = clip((1 + g0 - g1) / 2, 0, 1), where gy = -log(sum_k posterior_k * exp(-learningRate * (y-p_k)^2)) / learningRate",
+    "finalPrediction": "historicalBest + shrink * (qAA - historicalBest)"
+  },
+  "protocol": {
+    "developmentCutoff": "2025-12-21",
+    "confirmationCutoff": "2026-03-29",
+    "outcomeVisibility": "resolution_date strictly earlier than forecast date",
+    "selection": "development Pareto mechanism families, then objective-specific internal-validation selection",
+    "metric": "target-weighted Raw Brier",
+    "candidateMethods": 54,
+    "bootstrapReplicates": 20000
+  },
+  "support": {
+    "development": {
+      "dates": 14,
+      "cells": 448,
+      "targetEvaluations": 536418,
+      "pairs": 214
+    },
+    "internalValidation": {
+      "dates": 7,
+      "cells": 1119,
+      "targetEvaluations": 1084108,
+      "pairs": 348
+    },
+    "secondaryConfirmation": {
+      "dates": 9,
+      "cells": 211,
+      "targetEvaluations": 167577,
+      "pairs": 91
+    }
+  },
+  "secondaryConfirmation": {
+    "mean": {
+      "overallBrier": 0.15545072136558677,
+      "gainVsHistoricalBest": 0.0023227424290212595,
+      "gainVsHistoricalBestCi95": [
+        0.001361420656350508,
+        0.0029332974929245736
+      ],
+      "advantageVsSSH5": 0.000059917701300555764,
+      "advantageVsSSH5Ci95": [
+        0.000017692704862852045,
+        0.0001350032271479259
+      ],
+      "historicallyStrongQ1Gain": 0.0027702130358150437,
+      "historicallyStrongQ1GainCi95": [
+        0.00041725408921201146,
+        0.0032204014300904658
+      ],
+      "strictPairWins": 68,
+      "evaluatedPairs": 91,
+      "strictPairWinRate": 0.7472527472527473,
+      "macroPairGainVsExPostBest": 0.0007376860727736756,
+      "realizedStrongestQ1Gain": -0.00041252587492316973,
+      "realizedStrongestQ1GainCi95": [
+        -0.0014903723404206452,
+        0.00007477814732513395
+      ]
+    },
+    "sota": {
+      "overallBrier": 0.15573601940785076,
+      "gainVsHistoricalBest": 0.0020374443867572597,
+      "gainVsHistoricalBestCi95": [
+        0.0010830118440089457,
+        0.0024960543792793897
+      ],
+      "advantageVsSSH5": -0.0002253803409634443,
+      "advantageVsSSH5Ci95": [
+        -0.00036771492663621367,
+        -0.00003137894066980359
+      ],
+      "historicallyStrongQ1Gain": 0.002233571878386414,
+      "historicallyStrongQ1GainCi95": [
+        0.00039986042885746846,
+        0.0025691923276671296
+      ],
+      "strictPairWins": 70,
+      "evaluatedPairs": 91,
+      "strictPairWinRate": 0.7692307692307693,
+      "macroPairGainVsExPostBest": 0.0004498003710685753,
+      "realizedStrongestQ1Gain": -0.00043067793972643303,
+      "realizedStrongestQ1GainCi95": [
+        -0.0012787960261479686,
+        -0.00004723617127011043
+      ]
+    }
+  },
+  "artifacts": {
+    "officialArchiveSha256": "df42f18ea07e8a496329ce17daff2c1663caa05818cbc8c799860672e268c3d7",
+    "parameterSha256": "6787ef970d2f03e920db32c1bb991ad0c1911a5a404484c2ce4dd6c6483a9ab1",
+    "script": {
+      "path": "scripts/explore-square-aa-source-frontier.py",
+      "sha256": "3ae658c0054c9e2daed1635aa49d9904ac5e93e2c0eeaeb6309f535bf77b8b55"
+    },
+    "generatedResult": {
+      "path": "output/research/square-aa-source-frontier-2026-08-23.json",
+      "sha256": "80efd1f928c84e6d39943f2e6aa5f813648cb79a658784e42b6ee24fca65ab8f",
+      "sanitizedSha256": "c50a1e9ed98849c68784dde808342c4ce2ccaa0d20a047f51461585c34433302"
+    }
+  }
+}
