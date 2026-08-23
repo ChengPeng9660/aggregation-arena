@@ -1,0 +1,85 @@
+{
+  "schemaVersion": "1.0.0",
+  "status": "post_hoc_phase2_challenger_future_confirmation_required",
+  "method": {
+    "id": "fixed-hedge-source5-e0p5-p200p0",
+    "name": "Source-Specialist Hedge-5",
+    "learningRate": 0.5,
+    "globalPseudoCount": 200,
+    "experts": [
+      "historical-best",
+      "no-dependence-4",
+      "nodep-gap-g5p0",
+      "full-7",
+      "two-model-hedge"
+    ],
+    "weightFormula": "exp(-0.5 * (source_cumulative_loss + 200 * global_cumulative_loss / global_feedback)) normalized across experts"
+  },
+  "protocol": {
+    "cutoff": "2026-03-29",
+    "outcomeVisibility": "resolution_date strictly earlier than forecast date",
+    "candidateSelection": "discovery dates only",
+    "metric": "target-weighted Raw Brier",
+    "candidateMethods": 54,
+    "bootstrapReplicates": 20000
+  },
+  "support": {
+    "discovery": {"dates": 21, "cells": 1567, "targetEvaluations": 1620526, "pairs": 421},
+    "confirmation": {"dates": 9, "cells": 211, "targetEvaluations": 167577, "pairs": 91}
+  },
+  "discovery": {
+    "selectionRoles": ["strongQ1", "balanced"],
+    "overallBrier": 0.15380742250759066,
+    "historicallyStrongQ1Gain": 0.0011764254237113256,
+    "strictPairWins": 306,
+    "evaluatedPairs": 421
+  },
+  "confirmation": {
+    "overallBrier": 0.1555106390668873,
+    "gainVsHistoricalBest": 0.002262824727720704,
+    "gainVsHistoricalBestCi95": [0.0010325820352387056, 0.002849366520150833],
+    "advantageVsNoDependence4": 0.00004633898558538544,
+    "advantageVsNoDependence4Ci95": [-0.000022929756477049974, 0.000274054172407831],
+    "advantageVsGapSafeG5": 0.00018003488997835,
+    "advantageVsGapSafeG5Ci95": [0.00012054610115932325, 0.0003325961798954733],
+    "advantageVsFull7": 0.0002041529316275863,
+    "advantageVsFull7Ci95": [-0.00010136381965019121, 0.00047230160394735594],
+    "historicallyStrongQ1Gain": 0.0027207349749834723,
+    "historicallyStrongQ1GainCi95": [0.0004721860852540504, 0.0031335529352383993],
+    "strictPairWins": 68,
+    "evaluatedPairs": 91,
+    "strictPairWinRate": 0.7472527472527473,
+    "realizedStrongestQ1Gain": -0.00034010235136537327,
+    "realizedStrongestQ1GainCi95": [-0.00126302567183334, 0.00007715953211004621]
+  },
+  "pairWinSetComparisons": {
+    "noDependence4": {"both": 62, "ssh5Only": 6, "controlOnly": 0, "neither": 23},
+    "gapSafeG5": {"both": 65, "ssh5Only": 3, "controlOnly": 0, "neither": 23},
+    "full7": {"both": 55, "ssh5Only": 13, "controlOnly": 1, "neither": 22}
+  },
+  "questionTypeSlices": {
+    "Dataset": {
+      "targetEvaluations": 144099,
+      "gainVsHistoricalBest": 0.0023571190049408632,
+      "advantageVsNoDependence4": 0.000055328659715066846
+    },
+    "Market": {
+      "targetEvaluations": 23478,
+      "gainVsHistoricalBest": 0.001684082456098426,
+      "advantageVsNoDependence4": -0.00000883620192687539
+    }
+  },
+  "artifacts": {
+    "officialArchiveSha256": "df42f18ea07e8a496329ce17daff2c1663caa05818cbc8c799860672e268c3d7",
+    "parameterSha256": "6787ef970d2f03e920db32c1bb991ad0c1911a5a404484c2ce4dd6c6483a9ab1",
+    "script": {
+      "path": "scripts/explore-mixable-source-frontier.py",
+      "sha256": "08c1d62bdc4402dc5f7041763cf0eddc9037264cb2cdf2dc320bb5a5643a8bea"
+    },
+    "generatedResult": {
+      "path": "output/research/mixable-source-frontier-2026-08-23.json",
+      "sha256": "16ac5964cd5999c66b8ebf2152dbb437e7ccf459bed7454e206d56f17fb6e9b1",
+      "sanitizedRepeatSha256": "5a887eaa1352abfb48f71fa06e00244e225d8c51c6f93fcaafb8574427a2aff2"
+    }
+  }
+}
