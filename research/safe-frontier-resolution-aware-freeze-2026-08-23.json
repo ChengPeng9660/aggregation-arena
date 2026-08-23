@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "1.0.0",
+  "status": "post_hoc_candidate_search_secondary_confirmation_required",
+  "cutoff": "2026-03-29",
+  "officialArchiveSha256": "df42f18ea07e8a496329ce17daff2c1663caa05818cbc8c799860672e268c3d7",
+  "parameterSha256": "6787ef970d2f03e920db32c1bb991ad0c1911a5a404484c2ce4dd6c6483a9ab1",
+  "protocol": {
+    "outcomeVisibility": "resolution_date strictly earlier than forecast date",
+    "metric": "target-weighted Raw Brier",
+    "candidateSelection": "discovery dates only",
+    "candidateMethods": 54,
+    "bootstrapReplicates": 20000
+  },
+  "support": {
+    "discovery": {"dates": 21, "cells": 1567, "targetEvaluations": 1620526, "pairs": 421},
+    "confirmation": {"dates": 9, "cells": 211, "targetEvaluations": 167577, "pairs": 91}
+  },
+  "frozenOperatingPoints": {
+    "average": {
+      "id": "no-dependence-4",
+      "confirmationBrier": 0.15555697805247268,
+      "confirmationGainVsHistoricalBest": 0.0022164857421353187,
+      "historicallyStrongQ1Gain": 0.00300911088403254,
+      "strictPairWins": 62,
+      "evaluatedPairs": 91
+    },
+    "highPairSotaChallenger": {
+      "id": "nodep-gap-g5p0",
+      "name": "GapSafe-DASH-2 G5",
+      "definition": "historical_best + exp(-abs(prior_BI_a-prior_BI_b)/5) * (no_dependence_4-historical_best)",
+      "confirmationBrier": 0.15569067395686564,
+      "confirmationGainVsHistoricalBest": 0.002082789837742354,
+      "gainCi95": [0.0006164764908371289, 0.002618843365545877],
+      "historicallyStrongQ1Gain": 0.0026695270000906502,
+      "historicallyStrongQ1GainCi95": [0.00014106242428244271, 0.003069058223149298],
+      "strictPairWins": 65,
+      "evaluatedPairs": 91,
+      "strictPairWinRate": 0.7142857142857143,
+      "brierCostVsNoDependence4": 0.00013369590439296452,
+      "brierCostCi95": [0.000009051040414908787, 0.00024463852418328454],
+      "realizedStrongestQ1GainVsExPostBest": -0.00018362871556359232,
+      "realizedStrongestQ1GainCi95": [-0.00106805499034055, 0.00021622830941813915]
+    }
+  },
+  "discoveryChampions": {
+    "overall": "full-7",
+    "strongQ1": "nodep-gap-floor-f0p5-g2p0",
+    "pairSota": "nodep-gap-g1p0",
+    "balanced": "frontier-hedge-5"
+  },
+  "artifacts": {
+    "script": {
+      "path": "scripts/explore-safe-frontier-resolution-aware.py",
+      "sha256": "f2c085a651c8ec5a90690e94888d1f1530d2a446ee8612efa137ba335d2f042e"
+    },
+    "generatedResult": {
+      "path": "output/research/safe-frontier-resolution-aware-discovery-2026-08-23.json",
+      "sha256": "36d6e91b693a6f910c3e04d632fd5fd37632e724dfc98c7336ff928135204f1b",
+      "sanitizedRepeatSha256": "2cc87d7f1ca3c562d12c538faf4c58cd20bed1401cf8d37120146c28fa864b13"
+    }
+  }
+}
