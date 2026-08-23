@@ -1,0 +1,112 @@
+{
+  "schemaVersion": "1.0.0",
+  "status": "stopped_no_meta_promotion",
+  "userDecision": "stop exploring new algorithms and consolidate existing results",
+  "decision": {
+    "promoteMetaMethod": false,
+    "recommendedSingleAlgorithm": "hier-aa-source-q2-5-e2p0-p50p0-s1p0",
+    "recommendedName": "HSQAA-5 Balanced",
+    "defensibleStrongQ1Algorithm": "square-aa-source5-e2p0-p200p0-s1p0",
+    "pairSotaAlgorithm": "square-aa-source5-e2p0-p50p0-s0p75",
+    "pairSotaWins": 70,
+    "pairSotaPairs": 91
+  },
+  "phase6Selection": {
+    "overall": "context-aa-full-l100p0-p200p0-s1p0",
+    "strongQ1": "square-aa-source5-e2p0-p200p0-s1p0",
+    "pairSota": "square-aa-source5-e2p0-p50p0-s0p75",
+    "balanced": "context-aa-full-l100p0-p50p0-s1p0",
+    "metaSelectedForAnyObjective": false
+  },
+  "recommendedResult": {
+    "id": "hier-aa-source-q2-5-e2p0-p50p0-s1p0",
+    "secondaryBrier": 0.1554384475605738,
+    "gainVsHistoricalBest": 0.0023350162340342283,
+    "historicallyStrongQ1Gain": 0.002793602024684265,
+    "strictPairWins": 68,
+    "evaluatedPairs": 91,
+    "macroPairGainVsExPostBest": 0.0007495454923032572,
+    "realizedStrongestQ1Gain": -0.0004009766485021708,
+    "advantageVsSSAA5Mean": 0.000012273805012968733,
+    "advantageVsSSAA5MeanCi95": [
+      0.0000036170993856074677,
+      0.000022241779524185997
+    ]
+  },
+  "objectiveSpecificResults": {
+    "lowestPreselectedSecondaryPoint": {
+      "id": "hier-aa-source-q4-5-e1p0-p500p0-s1p0",
+      "secondaryBrier": 0.15542750893053942,
+      "status": "research_track_not_recommended_over_balanced"
+    },
+    "highestSecondaryHistoricalQ1Point": {
+      "id": "full-7",
+      "name": "DASH-Hedge-2",
+      "historicallyStrongQ1Gain": 0.003168623876534194,
+      "status": "late_point_not_temporally_replicated"
+    },
+    "highestPairSotaRate": {
+      "id": "square-aa-source5-e2p0-p50p0-s0p75",
+      "name": "SSAA-5 SOTA",
+      "strictPairWins": 70,
+      "evaluatedPairs": 91,
+      "strictWinRate": 0.7692307692307693
+    }
+  },
+  "postHocDiagnosticOnly": {
+    "metaStrong2SourceRecent": {
+      "id": "meta-aa-strong2-source-recent90-e2p0-s1p0",
+      "developmentAdvantageVsHSQAA": 0.000049084997756715376,
+      "internalAdvantageVsHSQAA": -0.00017272794457093288,
+      "secondaryAdvantageVsHSQAA": 0.00007082876717245945,
+      "secondaryBrier": 0.15536761879340133,
+      "strictPairWins": 68,
+      "promotionProhibited": true
+    },
+    "metaFrontier4SourceRecent": {
+      "id": "meta-aa-frontier4-source-recent90-e2p0-s1p0",
+      "secondaryBrier": 0.15536448427279684,
+      "strictPairWins": 68,
+      "promotionProhibited": true,
+      "reason": "family not admitted by development Pareto selection"
+    },
+    "contextCompact": {
+      "id": "context-aa-compact-l10000p0-p200p0-s1p0",
+      "secondaryBrier": 0.15539094079473037,
+      "strictPairWins": 68,
+      "promotionProhibited": true,
+      "reason": "exact ID not selected by internal validation"
+    }
+  },
+  "protocol": {
+    "developmentCutoff": "2025-12-21",
+    "confirmationCutoff": "2026-03-29",
+    "outcomeVisibility": "resolution_date strictly earlier than forecast date",
+    "metric": "target-weighted Raw Brier",
+    "fixedPairs": 421,
+    "candidateMethods": 60,
+    "metaCandidates": 48,
+    "settledMetaFeedback": 1743544,
+    "allFeedbackStrictlyPreResolution": true,
+    "secondaryEvidenceIsIndependentOOS": false
+  },
+  "reproducibility": {
+    "fullRunCompleted": true,
+    "fullRepeatCompleted": false,
+    "invariantsPassed": true,
+    "reasonRepeatNotStarted": "user stopped new-algorithm exploration after the completed phase-6 run"
+  },
+  "artifacts": {
+    "officialArchiveSha256": "df42f18ea07e8a496329ce17daff2c1663caa05818cbc8c799860672e268c3d7",
+    "parameterSha256": "6787ef970d2f03e920db32c1bb991ad0c1911a5a404484c2ce4dd6c6483a9ab1",
+    "script": {
+      "path": "scripts/explore-online-meta-aa.py",
+      "sha256": "af9028540fb1c6b7d967a5452817167d0e70eca1ec85c76c1c4c7799eeef27b7"
+    },
+    "generatedResult": {
+      "path": "output/research/online-meta-aa-2026-08-23.json",
+      "sha256": "e8be16a2460a639d956277f5c75f8b2b6e10356fda07c3930880af86045ce42e",
+      "sanitizedSha256": "3c82b8efba48ce76204bfd27a0ab2350b22b4e93fc941e3f4c2d341ef82ff68c"
+    }
+  }
+}
