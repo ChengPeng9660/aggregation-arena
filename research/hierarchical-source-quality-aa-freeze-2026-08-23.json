@@ -1,0 +1,160 @@
+{
+  "schemaVersion": "1.0.0",
+  "status": "post_hoc_phase4_challengers_future_confirmation_required",
+  "methods": {
+    "balanced": {
+      "id": "hier-aa-source-q2-5-e2p0-p50p0-s1p0",
+      "name": "Hierarchical Source-Quality AA-5 Balanced",
+      "qualityBins": "strictly-prior strong versus weak half within current eligible pairs",
+      "learningRate": 2.0,
+      "pairGlobalPseudoCount": 200.0,
+      "populationPseudoCount": 50.0,
+      "shrink": 1.0,
+      "objective": "balanced rank across mean Brier, historical strong-Q1 gain, and strict pair-SOTA rate",
+      "recommendation": "primary phase-4 challenger"
+    },
+    "overallTrack": {
+      "id": "hier-aa-source-q4-5-e1p0-p500p0-s1p0",
+      "name": "Hierarchical Source-Quality AA-5 Overall Track",
+      "qualityBins": "strictly-prior quality quartiles within current eligible pairs",
+      "learningRate": 1.0,
+      "pairGlobalPseudoCount": 200.0,
+      "populationPseudoCount": 500.0,
+      "shrink": 1.0,
+      "objective": "target-weighted mean Raw Brier",
+      "recommendation": "frozen research track; not promoted over balanced"
+    },
+    "strongQ1Carryover": {
+      "id": "square-aa-source5-e2p0-p200p0-s1p0",
+      "name": "Source-Specialist AA-5 Mean",
+      "recommendation": "unchanged pre-confirmation strong-Q1 champion"
+    },
+    "pairSotaCarryover": {
+      "id": "square-aa-source5-e2p0-p50p0-s0p75",
+      "name": "Source-Specialist AA-5 SOTA",
+      "recommendation": "unchanged pre-confirmation pair-SOTA champion"
+    }
+  },
+  "sharedDefinition": {
+    "experts": [
+      "historical-best",
+      "no-dependence-4",
+      "nodep-gap-g5p0",
+      "full-7",
+      "two-model-hedge"
+    ],
+    "pairAdjustedLoss": "pair_source_loss + 200 * pair_global_loss / pair_global_feedback",
+    "hierarchicalAdjustedLoss": "pairAdjustedLoss + populationPseudoCount * population_cell_mean_loss",
+    "populationUnit": "pair-target expert loss",
+    "posterior": "exp(-learningRate * hierarchicalAdjustedLoss), normalized across experts",
+    "substitution": "qAA = clip((1 + g0 - g1) / 2, 0, 1), where gy = -log(sum_k posterior_k * exp(-learningRate * (y-p_k)^2)) / learningRate",
+    "finalPrediction": "historicalBest + shrink * (qAA - historicalBest)"
+  },
+  "protocol": {
+    "developmentCutoff": "2025-12-21",
+    "confirmationCutoff": "2026-03-29",
+    "outcomeVisibility": "resolution_date strictly earlier than forecast date",
+    "qualityRegime": "current eligible-pair percentile of the strictly-prior better constituent Raw Brier",
+    "selection": "development Pareto mechanism families, then objective-specific internal-validation selection",
+    "metric": "target-weighted Raw Brier",
+    "candidateMethods": 56,
+    "bootstrapReplicates": 20000
+  },
+  "support": {
+    "development": {
+      "dates": 14,
+      "cells": 448,
+      "targetEvaluations": 536418,
+      "pairs": 214
+    },
+    "internalValidation": {
+      "dates": 7,
+      "cells": 1119,
+      "targetEvaluations": 1084108,
+      "pairs": 348
+    },
+    "secondaryConfirmation": {
+      "dates": 9,
+      "cells": 211,
+      "targetEvaluations": 167577,
+      "pairs": 91
+    }
+  },
+  "secondaryConfirmation": {
+    "balanced": {
+      "overallBrier": 0.1554384475605738,
+      "gainVsHistoricalBest": 0.0023350162340342283,
+      "gainVsHistoricalBestCi95": [
+        0.0012061357508095752,
+        0.002954251818178343
+      ],
+      "advantageVsSSAA5Mean": 0.000012273805012968733,
+      "advantageVsSSAA5MeanCi95": [
+        0.0000036170993856074677,
+        0.000022241779524185997
+      ],
+      "historicallyStrongQ1Gain": 0.002793602024684265,
+      "historicallyStrongQ1GainCi95": [
+        0.0001008244903556077,
+        0.0032423353416668335
+      ],
+      "historicallyStrongQ1AdvantageVsSSAA5Mean": 0.000023388988869221788,
+      "historicallyStrongQ1AdvantageVsSSAA5MeanCi95": [
+        0.000004309365556005595,
+        0.00002508860600166657
+      ],
+      "strictPairWins": 68,
+      "evaluatedPairs": 91,
+      "strictPairWinRate": 0.7472527472527473,
+      "macroPairGainVsExPostBest": 0.0007495454923032572,
+      "realizedStrongestQ1Gain": -0.0004009766485021708,
+      "realizedStrongestQ1GainCi95": [
+        -0.0014824590181072629,
+        0.00008797119849563729
+      ]
+    },
+    "overallTrack": {
+      "overallBrier": 0.15542750893053942,
+      "gainVsHistoricalBest": 0.002345954864068565,
+      "advantageVsSSAA5Mean": 0.000023212435047305242,
+      "advantageVsSSAA5MeanCi95": [
+        -0.00003120107503704955,
+        0.00007394211407947821
+      ],
+      "historicallyStrongQ1Gain": 0.0028762712904755183,
+      "historicallyStrongQ1AdvantageVsSSAA5Mean": 0.00010605825466047433,
+      "historicallyStrongQ1AdvantageVsSSAA5MeanCi95": [
+        0.000019636106631398443,
+        0.00012242509195579363
+      ],
+      "strictPairWins": 68,
+      "evaluatedPairs": 91,
+      "strictPairWinRate": 0.7472527472527473,
+      "macroPairGainVsExPostBest": 0.0007584121765425328,
+      "realizedStrongestQ1Gain": -0.0003449230874064606,
+      "realizedStrongestQ1GainCi95": [
+        -0.0013528547766727128,
+        0.00011077183951828929
+      ]
+    }
+  },
+  "negativeFindings": {
+    "newStrongQ1Champion": false,
+    "newPairSotaChampion": false,
+    "oracleDominance": false,
+    "interpretation": "hierarchical sharing gives a small balanced mean improvement but does not solve large strong-group uplift or always-SOTA"
+  },
+  "artifacts": {
+    "officialArchiveSha256": "df42f18ea07e8a496329ce17daff2c1663caa05818cbc8c799860672e268c3d7",
+    "parameterSha256": "6787ef970d2f03e920db32c1bb991ad0c1911a5a404484c2ce4dd6c6483a9ab1",
+    "script": {
+      "path": "scripts/explore-hierarchical-quality-aa.py",
+      "sha256": "7f679e03866201317e65c0da83fca66517cbd4920df9cc0edbf570544cd56b75"
+    },
+    "generatedResult": {
+      "path": "output/research/hierarchical-quality-aa-2026-08-23.json",
+      "sha256": "9961ad351f5df2657ea3c3d1ee1e04e1de9a1968b91e9966a19d49b09be22789",
+      "sanitizedSha256": "f697cc8709633f5fa3937ac13afcbc193f7c5fd736c2610b08a853a405213ea0"
+    }
+  }
+}
