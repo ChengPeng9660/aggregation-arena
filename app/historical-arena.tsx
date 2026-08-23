@@ -33,6 +33,26 @@ type Dash2History = {
   audit: { records: number; unique_pairs: number; date_min: string; date_max: string; all_history_dates_strictly_prior: boolean };
   records: Dash2Record[];
 };
+type HsqaaPairIndex = [string, string, string, number, string, string, string];
+type HsqaaHistory = {
+  schema_version: "1.0.0";
+  method_id: "hier-aa-source-q2-5-e2p0-p50p0-s1p0";
+  method_name: "HSQAA-5 Balanced";
+  history_sha256: string;
+  outcome_visibility: "resolution_date_strictly_before_forecast_date";
+  fallback: "equal-mean";
+  audit: { historyEvents: number; supportedPairs: number; supportedPredictions: number; missingResolutionDates: number; allFeedbackStrictlyPreResolution: boolean };
+  pairs: HsqaaPairIndex[];
+};
+type HsqaaPairHistory = {
+  schema_version: "1.0.0";
+  method_id: "hier-aa-source-q2-5-e2p0-p50p0-s1p0";
+  history_sha256: string;
+  model_a: string;
+  model_b: string;
+  fallback: "equal-mean";
+  records: [number, number][];
+};
 
 const BASE_METHODS = [
   { id: "mean", name: "Equal Mean", short: "Mean", color: "#4F207F", rule: "Arithmetic mean of every available selected forecast." },
@@ -75,9 +95,18 @@ const DASH_HEDGE_METHOD = {
   rule: "Available only for two selected models. A chronological exponential-weights pool over both models, Equal Mean, Log-odds, history-oriented CPTEC, Piecewise Odds, and SafeMix-2. Every forecast for date t is frozen before any outcome from date t updates the expert weights. This is forecast-round replay because exact outcome-reveal timestamps are unavailable.",
 } as const;
 
-const METHODS = [...BASE_METHODS, CPTEC_METHOD, PIECEWISE_ODDS_METHOD, SAFEMIX_METHOD, DASH_HEDGE_METHOD] as const;
+const HSQAA_METHOD = {
+  id: "hsqaa-5-balanced",
+  name: "HSQAA-5 Balanced",
+  short: "HSQAA-5",
+  color: "#4F207F",
+  rule: "Available for validated two-model pairs. HSQAA-5 Balanced applies square-loss aggregating-algorithm weights to five aggregation experts, specialized by official source and the pair's strictly-prior strong/weak quality half. Outcomes enter its state only when the official resolution date is strictly earlier than the forecast date. It falls back to Equal Mean before the 200-target, three-date, and 30-current-target support gates are met.",
+} as const;
 
-const HISTORY_DATA_VERSION = "2026-08-20-dash2-prior-date";
+const TWO_MODEL_METHODS = [...BASE_METHODS, CPTEC_METHOD, PIECEWISE_ODDS_METHOD, SAFEMIX_METHOD, DASH_HEDGE_METHOD] as const;
+const METHODS = [...TWO_MODEL_METHODS, HSQAA_METHOD] as const;
+
+const HISTORY_DATA_VERSION = "2026-08-23-hsqaa-resolution-date";
 
 type MethodId = (typeof METHODS)[number]["id"];
 type ScoredEvent = { event: HistoricalEvent; values: Record<MethodId, number> };
@@ -89,6 +118,8 @@ type HistorySeries = { id: MethodId; name: string; short: string; color: string;
 export function HistoricalArena() {
   const [data, setData] = useState<HistoricalData | null>(null);
   const [dash2History, setDash2History] = useState<Dash2History | null>(null);
+  const [hsqaaHistory, setHsqaaHistory] = useState<HsqaaHistory | null>(null);
+  const [hsqaaPair, setHsqaaPair] = useState<{ key: string; data: HsqaaPairHistory } | null>(null);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [questionType, setQuestionType] = useState("all");
@@ -102,15 +133,22 @@ export function HistoricalArena() {
     Promise.all([
       fetch(`/forecastbench/history.json?v=${HISTORY_DATA_VERSION}`, { cache: "no-store" }),
       fetch(`/forecastbench/dash2-history.json?v=${HISTORY_DATA_VERSION}`, { cache: "no-store" }),
+      fetch(`/forecastbench/hsqaa-history.json?v=${HISTORY_DATA_VERSION}`, { cache: "no-store" }),
     ])
-      .then(async ([historyResponse, dash2Response]) => {
-        if (!historyResponse.ok || !dash2Response.ok) throw new Error("Historical dataset could not be loaded.");
-        return [await historyResponse.json() as HistoricalData, await dash2Response.json() as Dash2History] as const;
+      .then(async ([historyResponse, dash2Response, hsqaaResponse]) => {
+        if (!historyResponse.ok || !dash2Response.ok || !hsqaaResponse.ok) throw new Error("Historical dataset could not be loaded.");
+        return [
+          await historyResponse.json() as HistoricalData,
+          await dash2Response.json() as Dash2History,
+          await hsqaaResponse.json() as HsqaaHistory,
+        ] as const;
       })
-      .then(([payload, dash2Payload]) => {
+      .then(([payload, dash2Payload, hsqaaPayload]) => {
         if (!dash2Payload.audit.all_history_dates_strictly_prior) throw new Error("Prior-date aggregation audit failed.");
+        if (!hsqaaPayload.audit.allFeedbackStrictlyPreResolution || hsqaaPayload.audit.historyEvents !== payload.events.length) throw new Error("HSQAA history audit failed.");
         setData(payload);
         setDash2History(dash2Payload);
+        setHsqaaHistory(hsqaaPayload);
         const params = new URLSearchParams(window.location.search);
         const hasRequestedModels = params.has("models");
         const requested = params.get("models")?.split(",").filter((id) => payload.models.some((model) => model.id === id));
@@ -121,6 +159,29 @@ export function HistoricalArena() {
       })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Historical dataset could not be loaded."));
   }, []);
+
+  useEffect(() => {
+    if (!data || !hsqaaHistory || selected.length !== 2) return;
+    const canonical = canonicalPair(selected, data.models);
+    const key = canonical.join("\0");
+    const entry = hsqaaHistory.pairs.find(([modelA, modelB]) => modelA === canonical[0] && modelB === canonical[1]);
+    if (!entry) return;
+    const controller = new AbortController();
+    fetch(`/forecastbench/hsqaa/${entry[2]}?v=${HISTORY_DATA_VERSION}`, { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("HSQAA pair history could not be loaded.");
+        return await response.json() as HsqaaPairHistory;
+      })
+      .then((payload) => {
+        if (payload.history_sha256 !== hsqaaHistory.history_sha256 || payload.model_a !== canonical[0] || payload.model_b !== canonical[1] || payload.records.length !== entry[3]) throw new Error("HSQAA pair audit failed.");
+        setHsqaaPair({ key, data: payload });
+      })
+      .catch((reason: unknown) => {
+        if (reason instanceof DOMException && reason.name === "AbortError") return;
+        setError(reason instanceof Error ? reason.message : "HSQAA pair history could not be loaded.");
+      });
+    return () => controller.abort();
+  }, [data, hsqaaHistory, selected]);
 
   useEffect(() => {
     if (!data) return;
@@ -138,9 +199,15 @@ export function HistoricalArena() {
   const filteredEvents = useMemo(() => data?.events.filter((event) =>
     (questionType === "all" || event.questionType === questionType) && (source === "all" || event.source === source)
   ) ?? [], [data, questionType, source]);
+  const selectedPairKey = data && selected.length === 2 ? canonicalPair(selected, data.models).join("\0") : null;
+  const activeHsqaaPair = selectedPairKey
+    && hsqaaPair?.key === selectedPairKey
+    && hsqaaPair.data.history_sha256 === hsqaaHistory?.history_sha256
+    ? hsqaaPair.data
+    : null;
   const analysis = useMemo(() => data && dash2History
-    ? analyze(filteredEvents, data.events, selected, data.models, cptecWeight, dash2History)
-    : null, [data, dash2History, filteredEvents, selected, cptecWeight]);
+    ? analyze(filteredEvents, data.events, selected, data.models, cptecWeight, dash2History, activeHsqaaPair)
+    : null, [data, dash2History, filteredEvents, selected, cptecWeight, activeHsqaaPair]);
   const modelPickerRows = useMemo(() => data ? makeModelPickerRows(data.models, filteredEvents, selected) : [], [data, filteredEvents, selected]);
   const visibleModels = useMemo(() => modelPickerRows.filter((model) => `${model.organization} ${model.name}`.toLowerCase().includes(search.toLowerCase())), [modelPickerRows, search]);
   const providerGroups = useMemo(() => {
@@ -277,7 +344,7 @@ export function HistoricalArena() {
           </div>
 
           <section className="history-ranking" aria-label="Historical aggregation leaderboard">
-            <div className="history-section-title history-leaderboard-heading"><span>OUTPUT 01</span><div><h2>Leaderboard</h2><p>Lower Brier is better. Every entry is scored on the same complete-intersection event sample.{selected.length === 2 && " DASH-Hedge-2 and SafeMix-2 use strictly earlier forecast dates; current-date outcomes are revealed only after all predictions for that date are frozen."}</p></div></div>
+            <div className="history-section-title history-leaderboard-heading"><span>OUTPUT 01</span><div><h2>Leaderboard</h2><p>Lower Brier is better. Every entry is scored on the same complete-intersection event sample.{selected.length === 2 && " DASH-Hedge-2 and SafeMix-2 use strictly earlier forecast dates; current-date outcomes are revealed only after all predictions for that date are frozen. For validated pairs, HSQAA-5 uses official resolution dates and releases feedback only when resolution_date is strictly earlier than the forecast date."}</p></div></div>
             <div className="leaderboard-view-tabs" role="tablist" aria-label="Leaderboard entries">
               <button type="button" role="tab" aria-selected={leaderboardView === "methods"} className={leaderboardView === "methods" ? "active" : ""} onClick={() => { setLeaderboardView("methods"); setExpanded(null); }}>Aggregation methods</button>
               <button type="button" role="tab" aria-selected={leaderboardView === "combined"} className={leaderboardView === "combined" ? "active" : ""} onClick={() => { setLeaderboardView("combined"); setExpanded(null); }}>Methods + individual models</button>
@@ -313,9 +380,10 @@ function analyze(
   models: HistoricalModel[],
   cptecWeight: number,
   dash2History: Dash2History,
+  hsqaaPair: HsqaaPairHistory | null,
 ) {
   if (selected.length < 2) return emptyAnalysis();
-  const methods = selected.length === 2 ? METHODS : BASE_METHODS;
+  const methods = selected.length === 2 ? (hsqaaPair ? METHODS : TWO_MODEL_METHODS) : BASE_METHODS;
   const priorDatePredictions = selected.length === 2
     ? makePriorDatePairPredictions(allEvents, selected, models, dash2History)
     : new Map<string, { dashHedge: number; safeMix: number }>();
@@ -323,6 +391,8 @@ function analyze(
   for (const event of events) byDate.set(event.date, [...(byDate.get(event.date) ?? []), event]);
   const history = new Map<string, { loss: number; n: number }>();
   const scored: ScoredEvent[] = [];
+  const hsqaaByEventIndex = new Map(hsqaaPair?.records ?? []);
+  const eventIndex = hsqaaPair ? new Map(allEvents.map((event, index) => [event.id, index])) : null;
 
   for (const date of Array.from(byDate.keys()).sort()) {
     const round = byDate.get(date) ?? [];
@@ -339,6 +409,9 @@ function analyze(
       if (pairPrediction) {
         values["dash-hedge-2"] = pairPrediction.dashHedge;
         values["safemix-2"] = pairPrediction.safeMix;
+      }
+      if (hsqaaPair && eventIndex) {
+        values["hsqaa-5-balanced"] = hsqaaByEventIndex.get(eventIndex.get(event.id) ?? -1) ?? values.mean;
       }
       scored.push({ event, values });
     }
@@ -408,7 +481,15 @@ function aggregate(values: number[], weights: number[], cptecWeight: number): Re
     "piecewise-odds": values.length === 2 ? piecewiseOddsProbability(values) : logitPool,
     "safemix-2": arithmetic,
     "dash-hedge-2": arithmetic,
+    "hsqaa-5-balanced": arithmetic,
   };
+}
+
+function canonicalPair(selected: string[], models: HistoricalModel[]) {
+  const modelOrder = new Map(models.map((model, index) => [model.id, index]));
+  return [...selected].sort((first, second) =>
+    (modelOrder.get(first) ?? Number.MAX_SAFE_INTEGER) - (modelOrder.get(second) ?? Number.MAX_SAFE_INTEGER)
+  ) as [string, string];
 }
 
 function makePriorDatePairPredictions(
@@ -417,10 +498,7 @@ function makePriorDatePairPredictions(
   models: HistoricalModel[],
   dash2History: Dash2History,
 ) {
-  const modelOrder = new Map(models.map((model, index) => [model.id, index]));
-  const canonical = [...selected].sort((first, second) =>
-    (modelOrder.get(first) ?? Number.MAX_SAFE_INTEGER) - (modelOrder.get(second) ?? Number.MAX_SAFE_INTEGER)
-  );
+  const canonical = canonicalPair(selected, models);
   const [modelA, modelB] = canonical;
   const parametersByDate = new Map<string, { historyBestSide: "a" | "b"; safeAlpha: number }>();
   for (const record of dash2History.records) {

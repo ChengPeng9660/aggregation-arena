@@ -155,7 +155,7 @@ test("historical leaderboard exposes CPTEC only for an exactly two-model selecti
   assert.match(historicalSource, /name: "CPTEC"/);
   assert.match(historicalSource, /DEFAULT_CPTEC_WEIGHT/);
   assert.match(historicalSource, /requestedWeightParam === null \? Number\.NaN/);
-  assert.match(historicalSource, /selected\.length === 2 \? METHODS : BASE_METHODS/);
+  assert.match(historicalSource, /selected\.length === 2 \? \(hsqaaPair \? METHODS : TWO_MODEL_METHODS\) : BASE_METHODS/);
   assert.match(historicalSource, /cptecProbability\(values, cptecWeight\)/);
   assert.match(historicalSource, /CPTEC w · \{firstSelectedModel\?\.name/);
   assert.match(historicalSource, /1 − w = \{\(1 - cptecWeight\)\.toFixed\(2\)\}/);
@@ -165,7 +165,7 @@ test("historical leaderboard exposes CPTEC only for an exactly two-model selecti
 test("historical leaderboard exposes Piecewise Odds Pool only for an exactly two-model selection", () => {
   assert.match(historicalSource, /name: "Piecewise Odds Pool"/);
   assert.match(historicalSource, /1\/5 ≤ T ≤ 5/);
-  assert.match(historicalSource, /selected\.length === 2 \? METHODS : BASE_METHODS/);
+  assert.match(historicalSource, /selected\.length === 2 \? \(hsqaaPair \? METHODS : TWO_MODEL_METHODS\) : BASE_METHODS/);
   assert.match(historicalSource, /piecewiseOddsProbability\(values\)/);
   assert.match(historicalSource, /"piecewise-odds": values\.length === 2/);
 });
@@ -173,7 +173,7 @@ test("historical leaderboard exposes Piecewise Odds Pool only for an exactly two
 test("historical leaderboard exposes outcome-blind DASH-Hedge-2 and SafeMix-2 only for two models", () => {
   assert.match(historicalSource, /name: "DASH-Hedge-2"/);
   assert.match(historicalSource, /name: "Dependence-Adaptive SafeMix-2"/);
-  assert.match(historicalSource, /selected\.length === 2 \? METHODS : BASE_METHODS/);
+  assert.match(historicalSource, /selected\.length === 2 \? \(hsqaaPair \? METHODS : TWO_MODEL_METHODS\) : BASE_METHODS/);
   assert.match(historicalSource, /selected\.length === 2\s*\? makePriorDatePairPredictions/);
   assert.match(historicalSource, /values\["dash-hedge-2"\] = pairPrediction\.dashHedge/);
   assert.match(historicalSource, /values\["safemix-2"\] = pairPrediction\.safeMix/);
@@ -191,6 +191,17 @@ test("DASH-2 browser replay freezes a complete date before applying feedback", (
   assert.match(replay, /state = updateDash2State\(state, frozenExpertPredictions, outcomes\)/);
   assert.ok(replay.indexOf("forecastDash2Pair(") < replay.indexOf("updateDash2State("));
   assert.doesNotMatch(replay.slice(0, replay.indexOf("forecastDash2Pair(")), /event\.outcome/);
+});
+
+test("historical leaderboard exposes HSQAA-5 only for validated two-model pairs", () => {
+  assert.match(historicalSource, /name: "HSQAA-5 Balanced"/);
+  assert.match(historicalSource, /id: "hsqaa-5-balanced"/);
+  assert.match(historicalSource, /resolution_date is strictly earlier than the forecast date/);
+  assert.match(historicalSource, /fetch\(`\/forecastbench\/hsqaa\/\$\{entry\[2\]\}/);
+  assert.match(historicalSource, /hsqaaPair \? METHODS : TWO_MODEL_METHODS/);
+  assert.match(historicalSource, /values\["hsqaa-5-balanced"\] = hsqaaByEventIndex\.get/);
+  assert.match(historicalSource, /\?\? values\.mean/);
+  assert.match(historicalSource, /allFeedbackStrictlyPreResolution/);
 });
 
 test("production arena cannot seed or display synthetic demo events", () => {
