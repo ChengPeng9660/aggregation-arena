@@ -1,0 +1,101 @@
+{
+  "schemaVersion": "1.0.0",
+  "status": "rejected_no_new_preconfirmation_frontier",
+  "decision": {
+    "promoteContextualMethod": false,
+    "reason": "internally selected contextual configurations do not improve the frozen HSQAA/SSAA frontier on secondary confirmation",
+    "currentOverallChampion": "hier-aa-source-q2-5-e2p0-p50p0-s1p0",
+    "currentStrongQ1Champion": "square-aa-source5-e2p0-p200p0-s1p0",
+    "currentPairSotaChampion": "square-aa-source5-e2p0-p50p0-s0p75"
+  },
+  "selectedMethods": {
+    "overall": {
+      "id": "context-aa-full-l100p0-p200p0-s1p0",
+      "secondaryBrier": 0.15552997978249125,
+      "secondaryGainVsHistoricalBest": 0.002243484012116749,
+      "advantageVsHSQAA5Balanced": -0.00009153222191747945,
+      "advantageVsHSQAA5BalancedCi95": [
+        -0.000192840818105044,
+        0.000028264517022687235
+      ],
+      "historicallyStrongQ1Gain": 0.0028855896413058327,
+      "historicallyStrongQ1AdvantageVsSSAA5Mean": 0.00011537660549078812,
+      "historicallyStrongQ1AdvantageVsSSAA5MeanCi95": [
+        -0.00002665650056647076,
+        0.000132237895172828
+      ],
+      "strictPairWins": 66,
+      "evaluatedPairs": 91
+    },
+    "balanced": {
+      "id": "context-aa-full-l100p0-p50p0-s1p0",
+      "secondaryBrier": 0.15545094527930012,
+      "secondaryGainVsHistoricalBest": 0.00232251851530789,
+      "advantageVsHSQAA5Balanced": -0.000012497718726338518,
+      "advantageVsHSQAA5BalancedCi95": [
+        -0.000042386844029975126,
+        0.000020428495516398484
+      ],
+      "historicallyStrongQ1Gain": 0.002862630167515412,
+      "historicallyStrongQ1AdvantageVsSSAA5Mean": 0.00009241713170036781,
+      "historicallyStrongQ1AdvantageVsSSAA5MeanCi95": [
+        -0.0000373198407798142,
+        0.0001118695013905621
+      ],
+      "strictPairWins": 68,
+      "evaluatedPairs": 91
+    }
+  },
+  "postHocDiagnosticOnly": {
+    "id": "context-aa-compact-l10000p0-p200p0-s1p0",
+    "secondaryBrier": 0.15539094079473037,
+    "historicallyStrongQ1Gain": 0.002993947997985065,
+    "strictPairWins": 68,
+    "macroPairGainVsExPostBest": 0.0007931369030818265,
+    "promotionProhibited": true,
+    "reason": "not selected by internal validation; favorable ID known only after secondary inspection"
+  },
+  "protocol": {
+    "developmentCutoff": "2025-12-21",
+    "confirmationCutoff": "2026-03-29",
+    "outcomeVisibility": "resolution_date strictly earlier than forecast date",
+    "featureFamilies": [
+      "compact-15",
+      "full-25"
+    ],
+    "ridgeLambdas": [
+      100.0,
+      1000.0,
+      10000.0
+    ],
+    "contextPseudoCounts": [
+      10.0,
+      50.0,
+      200.0,
+      500.0
+    ],
+    "candidateMethods": 58,
+    "metric": "target-weighted Raw Brier",
+    "bootstrapReplicates": 20000
+  },
+  "negativeFindings": {
+    "newOverallChampion": false,
+    "newStrongQ1Champion": false,
+    "newPairSotaChampion": false,
+    "oracleDominance": false,
+    "interpretation": "fixed global contextual ridge routing is non-stationary and hyperparameter-sensitive"
+  },
+  "artifacts": {
+    "officialArchiveSha256": "df42f18ea07e8a496329ce17daff2c1663caa05818cbc8c799860672e268c3d7",
+    "parameterSha256": "6787ef970d2f03e920db32c1bb991ad0c1911a5a404484c2ce4dd6c6483a9ab1",
+    "script": {
+      "path": "scripts/explore-contextual-aa-router.py",
+      "sha256": "3f8408667ca695588f9770480efd0b6f59c40054db93cb59dc9799599d6556ea"
+    },
+    "generatedResult": {
+      "path": "output/research/contextual-aa-router-2026-08-23.json",
+      "sha256": "fa767039b25a3628383b4f089416f3586f9c8ff4972f27ead4e24d4111d1a869",
+      "sanitizedSha256": "7a8cce28bc5a63e09e17d7cc0bb959b6dfaa14e9cf57c7eac8cb5121da65c42c"
+    }
+  }
+}
