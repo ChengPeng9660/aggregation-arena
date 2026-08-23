@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "1.0.0",
+  "status": "frozen_post_cutoff_resolution_aware_confirmation",
+  "cutoff": "2026-03-29",
+  "officialArchive": {
+    "url": "https://www.forecastbench.org/assets/data/processed-forecast-sets/processed_forecast_sets.tar.gz",
+    "sha256": "df42f18ea07e8a496329ce17daff2c1663caa05818cbc8c799860672e268c3d7"
+  },
+  "fixedPairParameters": {
+    "path": "public/forecastbench/dash2-history.json",
+    "sha256": "6787ef970d2f03e920db32c1bb991ad0c1911a5a404484c2ce4dd6c6483a9ab1",
+    "pairs": 421
+  },
+  "protocol": {
+    "outcomeVisibility": "resolution_date strictly earlier than forecast date",
+    "canonicalTargetKey": "forecast_due_date + source + id + resolution_date",
+    "metric": "target-weighted Raw Brier",
+    "bootstrap": "20000 paired forecast-date draws",
+    "compositeQuestions": "excluded"
+  },
+  "confirmationSupport": {
+    "forecastDates": 9,
+    "pairDateCells": 211,
+    "targetEvaluations": 167577,
+    "uniquePairs": 91,
+    "stablePairsWithAtLeastThreeDates": 21
+  },
+  "primaryResult": {
+    "historicalBestBrier": 0.157773463794608,
+    "full7Brier": 0.15571479199851487,
+    "noDependence4Brier": 0.15555697805247268,
+    "noDependence4GainVsHistoricalBest": 0.0022164857421353187,
+    "noDependence4GainCi95": [0.0007438524450146697, 0.00285117005065707],
+    "noDependence4StrictPairWinsVsExPostBest": 62,
+    "evaluatedPairs": 91,
+    "noDependence4AdvantageVsFull7": 0.00015781394604220085,
+    "noDependence4AdvantageVsFull7Ci95": [-0.00016916279397732463, 0.0003254586332178782]
+  },
+  "historicallyStrongQ1": {
+    "cells": 53,
+    "targetEvaluations": 42034,
+    "historicalBestBrier": 0.1593447108323512,
+    "noDependence4Brier": 0.1563355999483186,
+    "gain": 0.00300911088403254,
+    "gainCi95": [0.0004933302133813497, 0.0034455274644736157],
+    "gainMinusWeakQ4Gain": 0.0005026531555589191,
+    "gainDifferenceCi95": [-0.004884380459339417, 0.0015656170907956599]
+  },
+  "realizedStrongestQ1": {
+    "pairs": 23,
+    "representedForecastDates": 2,
+    "exPostBestBrier": 0.14623086350963155,
+    "noDependence4Brier": 0.14642148779515882,
+    "gainVsExPostBest": -0.00019062428552726944,
+    "gainCi95": [-0.0011161949087554466, 0.0002278344671910845]
+  },
+  "generatedResult": {
+    "path": "output/research/dash-subsets-resolution-oos-2026-08-23.json",
+    "sha256": "6114d6d042df97119875ed6df8f45d2fb7467fc4ac46d01c41e9a7626565f5eb",
+    "sanitizedRepeatSha256": "c14f5884b498efd0a047df4b9f5b1c75ac1d22523eb3b3166e746d640c5a1772"
+  }
+}
