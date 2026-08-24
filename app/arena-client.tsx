@@ -987,8 +987,7 @@ function ForecastsView({
           </span>
           <code>
             npx wrangler secret put TAVILY_API_KEY<br />
-            npx wrangler secret put PROPHET_MODEL_GATEWAY_URL<br />
-            npx wrangler secret put PROPHET_MODEL_GATEWAY_API_KEY
+            Configure the Cloudflare AI binding and exact model map in wrangler.jsonc
           </code>
         </section>
       )}
@@ -1009,7 +1008,7 @@ function ForecastsView({
         <i>→</i>
         <div className="model-step"><span>04</span><b>{pipeline.models.length} independent models</b><small>{pipeline.models.map((model) => model.participantName).join(" · ")}</small></div>
         <i>→</i>
-        <div><span>05</span><b>Agent Harnesses</b><small>blind + evidence-aware · shared Gateway</small></div>
+        <div><span>05</span><b>Agent Harnesses</b><small>blind + evidence-aware · Cloudflare AI Gateway</small></div>
         <i>→</i>
         <div><span>06</span><b>Arena score</b><small>prediction history + Brier</small></div>
       </section>

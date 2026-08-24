@@ -1,19 +1,11 @@
 # Copy this file to .dev.vars for local development. Never commit real keys.
 TAVILY_API_KEY=tvly-your-key
 
-# Poe is the encrypted exact-model fallback for the six panel models that do
-# not currently have a usable exact Cloudflare route. Never commit a real key.
-PROPHET_MODEL_GATEWAY_URL=https://api.poe.com/v1/chat/completions
-PROPHET_MODEL_GATEWAY_API_KEY=replace-with-poe-key
-
-# Optional JSON map from Prophet Arena slug to the deployment alias exposed by
-# your gateway. Both base forecasters and Agent Harnesses share this gateway.
-# Omit this variable when the gateway accepts the public slugs directly.
-PROPHET_MODEL_GATEWAY_MODE=cloudflare-hybrid
+# All production inference uses Cloudflare. The map includes the 13 active
+# forecasters plus Qwen 3.7 Plus for the two agent harnesses.
+PROPHET_MODEL_GATEWAY_MODE=cloudflare-only
 PROPHET_AI_GATEWAY_ID=default
-PROPHET_CLOUDFLARE_MODEL_ID_MAP={"gemini-3.6-flash":"google/gemini-3.6-flash","gemini-3.1-pro":"google/gemini-3.1-pro","claude-fable-5":"anthropic/claude-fable-5","deepseek-v4-flash":"@cf/deepseek-ai/deepseek-v4-flash-0731","claude-opus-4.8":"anthropic/claude-opus-4.8","claude-sonnet-4.6":"anthropic/claude-sonnet-4.6","grok-4.6":"xai/grok-4.6","deepseek-v4-pro":"deepseek/deepseek-v4-pro","kimi-k3":"moonshotai/kimi-k3","grok-4.5":"xai/grok-4.5","glm-5.2":"@cf/zai-org/glm-5.2","grok-4.3":"xai/grok-4.3","minimax-m2.7":"minimax/m2.7"}
-PROPHET_MODEL_ID_MAP={"gpt-5.6-sol":"gpt-5.6-sol","gemini-3.6-flash":"gemini-3.6-flash","gemini-3.1-pro":"gemini-3.1-pro","claude-fable-5":"claude-fable-5","gpt-5.5":"gpt-5.5","deepseek-v4-flash":"deepseek-v4-flash","claude-opus-4.8":"claude-opus-4.8","claude-sonnet-4.6":"claude-sonnet-4.6","grok-4.6":"grok-4.6","deepseek-v4-pro":"deepseek-v4-pro","kimi-k3":"kimi-k3","grok-4.5":"grok-4.5","glm-5.2":"glm-5.2","qwen-3.6-plus":"qwen3.6-plus-t","thinking-machines-zs-v2":"inkling","muse-spark-1.1":"muse-spark-1-1","grok-4.3":"grok-4.3","foresight-v3":"foresight-v3","minimax-m2.7":"minimax-m2.7"}
-PROPHET_RESPONSES_MODEL_IDS=["gpt-5.6-sol","gpt-5.5","foresight-v3"]
+PROPHET_CLOUDFLARE_MODEL_ID_MAP={"gemini-3.6-flash":"google/gemini-3.6-flash","gemini-3.1-pro":"google/gemini-3.1-pro","claude-fable-5":"anthropic/claude-fable-5","deepseek-v4-flash":"@cf/deepseek-ai/deepseek-v4-flash-0731","claude-opus-4.8":"anthropic/claude-opus-4.8","claude-sonnet-4.6":"anthropic/claude-sonnet-4.6","grok-4.6":"xai/grok-4.6","deepseek-v4-pro":"deepseek/deepseek-v4-pro","kimi-k3":"moonshotai/kimi-k3","grok-4.5":"xai/grok-4.5","glm-5.2":"@cf/zai-org/glm-5.2","grok-4.3":"xai/grok-4.3","minimax-m2.7":"minimax/m2.7","qwen-3.7-plus":"alibaba/qwen3.7-plus"}
 
-# Temporarily disable an active model only after a failed production smoke test.
-PROPHET_DISABLED_MODEL_IDS=[]
+# These exact Workers AI routes require a paid Workers AI billing path.
+PROPHET_DISABLED_MODEL_IDS=["deepseek-v4-flash","glm-5.2"]

@@ -9,8 +9,6 @@ import {
   PROPHET_MODEL_PANEL_AS_OF,
   RETIRED_FORECAST_PARTICIPANT_IDS,
   buildCloudflareBindingRequest,
-  buildGatewayRequest,
-  buildGatewayRequestForEndpoint,
   buildProphetPredictionPrompt,
   buildSearchQuery,
   normalizeSources,
@@ -18,7 +16,6 @@ import {
   parseDisabledModelIds,
   parseModelIdMap,
   parsePredictionResponse,
-  resolveGatewayModelId,
 } from "../lib/forecast-core.js";
 
 const wrangler = JSON.parse(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
@@ -27,19 +24,17 @@ test("scheduled forecast rounds drain sixteen model-event jobs at a time", () =>
   assert.equal(FORECAST_JOBS_PER_RUN, 16);
 });
 
-test("forecast registry matches Aggrena's requested 19-model medium panel", () => {
+test("forecast registry contains the 13 exact Cloudflare-runnable medium models", () => {
   assert.equal(PROPHET_MODEL_PANEL_AS_OF, "2026-08-24");
-  assert.equal(FORECAST_MODELS.length, 19);
-  assert.equal(new Set(FORECAST_MODELS.map((model) => model.participantId)).size, 19);
-  assert.equal(new Set(FORECAST_MODELS.map((model) => model.modelId)).size, 19);
+  assert.equal(FORECAST_MODELS.length, 13);
+  assert.equal(new Set(FORECAST_MODELS.map((model) => model.participantId)).size, 13);
+  assert.equal(new Set(FORECAST_MODELS.map((model) => model.modelId)).size, 13);
   assert.deepEqual(
     FORECAST_MODELS.map((model) => model.modelId),
     [
-      "gpt-5.6-sol",
       "gemini-3.6-flash",
       "gemini-3.1-pro",
       "claude-fable-5",
-      "gpt-5.5",
       "deepseek-v4-flash",
       "claude-opus-4.8",
       "claude-sonnet-4.6",
@@ -48,11 +43,7 @@ test("forecast registry matches Aggrena's requested 19-model medium panel", () =
       "kimi-k3",
       "grok-4.5",
       "glm-5.2",
-      "qwen-3.6-plus",
-      "thinking-machines-zs-v2",
-      "muse-spark-1.1",
       "grok-4.3",
-      "foresight-v3",
       "minimax-m2.7",
     ],
   );
@@ -61,16 +52,22 @@ test("forecast registry matches Aggrena's requested 19-model medium panel", () =
   assert.ok(FORECAST_MODELS.every((model) => model.promptVersion === FORECAST_CONFIG_VERSION));
 });
 
-test("hybrid maps cover the complete panel without substituting exact models", () => {
+test("production is Cloudflare-only and every active model has an exact route", () => {
   const cloudflareMap = JSON.parse(wrangler.vars.PROPHET_CLOUDFLARE_MODEL_ID_MAP);
-  const externalMap = JSON.parse(wrangler.vars.PROPHET_MODEL_ID_MAP);
-  assert.deepEqual(Object.keys(externalMap).sort(), FORECAST_MODELS.map((model) => model.modelId).sort());
-  assert.equal(Object.keys(cloudflareMap).length, 13);
+  assert.equal(wrangler.vars.PROPHET_MODEL_GATEWAY_MODE, "cloudflare-only");
+  assert.equal(wrangler.vars.PROPHET_MODEL_GATEWAY_URL, undefined);
+  assert.equal(wrangler.vars.PROPHET_MODEL_ID_MAP, undefined);
+  assert.equal(wrangler.vars.PROPHET_RESPONSES_MODEL_IDS, undefined);
+  assert.equal(wrangler.secrets.required.includes("PROPHET_MODEL_GATEWAY_API_KEY"), false);
+  assert.deepEqual(JSON.parse(wrangler.vars.PROPHET_DISABLED_MODEL_IDS), ["deepseek-v4-flash", "glm-5.2"]);
+  assert.deepEqual(
+    FORECAST_MODELS.map((model) => model.modelId).sort(),
+    Object.keys(cloudflareMap).filter((modelId) => modelId !== "qwen-3.7-plus").sort(),
+  );
+  assert.equal(Object.keys(cloudflareMap).length, 14);
   assert.equal(cloudflareMap["deepseek-v4-flash"], "@cf/deepseek-ai/deepseek-v4-flash-0731");
   assert.equal(cloudflareMap["grok-4.6"], "xai/grok-4.6");
-  assert.equal(cloudflareMap["qwen-3.6-plus"], undefined);
-  assert.equal(externalMap["qwen-3.6-plus"], "qwen3.6-plus-t");
-  assert.equal(externalMap["thinking-machines-zs-v2"], "inkling");
+  assert.equal(cloudflareMap["qwen-3.7-plus"], "alibaba/qwen3.7-plus");
   assert.ok([
     "prophet-muse-spark-1.1",
     "prophet-qwen-3.6-plus",
@@ -82,95 +79,36 @@ test("hybrid maps cover the complete panel without substituting exact models", (
     "prophet-gpt-5.6-sol",
     "prophet-claude-opus-4.8-thinking",
     "prophet-qwen-3.7-plus",
+    "prophet-medium-gpt-5.6-sol",
+    "prophet-medium-gpt-5.5",
+    "prophet-medium-qwen-3.6-plus",
+    "prophet-medium-inkling",
+    "prophet-medium-muse-spark-1.1",
+    "prophet-medium-foresight-v3",
+    "prophet-medium-deepseek-v4-flash",
+    "prophet-medium-glm-5.2",
   ].every((participantId) => RETIRED_FORECAST_PARTICIPANT_IDS.includes(participantId)));
 });
 
-test("gateway model IDs default to Prophet slugs and support explicit deployment aliases", () => {
-  assert.equal(resolveGatewayModelId("gpt-5.6-sol"), "gpt-5.6-sol");
-  const overrides = JSON.stringify({
-    "gpt-5.6-sol": "openai/gpt-5.6-sol-prod",
-    "claude-fable-5": "anthropic/claude-fable-5-prod",
+test("Cloudflare route maps require explicit non-empty model IDs", () => {
+  const routes = JSON.stringify({
+    "claude-fable-5": "anthropic/claude-fable-5",
+    "grok-4.6": "xai/grok-4.6",
   });
-  assert.deepEqual(parseModelIdMap(overrides), {
-    "gpt-5.6-sol": "openai/gpt-5.6-sol-prod",
-    "claude-fable-5": "anthropic/claude-fable-5-prod",
+  assert.deepEqual(parseModelIdMap(routes), {
+    "claude-fable-5": "anthropic/claude-fable-5",
+    "grok-4.6": "xai/grok-4.6",
   });
-  assert.equal(resolveGatewayModelId("gpt-5.6-sol", overrides), "openai/gpt-5.6-sol-prod");
   assert.throws(() => parseModelIdMap("[]"), /JSON object/);
   assert.throws(() => parseModelIdMap('{"gpt-5.6-sol":""}'), /non-empty strings/);
 });
 
 test("provider-unavailable models are explicit and never silently substituted", () => {
-  const unavailable = JSON.stringify(["claude-fable-5", "qwen-3.6-plus"]);
-  assert.deepEqual(parseDisabledModelIds(unavailable), ["claude-fable-5", "qwen-3.6-plus"]);
-  assert.equal(getActiveForecastModels(unavailable).length, 17);
-  assert.ok(getActiveForecastModels(unavailable).every((model) => !["claude-fable-5", "qwen-3.6-plus"].includes(model.modelId)));
+  const unavailable = JSON.stringify(["claude-fable-5", "grok-4.6"]);
+  assert.deepEqual(parseDisabledModelIds(unavailable), ["claude-fable-5", "grok-4.6"]);
+  assert.equal(getActiveForecastModels(unavailable).length, 11);
+  assert.ok(getActiveForecastModels(unavailable).every((model) => !["claude-fable-5", "grok-4.6"].includes(model.modelId)));
   assert.throws(() => parseDisabledModelIds('{}'), /JSON array/);
-});
-
-test("gateway requests use the OpenAI-compatible JSON contract", () => {
-  assert.deepEqual(buildGatewayRequest(
-    "openai/gpt-5.6-sol-prod",
-    [{ role: "user", content: "Forecast this event." }],
-    { maxTokens: 700, temperature: 0.1, seed: 42 },
-  ), {
-    model: "openai/gpt-5.6-sol-prod",
-    messages: [{ role: "user", content: "Forecast this event." }],
-    max_tokens: 700,
-    temperature: 0.1,
-    seed: 42,
-    response_format: { type: "json_object" },
-  });
-});
-
-test("Poe requests omit extra_body fields rejected by provider-backed bots", () => {
-  assert.deepEqual(buildGatewayRequestForEndpoint(
-    "https://api.poe.com/v1/chat/completions",
-    "Gemini-3.6-Flash",
-    [{ role: "user", content: "Forecast this event." }],
-    { maxTokens: 700, temperature: 0.1, seed: 42 },
-  ), {
-    model: "Gemini-3.6-Flash",
-    messages: [{ role: "user", content: "Forecast this event." }],
-    max_tokens: 2200,
-    temperature: 0.1,
-  });
-});
-
-test("Poe Responses API requests use its native input contract", () => {
-  assert.deepEqual(buildGatewayRequestForEndpoint(
-    "https://api.poe.com/v1/responses",
-    "GPT-5.5",
-    [
-      { role: "system", content: "Return JSON only." },
-      { role: "user", content: "Forecast this event." },
-    ],
-    { maxTokens: 700, temperature: 0.1, seed: 42 },
-  ), {
-    model: "GPT-5.5",
-    input: "Forecast this event.",
-    instructions: "Return JSON only.",
-    max_output_tokens: 2200,
-    temperature: 0.1,
-    reasoning: { effort: "medium" },
-  });
-});
-
-test("Poe grants larger ceilings to bots that spend heavily on hidden reasoning", () => {
-  const request = buildGatewayRequestForEndpoint(
-    "https://api.poe.com/v1/chat/completions",
-    "deepseek-v4-pro",
-    [{ role: "user", content: "Forecast this event." }],
-    { maxTokens: 700, temperature: 0.1, seed: 42 },
-  );
-  assert.equal(request.max_tokens, 12000);
-  const minimaxRequest = buildGatewayRequestForEndpoint(
-    "https://api.poe.com/v1/chat/completions",
-    "minimax-m2.7",
-    [{ role: "user", content: "Forecast this event." }],
-    { maxTokens: 700, temperature: 0.1, seed: 42 },
-  );
-  assert.equal(minimaxRequest.max_tokens, 12000);
 });
 
 test("Cloudflare binding uses the Responses contract for GPT-5.6 Sol", () => {

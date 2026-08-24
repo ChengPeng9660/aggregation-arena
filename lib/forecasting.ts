@@ -19,9 +19,6 @@ type ForecastEnv = {
   PROPHET_MODEL_GATEWAY_MODE?: string;
   PROPHET_AI_GATEWAY_ID?: string;
   PROPHET_CLOUDFLARE_MODEL_ID_MAP?: string;
-  PROPHET_MODEL_GATEWAY_URL?: string;
-  PROPHET_MODEL_GATEWAY_API_KEY?: string;
-  PROPHET_MODEL_ID_MAP?: string;
   PROPHET_DISABLED_MODEL_IDS?: string;
 };
 
@@ -471,7 +468,7 @@ async function searchTavily(apiKey: string, query: string, topic: "news" | "gene
 
 export async function getForecastPipelineSnapshot(
   db: D1Database = getD1(),
-  runtime: Pick<ForecastEnv, "AI" | "TAVILY_API_KEY" | "PROPHET_MODEL_GATEWAY_MODE" | "PROPHET_AI_GATEWAY_ID" | "PROPHET_CLOUDFLARE_MODEL_ID_MAP" | "PROPHET_MODEL_GATEWAY_URL" | "PROPHET_MODEL_GATEWAY_API_KEY" | "PROPHET_MODEL_ID_MAP" | "PROPHET_DISABLED_MODEL_IDS"> = {},
+  runtime: Pick<ForecastEnv, "AI" | "TAVILY_API_KEY" | "PROPHET_MODEL_GATEWAY_MODE" | "PROPHET_AI_GATEWAY_ID" | "PROPHET_CLOUDFLARE_MODEL_ID_MAP" | "PROPHET_DISABLED_MODEL_IDS"> = {},
 ) {
   await ensureForecastingReady(db);
   const gatewayProblem = modelGatewayConfigurationProblem(runtime);

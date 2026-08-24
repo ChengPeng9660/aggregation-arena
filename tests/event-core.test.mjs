@@ -43,7 +43,7 @@ test("parses Prophet-style outcome arrays by stable key or label", () => {
   });
 });
 
-test("recovers a complete probability array when Poe truncates only trailing metadata", () => {
+test("recovers a complete probability array when a provider truncates only trailing metadata", () => {
   const parsed = parseEventPredictionResponse({ choices: [{ message: { content:
     '{"rationale":"Short view.","probabilities":[{"market":"yes","probability":0.53},{"market":"no","probability":0.47}],"cited'
   } }] }, [
