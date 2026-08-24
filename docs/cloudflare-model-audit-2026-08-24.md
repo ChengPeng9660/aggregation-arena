@@ -2,56 +2,68 @@
 
 Audit date: 2026-08-24
 
-Aggrena's current Fixed Context panel contains 16 explicitly named models. Cloudflare's current catalog has a route for every entry. This panel is based on the former 18-model Prophet panel but is no longer an unchanged reproduction of it.
+Aggrena's current Fixed Context registry contains the exact 19-model panel requested from the Prophet Arena leaderboard. Every entry has a new medium-specific participant ID. Thirteen models use exact Cloudflare routes and six use exact Poe bot aliases; no nearby model version is substituted.
 
-| Aggrena model ID | Cloudflare model ID | Request contract |
+## Production route matrix
+
+| Aggrena model ID | Production route | Request contract |
 | --- | --- | --- |
-| `gemini-3.6-flash` | `google/gemini-3.6-flash` | Chat Completions |
-| `claude-fable-5` | `anthropic/claude-fable-5` | Anthropic Messages |
-| `gemini-3.1-pro` | `google/gemini-3.1-pro` | Chat Completions |
-| `gpt-5.6-sol` | `openai/gpt-5.6-sol` | Responses |
-| `gpt-5.5-high` | `openai/gpt-5.5` with high reasoning effort | Responses |
-| `claude-opus-4.8-thinking` | `anthropic/claude-opus-4.8` with adaptive thinking/high effort | Anthropic Messages |
-| `kimi-k3` | `moonshotai/kimi-k3` | Chat Completions |
-| `thinking-machines-zs-v2` | `thinkingmachines/inkling` | Anthropic Messages |
-| `claude-sonnet-4.6` | `anthropic/claude-sonnet-4.6` | Anthropic Messages |
-| `grok-4.5` | `xai/grok-4.5` | Chat Completions |
-| `glm-5.2` | `@cf/zai-org/glm-5.2` | Workers AI chat input |
-| `deepseek-v4-pro` | `deepseek/deepseek-v4-pro` | Chat Completions |
-| `qwen-3.7-plus` | `alibaba/qwen3.7-plus` | Chat Completions |
-| `grok-4.3` | `xai/grok-4.3` | Chat Completions |
-| `inkling-256k` | `thinkingmachines/inkling-256k` | Anthropic Messages |
-| `minimax-m2.7` | `minimax/m2.7` | Chat Completions |
+| `gpt-5.6-sol` | Poe `gpt-5.6-sol` | Responses |
+| `gemini-3.6-flash` | Cloudflare `google/gemini-3.6-flash` | Chat Completions |
+| `gemini-3.1-pro` | Cloudflare `google/gemini-3.1-pro` | Chat Completions |
+| `claude-fable-5` | Cloudflare `anthropic/claude-fable-5` | Anthropic Messages |
+| `gpt-5.5` | Poe `gpt-5.5` | Responses |
+| `deepseek-v4-flash` | Cloudflare `@cf/deepseek-ai/deepseek-v4-flash-0731` | Workers AI chat input |
+| `claude-opus-4.8` | Cloudflare `anthropic/claude-opus-4.8` | Anthropic Messages with adaptive thinking |
+| `claude-sonnet-4.6` | Cloudflare `anthropic/claude-sonnet-4.6` | Anthropic Messages |
+| `grok-4.6` | Cloudflare `xai/grok-4.6` | Chat Completions |
+| `deepseek-v4-pro` | Cloudflare `deepseek/deepseek-v4-pro` | Chat Completions |
+| `kimi-k3` | Cloudflare `moonshotai/kimi-k3` | Chat Completions |
+| `grok-4.5` | Cloudflare `xai/grok-4.5` | Chat Completions |
+| `glm-5.2` | Cloudflare `@cf/zai-org/glm-5.2` | Workers AI chat input |
+| `qwen-3.6-plus` | Poe `qwen3.6-plus-t` | Chat Completions |
+| `thinking-machines-zs-v2` | Poe `inkling` | Chat Completions |
+| `muse-spark-1.1` | Poe `muse-spark-1-1` | Chat Completions |
+| `grok-4.3` | Cloudflare `xai/grok-4.3` | Chat Completions |
+| `foresight-v3` | Poe `foresight-v3` | Responses |
+| `minimax-m2.7` | Cloudflare `minimax/m2.7` | Chat Completions |
 
-## Explicit panel changes
+## Exact-version policy
 
-| Former entry | Current action |
-| --- | --- |
-| Qwen 3.6 Plus | Replaced by the explicitly named Qwen 3.7 Plus model and a new participant ID. |
-| Inkling Small | Replaced by the explicitly named Inkling 256K model and a new participant ID. |
-| Muse Spark 1.1 | Removed from the current site because Cloudflare has no exact route. |
-| Foresight V3 | Removed from the current site because Cloudflare has no exact route. |
+- Qwen 3.6 Plus remains Qwen 3.6 Plus; it is not replaced by Qwen 3.7 Plus.
+- Inkling remains Inkling; it is not replaced by Inkling 256K.
+- GPT-5.6 Sol and GPT-5.5 fall back to their Poe aliases because authenticated Cloudflare Responses smoke requests returned upstream payment errors.
+- Muse Spark 1.1 and Foresight V3 use Poe because Cloudflare does not expose usable exact routes for them.
+- Historical participant IDs remain retired so their previous high/default reasoning results cannot be silently combined with the new medium cohort.
 
-The four former participant IDs are marked inactive. Existing D1 prediction and score records are retained for auditability, but inactive forecasters are filtered from current event cards, current forecaster rankings, and current pair rankings.
+## Reasoning profile
 
-Cloudflare documents Inkling 256K as intended for low-traffic testing and internal use rather than high-throughput production. Its latency and rate behavior must therefore be checked in the live smoke matrix before activation.
+The panel freezes `reasoning_profile=medium` under config version `prophet-fixed-context-v2-medium`. The gateway translates this into documented provider fields when available:
+
+- OpenAI Responses: `reasoning.effort=medium`.
+- Anthropic adaptive thinking: `output_config.effort=medium`.
+- xAI, DeepSeek, Kimi, and GLM routes: `reasoning_effort=medium` where the route accepts it.
+- Exact models without a supported reasoning-level parameter retain provider-default reasoning; the Worker does not send fabricated fields.
+
+The reasoning profile is also written to AI Gateway metadata and each forecast run's prompt version for auditability.
 
 ## Production decision
 
-- The Worker has a Cloudflare AI binding and an explicit 16-model map.
-- `PROPHET_MODEL_GATEWAY_MODE=external` remains the safe production default until Unified Billing has funds and all 16 models pass live smoke tests.
-- After validation, set the mode to `cloudflare-hybrid` and remove successfully tested entries from `PROPHET_DISABLED_MODEL_IDS`.
+- `PROPHET_MODEL_GATEWAY_MODE=cloudflare-hybrid` selects Cloudflare only for the 13 IDs in `PROPHET_CLOUDFLARE_MODEL_ID_MAP`; every other registered model takes its exact Poe fallback.
+- `PROPHET_DISABLED_MODEL_IDS=[]` keeps the full requested panel active.
 - The Cloudflare route uses `skipCache: true` so independent forecasting runs are not served cached model output, while request logging remains enabled for cost and failure auditing.
+- Model-event failures remain retryable and are recorded rather than silently replaced with another model.
 
 ## Account verification
 
-The authenticated Cloudflare account reached the REST model endpoint successfully, but the 2026-08-24 smoke request returned HTTP 402: `Insufficient balance; add money to your gateway or use BYOK`. Production activation remains blocked on loading AI Gateway credits (or configuring exact-provider BYOK keys) and rerunning the smoke matrix.
+The authenticated account showed a positive AI Gateway credit balance on 2026-08-24. Third-party Unified Billing requests succeeded. Native `@cf/...` routes require the `default` gateway's Workers AI billing choice to cover Workers AI usage; this setting is operationally separate from the source deployment.
 
 ## Sources
 
 - Cloudflare model catalog: https://developers.cloudflare.com/ai/models/
-- Qwen 3.7 Plus: https://developers.cloudflare.com/ai/models/alibaba/qwen3.7-plus/
-- Inkling 256K: https://developers.cloudflare.com/ai/models/thinkingmachines/inkling-256k/
+- DeepSeek V4 Flash: https://developers.cloudflare.com/ai/models/%40cf/deepseek-ai/deepseek-v4-flash-0731/
+- Grok 4.6: https://developers.cloudflare.com/ai/models/xai/grok-4.6/
+- GPT-5.6 Sol: https://developers.cloudflare.com/ai/models/openai/gpt-5.6-sol/
 - Workers AI binding and AI Gateway routing: https://developers.cloudflare.com/ai-gateway/usage/worker-binding-methods/
 - REST API formats and authentication: https://developers.cloudflare.com/ai-gateway/usage/rest-api/
 - Unified Billing setup: https://developers.cloudflare.com/ai-gateway/features/unified-billing/

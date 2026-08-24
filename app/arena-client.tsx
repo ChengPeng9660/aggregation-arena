@@ -565,7 +565,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </section>
 
       <section id="pipeline-stage-6" className="story-stage output-stage">
-        <StageHeader number="06" eyebrow="OUTPUT" title="Model predictions" summary="All 18 registered models are compared on the same event and frozen context." />
+        <StageHeader number="06" eyebrow="OUTPUT" title="Model predictions" summary={`${pipeline.models.length} active models are compared on the same event and frozen context.`} />
         {run ? <div className="model-prediction-grid">{modelComparisons.map(({ model, run: modelRun }) => {
           const probabilities = predictionProbabilities(modelRun);
           return <article className={`model-prediction ${modelRun?.status || "pending"}`} key={model.participantId} style={{ borderTopColor: model.color }}>

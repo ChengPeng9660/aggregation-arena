@@ -1,6 +1,7 @@
 import {
   buildCloudflareBindingRequest,
   buildGatewayRequestForEndpoint,
+  FORECAST_REASONING_PROFILE,
   parseModelIdMap,
   resolveGatewayModelId,
 } from "@/lib/forecast-core.js";
@@ -89,6 +90,7 @@ export async function runModelGateway(
             metadata: {
               application: "aggrena",
               panelModelId: request.modelId,
+              reasoningProfile: FORECAST_REASONING_PROFILE,
             },
           },
         },

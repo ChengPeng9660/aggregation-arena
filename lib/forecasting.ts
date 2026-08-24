@@ -291,7 +291,8 @@ async function forecastEvent(
       id, context_id, event_id, participant_id, model_id, prompt_version, status, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?)
     ON CONFLICT(context_id, participant_id) DO UPDATE SET
-      id=excluded.id, status='running', error=NULL, created_at=excluded.created_at, completed_at=NULL
+      id=excluded.id, model_id=excluded.model_id, prompt_version=excluded.prompt_version,
+      status='running', error=NULL, created_at=excluded.created_at, completed_at=NULL
   `).bind(
     runId,
     context.id,
@@ -506,10 +507,10 @@ export async function getForecastPipelineSnapshot(
     `).bind(...modelBindings).first<{ count: number }>(),
   ]);
   return {
-    models: FORECAST_MODELS,
+    models: activeModels,
     activeModels: activeModels.map((model) => model.modelId),
     unavailableModels: FORECAST_MODELS.filter((model) => !activeModels.includes(model)).map((model) => model.modelId),
-    model: FORECAST_MODELS[0],
+    model: activeModels[0] || FORECAST_MODELS[0],
     configured: {
       modelGateway: !gatewayProblem,
       modelGatewayProblem: gatewayProblem,

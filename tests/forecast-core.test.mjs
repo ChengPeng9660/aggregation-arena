@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   FORECAST_JOBS_PER_RUN,
+  FORECAST_CONFIG_VERSION,
   FORECAST_MODELS,
+  FORECAST_REASONING_PROFILE,
   PROPHET_MODEL_PANEL_AS_OF,
   RETIRED_FORECAST_PARTICIPANT_IDS,
   buildCloudflareBindingRequest,
@@ -25,45 +27,61 @@ test("scheduled forecast rounds drain sixteen model-event jobs at a time", () =>
   assert.equal(FORECAST_JOBS_PER_RUN, 16);
 });
 
-test("forecast registry matches Aggrena's current 16-model Fixed Context panel", () => {
+test("forecast registry matches Aggrena's requested 19-model medium panel", () => {
   assert.equal(PROPHET_MODEL_PANEL_AS_OF, "2026-08-24");
-  assert.equal(FORECAST_MODELS.length, 16);
-  assert.equal(new Set(FORECAST_MODELS.map((model) => model.participantId)).size, 16);
-  assert.equal(new Set(FORECAST_MODELS.map((model) => model.modelId)).size, 16);
+  assert.equal(FORECAST_MODELS.length, 19);
+  assert.equal(new Set(FORECAST_MODELS.map((model) => model.participantId)).size, 19);
+  assert.equal(new Set(FORECAST_MODELS.map((model) => model.modelId)).size, 19);
   assert.deepEqual(
     FORECAST_MODELS.map((model) => model.modelId),
     [
-      "gemini-3.6-flash",
-      "claude-fable-5",
-      "gemini-3.1-pro",
       "gpt-5.6-sol",
-      "gpt-5.5-high",
-      "claude-opus-4.8-thinking",
-      "kimi-k3",
-      "thinking-machines-zs-v2",
+      "gemini-3.6-flash",
+      "gemini-3.1-pro",
+      "claude-fable-5",
+      "gpt-5.5",
+      "deepseek-v4-flash",
+      "claude-opus-4.8",
       "claude-sonnet-4.6",
+      "grok-4.6",
+      "deepseek-v4-pro",
+      "kimi-k3",
       "grok-4.5",
       "glm-5.2",
-      "deepseek-v4-pro",
-      "qwen-3.7-plus",
+      "qwen-3.6-plus",
+      "thinking-machines-zs-v2",
+      "muse-spark-1.1",
       "grok-4.3",
-      "inkling-256k",
+      "foresight-v3",
       "minimax-m2.7",
     ],
   );
-  assert.ok(FORECAST_MODELS.every((model) => model.promptVersion === "prophet-fixed-context-v1"));
+  assert.equal(FORECAST_REASONING_PROFILE, "medium");
+  assert.equal(FORECAST_CONFIG_VERSION, "prophet-fixed-context-v2-medium");
+  assert.ok(FORECAST_MODELS.every((model) => model.promptVersion === FORECAST_CONFIG_VERSION));
 });
 
-test("Cloudflare map covers the complete current panel and former entries are retired", () => {
+test("hybrid maps cover the complete panel without substituting exact models", () => {
   const cloudflareMap = JSON.parse(wrangler.vars.PROPHET_CLOUDFLARE_MODEL_ID_MAP);
-  assert.deepEqual(Object.keys(cloudflareMap).sort(), FORECAST_MODELS.map((model) => model.modelId).sort());
-  assert.equal(cloudflareMap["qwen-3.7-plus"], "alibaba/qwen3.7-plus");
-  assert.equal(cloudflareMap["inkling-256k"], "thinkingmachines/inkling-256k");
+  const externalMap = JSON.parse(wrangler.vars.PROPHET_MODEL_ID_MAP);
+  assert.deepEqual(Object.keys(externalMap).sort(), FORECAST_MODELS.map((model) => model.modelId).sort());
+  assert.equal(Object.keys(cloudflareMap).length, 13);
+  assert.equal(cloudflareMap["deepseek-v4-flash"], "@cf/deepseek-ai/deepseek-v4-flash-0731");
+  assert.equal(cloudflareMap["grok-4.6"], "xai/grok-4.6");
+  assert.equal(cloudflareMap["qwen-3.6-plus"], undefined);
+  assert.equal(externalMap["qwen-3.6-plus"], "qwen3.6-plus-t");
+  assert.equal(externalMap["thinking-machines-zs-v2"], "inkling");
   assert.ok([
     "prophet-muse-spark-1.1",
     "prophet-qwen-3.6-plus",
     "prophet-inkling-small",
     "prophet-foresight-v3",
+    "prophet-thinking-machines-zs-v2",
+    "prophet-inkling-256k",
+    "prophet-gpt-5.5-high",
+    "prophet-gpt-5.6-sol",
+    "prophet-claude-opus-4.8-thinking",
+    "prophet-qwen-3.7-plus",
   ].every((participantId) => RETIRED_FORECAST_PARTICIPANT_IDS.includes(participantId)));
 });
 
@@ -83,10 +101,10 @@ test("gateway model IDs default to Prophet slugs and support explicit deployment
 });
 
 test("provider-unavailable models are explicit and never silently substituted", () => {
-  const unavailable = JSON.stringify(["claude-fable-5", "inkling-256k"]);
-  assert.deepEqual(parseDisabledModelIds(unavailable), ["claude-fable-5", "inkling-256k"]);
-  assert.equal(getActiveForecastModels(unavailable).length, 14);
-  assert.ok(getActiveForecastModels(unavailable).every((model) => !["claude-fable-5", "inkling-256k"].includes(model.modelId)));
+  const unavailable = JSON.stringify(["claude-fable-5", "qwen-3.6-plus"]);
+  assert.deepEqual(parseDisabledModelIds(unavailable), ["claude-fable-5", "qwen-3.6-plus"]);
+  assert.equal(getActiveForecastModels(unavailable).length, 17);
+  assert.ok(getActiveForecastModels(unavailable).every((model) => !["claude-fable-5", "qwen-3.6-plus"].includes(model.modelId)));
   assert.throws(() => parseDisabledModelIds('{}'), /JSON array/);
 });
 
@@ -134,6 +152,7 @@ test("Poe Responses API requests use its native input contract", () => {
     instructions: "Return JSON only.",
     max_output_tokens: 2200,
     temperature: 0.1,
+    reasoning: { effort: "medium" },
   });
 });
 
@@ -166,18 +185,19 @@ test("Cloudflare binding uses the Responses contract for GPT-5.6 Sol", () => {
     input: "Forecast this event.",
     instructions: "Return JSON only.",
     max_output_tokens: 2200,
+    reasoning: { effort: "medium" },
   });
 });
 
-test("Cloudflare binding preserves GPT-5.5 high reasoning effort", () => {
+test("Cloudflare binding normalizes GPT-5.5 to medium reasoning effort", () => {
   assert.deepEqual(buildCloudflareBindingRequest(
     "openai/gpt-5.5",
     [{ role: "user", content: "Forecast this event." }],
-    { panelModelId: "gpt-5.5-high", maxTokens: 700 },
+    { panelModelId: "gpt-5.5", maxTokens: 700 },
   ), {
     input: "Forecast this event.",
     max_output_tokens: 2200,
-    reasoning: { effort: "high" },
+    reasoning: { effort: "medium" },
   });
 });
 
@@ -188,13 +208,35 @@ test("Cloudflare binding uses Anthropic Messages and adaptive thinking for Opus"
       { role: "system", content: "Return JSON only." },
       { role: "user", content: "Forecast this event." },
     ],
-    { panelModelId: "claude-opus-4.8-thinking", maxTokens: 700 },
+    { panelModelId: "claude-opus-4.8", maxTokens: 700 },
   ), {
     max_tokens: 2200,
     messages: [{ role: "user", content: "Forecast this event." }],
     system: "Return JSON only.",
-    output_config: { effort: "high" },
+    output_config: { effort: "medium" },
     thinking: { type: "adaptive" },
+  });
+});
+
+test("Cloudflare binding applies medium effort only to providers that expose it", () => {
+  assert.deepEqual(buildCloudflareBindingRequest(
+    "moonshotai/kimi-k3",
+    [{ role: "user", content: "Forecast this event." }],
+    { panelModelId: "kimi-k3", maxTokens: 700, temperature: 0.1 },
+  ), {
+    messages: [{ role: "user", content: "Forecast this event." }],
+    max_tokens: 2200,
+    temperature: 0.1,
+    reasoning_effort: "medium",
+  });
+  assert.deepEqual(buildCloudflareBindingRequest(
+    "minimax/m2.7",
+    [{ role: "user", content: "Forecast this event." }],
+    { panelModelId: "minimax-m2.7", maxTokens: 700, temperature: 0.1 },
+  ), {
+    messages: [{ role: "user", content: "Forecast this event." }],
+    max_tokens: 12000,
+    temperature: 0.1,
   });
 });
 
