@@ -85,14 +85,14 @@
 - 在 Forecast Pipeline 中直接展示全部冻结来源、域名、发布日期、引用状态和原文链接。
 - 一道题只检索一次；新闻来源、检索时间，以及来源市场入选时和预测前的价格、成交量、深度双快照冻结到 `research_contexts`。
 - 所有当前和未来模型复用完全相同的 Context，避免检索差异污染模型比较。
-- 当前注册 Prophet Arena Fixed Context 的 18 个模型，通过私有 OpenAI-compatible Gateway 调用；不使用相近型号静默替代。
+- 当前注册 16 个 Fixed Context 模型；面板基于 Prophet Arena 并按 Cloudflare 精确型号可用性显式修订，不使用未记录的相近型号替代。
 - Prompt 仿照 Prophet Arena：明确题目、结算规则、截止时间、共享来源和市场快照。
 - 模型必须为 Event 的每个 outcome key 输出概率、最多三句话的理由和所引用的 Source Rank。
 - 系统解析 Prophet 风格的 outcome 数组并归一化到概率 simplex；缺少任何 outcome 时自动重试一次。
 - 每次运行完整保存模型、Prompt 版本、原始响应、延迟、引用来源和失败原因。
 - 二元预测写入 `predictions`；多 outcome 预测写入 `prediction_outcomes` 和不可变 `prediction_outcome_history`，随后进入 Aggregation 和 Leaderboard。
 - Forecasts 页面显示流水线配置、待处理数量、预测结果、理由和冻结证据。
-- 每小时 `20` 分独立补跑最多 16 个 model-event 任务；即使整点市场同步失败，模型队列仍会继续处理已有题目。同一 Event 的 18 个模型复用同一个 Frozen Context，不会重复调用 Tavily。管理员也可以手工触发下一个任务。
+- 每小时 `20` 分独立补跑最多 16 个 model-event 任务；即使整点市场同步失败，模型队列仍会继续处理已有题目。同一 Event 的 16 个模型复用同一个 Frozen Context，不会重复调用 Tavily。管理员也可以手工触发下一个任务。
 
 ### 聚合计算
 
@@ -218,16 +218,15 @@ Tavily Basic Search（每道题一次，最多 10 个来源）
       ↓
 同一份 Context 分发给所有模型
       ↓
-Prophet Arena Fixed Context 模型注册表（18 个模型）
+Aggrena Fixed Context 模型注册表（16 个模型）
   ├─ OpenAI / Anthropic / Google / xAI
-  ├─ Moonshot / Zhipu / DeepSeek / Qwen / MiniMax
-  └─ Meta / Thinking Machines / Lightning Rod Labs
+  └─ Moonshot / Zhipu / DeepSeek / Qwen / MiniMax / Thinking Machines
       ↓
 OpenAI-compatible Gateway（LiteLLM 或等价实现）
       ↓
 严格 JSON 解析 + 概率归一化 + 一次格式重试
       ↓
-18 个基础预测完成
+16 个基础预测完成
   ├─ Blind Harness：匿名概率 + 严格 pre-event 历史
   └─ Evidence-Aware Harness：冻结证据 + 概率 + rationale
       ↓（同一个 Gateway，失败可重试）
@@ -236,19 +235,19 @@ Prediction History → Deterministic + Harness Aggregators → Brier Leaderboard
 
 这个实现保留了 Prophet Arena 最重要的实验控制：同一事件的模型必须看到同样的信息来源与市场快照。模型注册表按 Event × Model 生成任务，已有 `context_id` 时直接复用，不能重新搜索。
 
-模型面板固定为 2026-08-10 Prophet Arena 公共 scoring API 中 `is_live=true` 的 18 个 Fixed Context 模型：Gemini 3.6 Flash、Claude Fable 5、Gemini 3.1 Pro、GPT-5.6 Sol、GPT-5.5、Claude Opus 4.8、Kimi K3、Inkling、Claude Sonnet 4.6、Grok 4.5、GLM-5.2、DeepSeek V4 Pro、Muse Spark 1.1、Qwen 3.6 Plus、Grok 4.3、Inkling Small、MiniMax M2.7 和 Foresight V3。Market baseline 和 Agentic predictors 不进入这个模型注册表。
+当前模型面板于 2026-08-24 显式修订为 16 个 Fixed Context 模型：Gemini 3.6 Flash、Claude Fable 5、Gemini 3.1 Pro、GPT-5.6 Sol、GPT-5.5、Claude Opus 4.8、Kimi K3、Inkling、Claude Sonnet 4.6、Grok 4.5、GLM-5.2、DeepSeek V4 Pro、Qwen 3.7 Plus、Grok 4.3、Inkling 256K 和 MiniMax M2.7。Muse Spark 1.1 与 Foresight V3 因 Cloudflare 没有精确型号而退出当前网站面板；Qwen 3.6 Plus 与 Inkling Small 分别由明确命名的新型号替换。历史预测保留但不会继续出现在当前 Live Benchmark。Market baseline 和 Agentic predictors 不进入这个模型注册表。
 
 ### 调用量
 
 - Tavily 免费账户每月 1,000 API Credits；Basic Search 每次 1 Credit。
 - 每日发布 20 题，每题搜索一次，30 天约使用 `20 × 30 = 600 Credits`。
-- 18 个模型每天最多产生 `20 × 18 = 360` 个 model-event forecasts。
+- 16 个模型每天最多产生 `20 × 16 = 320` 个 model-event forecasts。
 - 预测 Cron 每小时最多处理 16 个 model-event jobs；正常输出每个 job 只调用一次模型，只有 JSON 无法解析时才做一次格式重试。
 - 每个来源摘要最多 1,800 字符，模型输出最多 700 tokens。模型费用由 Gateway 后面的实际供应商和 deployment alias 决定。
 
 ### 配置 API 密钥
 
-先在 <https://app.tavily.com> 获取 Tavily Key，并准备一个 OpenAI Chat Completions-compatible Gateway。当前生产环境使用 Poe 的统一 API；Worker 中只保存 Poe endpoint 和公开 bot 映射，API Key 只进入 Cloudflare 加密 Secret。不要把任何 Key 写入 `wrangler.jsonc`、README、Git commit 或前端代码。
+先在 <https://app.tavily.com> 获取 Tavily Key。模型调用支持 Cloudflare AI Gateway，并用 Poe 保留 Cloudflare 目录缺失的精确型号。Cloudflare 路径使用 Worker 的 `AI` binding，不在 Worker 中保存 Cloudflare API token；Poe API Key 只进入 Cloudflare 加密 Secret。不要把任何 Key 写入 `wrangler.jsonc`、README、Git commit 或前端代码。
 
 在正确的 Cloudflare 账户登录后执行：
 
@@ -259,25 +258,25 @@ npx wrangler secret put TAVILY_API_KEY
 npx wrangler secret put PROPHET_MODEL_GATEWAY_API_KEY
 ```
 
-`PROPHET_MODEL_GATEWAY_URL` 必须是完整 endpoint。Poe 使用：
+默认配置保持 `PROPHET_MODEL_GATEWAY_MODE=external`，以免在 Cloudflare Unified Billing 余额不足时中断生产。完成充值和逐型号 smoke test 后，改为 `cloudflare-hybrid`：`PROPHET_CLOUDFLARE_MODEL_ID_MAP` 中的精确型号走 Cloudflare，其余型号继续走 Poe。`PROPHET_MODEL_GATEWAY_URL` 是 Poe 回退的完整 endpoint：
 
 ```text
 https://api.poe.com/v1/chat/completions
 ```
 
-18 个基础预测模型、Blind Harness 和 Evidence-Aware Harness 共用这一个 Gateway 和 API Key；Harness 默认调用 `qwen-3.6-plus`，在 Poe 上解析为 `Qwen3.6-Plus`。`PROPHET_MODEL_ID_MAP` 将稳定的 Prophet slug 映射到 Poe 的公开 bot ID；模型显示名、participant ID、ranking 和 score calculation 不随供应商映射改变。
+Cloudflare 当前可以覆盖修订后的全部 16 个型号；逐型号映射和请求格式审计见 [`docs/cloudflare-model-audit-2026-08-24.md`](docs/cloudflare-model-audit-2026-08-24.md)。型号替换必须像本次面板修订一样显式更名并保留审计记录。
+
+16 个基础预测模型、Blind Harness 和 Evidence-Aware Harness 共用统一路由；Harness 默认调用 `qwen-3.7-plus`。`PROPHET_CLOUDFLARE_MODEL_ID_MAP` 映射 Cloudflare 精确型号，`PROPHET_MODEL_ID_MAP` 只用于 external/Poe 回退。模型显示名、participant ID、ranking 和 score calculation 不随底层路由改变。
 
 ```json
-{"gpt-5.6-sol":"GPT-5.6-Sol","claude-fable-5":"Claude-Fable-5","qwen-3.6-plus":"Qwen3.6-Plus"}
+{"gpt-5.6-sol":"GPT-5.6-Sol","claude-fable-5":"Claude-Fable-5","qwen-3.7-plus":"Qwen3.7-Plus"}
 ```
 
 应用不会用相近型号静默替代。若 Poe 不支持某个精确 bot ID，该 model-event 会记录为 `failed`，其他模型继续运行；维护者应更新公开 bot 映射，而不是把另一型号冒充成原模型。
 
-`PROPHET_DISABLED_MODEL_IDS` 记录 Poe 当前 API 没有开放的精确型号。它只控制供应商任务队列和 Harness 所需的基础预测数量，不删除公共 18-model registry，也不改历史 individual-model scores。2026-08-15 的真实探测结果是：Poe UI 已展示 Claude Fable 5、GPT-5.6 Sol 和 GPT-5.5，但三者的 Bot Query API 明确返回 `This bot does not support API access`，OpenAI-compatible API 也返回 model not found；Inkling Small 返回 unavailable，Foresight V3 返回 bot does not exist。因此生产 active provider panel 暂为其余 13 个精确模型。Poe 真正开放对应 API 后，应从该数组移除并逐模型 smoke test，不能仅依据 UI 页面或模型目录解除禁用。
+`PROPHET_DISABLED_MODEL_IDS` 在 external 模式下记录尚未通过该路由实测的型号。Cloudflare 余额充值并完成 16 型号 smoke test 后，切换到 `cloudflare-hybrid` 并逐项移除已验证型号。它只控制当前任务队列，不删除旧的 individual-model scores。
 
-Poe 同一开源模型可能由多个官方 provider bot 托管。当前 `qwen-3.6-plus` 映射到 Together AI 的 `qwen3.6-plus-t`，因为主 `qwen3.6-plus` bot 在生产 smoke test 中连续返回临时 unavailable；两者均明确服务 Qwen 3.6 Plus，而不是用不同型号替代。
-
-两种 Harness 会在同一个事件的全部 active exact models 完成后自动运行（当前为 13 个；供应商开放全部型号后自动恢复为 18 个）。Gateway 的网络错误、超时或上游错误会记录为可重试的 `failed`，不会永久替换为聚合结果；只有两次成功请求都返回无法解析的权重 JSON 时，才会记录 equal-mean fallback。已解决事件的维护者回填允许从至少两个完整基础预测开始。
+两种 Harness 会在同一个事件的全部 active exact models 完成后自动运行（Cloudflare 完整启用后为 16 个）。Gateway 的网络错误、超时或上游错误会记录为可重试的 `failed`，不会永久替换为聚合结果；只有两次成功请求都返回无法解析的权重 JSON 时，才会记录 equal-mean fallback。已解决事件的维护者回填允许从至少两个完整基础预测开始。
 
 本地开发先复制 [`.dev.vars.example`](.dev.vars.example) 为 `.dev.vars` 再填入真实值；`.dev.vars` 已被 Git 忽略。部署后打开网站的 `Pipeline` 页面查看配置状态，也可以在 `Forecasts` 页面检查模型任务。配置正常时可等待每小时 `:20` 的预测 Cron，或登录后点击 `Run next forecast`。
 
@@ -927,7 +926,7 @@ aggrena/
 ## 当前限制
 
 - 手工创建和手工概率录入界面目前仍以 Yes / No 为主；Polymarket 自动流水线支持多 outcome Event，Kalshi 当前按独立二元 Market 接入。
-- 当前 18 个自动 Predictor 共享同一份 frozen evidence，但分别独立推理；外部 Gateway 必须提供全部 Prophet model alias。
+- 当前 16 个自动 Predictor 共享同一份 frozen evidence，但分别独立推理；Gateway 必须提供当前面板的全部精确 model alias。
 - 自动结算分别读取 Polymarket 的最终 outcome 价格和 Kalshi 的官方 `result` 字段；只有明确结果才写入 Arena。
 - 固定分类器使用标签和关键词；低置信度的边界题仍可能需要后续人工审核。
 - 不支持连续结果或数值预测评分；多 outcome 必须互斥且穷尽。

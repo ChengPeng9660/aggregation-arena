@@ -4,7 +4,7 @@ import { CANONICAL_CATEGORIES } from "@/lib/curation-core.js";
 import { aggregateDistribution, normalizeDistribution, prophetEventBrier } from "@/lib/event-core.js";
 import { forecastAdmission } from "@/lib/event-state-core.js";
 import { lockEvent } from "@/lib/event-state";
-import { FORECAST_MODELS } from "@/lib/forecast-core.js";
+import { FORECAST_MODELS, RETIRED_FORECAST_PARTICIPANT_IDS } from "@/lib/forecast-core.js";
 import { buildBestPairStandings } from "@/lib/pair-leaderboard-core.js";
 
 export type ArenaFilters = {
@@ -207,6 +207,19 @@ export async function ensureArenaReady() {
   if (!schemaReady) {
     const db = getD1();
     await db.batch(SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)));
+    const registryStatements = FORECAST_MODELS.map((model) => db.prepare(`
+      INSERT INTO participants (id, name, organization, kind, color, status)
+      VALUES (?, ?, ?, 'forecaster', ?, 'active')
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name, organization=excluded.organization,
+        color=excluded.color, status='active'
+    `).bind(model.participantId, model.participantName, model.organization, model.color));
+    if (RETIRED_FORECAST_PARTICIPANT_IDS.length) {
+      registryStatements.push(db.prepare(`
+        UPDATE participants SET status='inactive'
+        WHERE id IN (${RETIRED_FORECAST_PARTICIPANT_IDS.map(() => "?").join(", ")})
+      `).bind(...RETIRED_FORECAST_PARTICIPANT_IDS));
+    }
+    await db.batch(registryStatements);
     schemaReady = true;
   }
 }
@@ -224,8 +237,12 @@ export async function getArenaSnapshot(filters: ArenaFilters = {}) {
     getCurationSnapshot(db),
   ]);
 
+  const activeParticipantIds = new Set(
+    (participantRows.results as Record<string, unknown>[]).map((row) => String(row.id)),
+  );
   const predictionsByEvent = new Map<string, Record<string, unknown>[]>();
   for (const raw of predictionRows.results as Record<string, unknown>[]) {
+    if (raw.kind === "forecaster" && !activeParticipantIds.has(String(raw.participant_id))) continue;
     const eventId = String(raw.event_id);
     const list = predictionsByEvent.get(eventId) ?? [];
     list.push({
@@ -240,6 +257,7 @@ export async function getArenaSnapshot(filters: ArenaFilters = {}) {
     predictionsByEvent.set(eventId, list);
   }
   for (const raw of predictionOutcomeRows.results as Record<string, unknown>[]) {
+    if (raw.kind === "forecaster" && !activeParticipantIds.has(String(raw.participant_id))) continue;
     const eventId = String(raw.event_id);
     const list = predictionsByEvent.get(eventId) ?? [];
     let prediction = list.find((item) => item.id === raw.participant_id);
@@ -553,11 +571,14 @@ async function buildLeaderboard(
     WHERE e.id NOT LIKE 'demo-%' AND e.season <> 'Demo Season'
   `).all<Record<string, unknown>>();
   const track = filters.track ?? "aggregators";
+  const activeParticipantIds = new Set(participants.map((participant) => String(participant.id)));
   const acceptsTrack = (row: Record<string, unknown>) => {
     if (!eligible.has(String(row.event_id))) return false;
     if (track === "aggregators") return row.kind === "aggregate";
-    if (track === "forecasters") return row.kind === "forecaster";
-    return true;
+    if (track === "forecasters") {
+      return row.kind === "forecaster" && activeParticipantIds.has(String(row.participant_id));
+    }
+    return row.kind !== "forecaster" || activeParticipantIds.has(String(row.participant_id));
   };
   type ScoreRow = { eventId: string; participantId: string; participantName: string; kind: string; version: string; loss: number };
   const scores: ScoreRow[] = rows.results.filter(acceptsTrack).map((row) => ({
@@ -576,7 +597,7 @@ async function buildLeaderboard(
   }
   const pairForecastsByEvent = new Map<string, Record<string, Record<string, number>>>();
   for (const row of rows.results) {
-    if (row.kind !== "forecaster") continue;
+    if (row.kind !== "forecaster" || !activeParticipantIds.has(String(row.participant_id))) continue;
     const eventId = String(row.event_id);
     const forecasts = pairForecastsByEvent.get(eventId) ?? {};
     const probability = Number(row.probability);
@@ -585,7 +606,7 @@ async function buildLeaderboard(
   }
   const pairOutcomeGroups = new Map<string, Record<string, unknown>[]>();
   for (const row of outcomeRows.results) {
-    if (row.kind !== "forecaster") continue;
+    if (row.kind !== "forecaster" || !activeParticipantIds.has(String(row.participant_id))) continue;
     const key = `${row.event_id}::${row.participant_id}`;
     const group = pairOutcomeGroups.get(key) ?? [];
     group.push(row);
@@ -689,19 +710,6 @@ async function buildLeaderboard(
 
   if (track === "aggregators") {
     const pairParticipantMap = new Map(participants.map((participant) => [String(participant.id), participant]));
-    for (const row of [...rows.results, ...outcomeRows.results]) {
-      if (row.kind !== "forecaster") continue;
-      const id = String(row.participant_id);
-      if (!pairParticipantMap.has(id)) {
-        pairParticipantMap.set(id, {
-          id,
-          name: String(row.participant_name),
-          organization: "Archived benchmark model",
-          color: "#7c4dff",
-          kind: "forecaster",
-        });
-      }
-    }
     const bestPairs = buildBestPairStandings({
       events: pairEvents,
       methods: PAIR_AGGREGATION_METHODS,

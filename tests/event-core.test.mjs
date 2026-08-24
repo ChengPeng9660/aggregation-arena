@@ -12,6 +12,10 @@ const outcomes = [
   { key: "market-b", label: "Candidate B" },
   { key: "other", label: "Other" },
 ];
+const binaryOutcomes = [
+  { key: "yes", label: "Yes" },
+  { key: "no", label: "No" },
+];
 
 test("normalizes a complete categorical probability distribution", () => {
   assert.deepEqual(normalizeDistribution({ a: 2, b: 1 }, ["a", "b"]), {
@@ -89,6 +93,37 @@ test("parses JSON returned in an OpenAI-compatible reasoning_content field", () 
     "market-b": 0.35,
     other: 0.15,
   });
+});
+
+test("parses JSON returned by Anthropic Messages", () => {
+  const parsed = parseEventPredictionResponse({
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        rationale: "Anthropic response.",
+        probabilities: [{ market: "yes", probability: 0.64 }, { market: "no", probability: 0.36 }],
+        citedSourceRanks: [1],
+      }),
+    }],
+  }, binaryOutcomes);
+  assert.equal(parsed.probabilities.yes, 0.64);
+});
+
+test("parses JSON returned by the OpenAI Responses API", () => {
+  const parsed = parseEventPredictionResponse({
+    output: [{
+      type: "message",
+      content: [{
+        type: "output_text",
+        text: JSON.stringify({
+          rationale: "Responses output.",
+          probabilities: [{ market: "yes", probability: 0.58 }, { market: "no", probability: 0.42 }],
+          citedSourceRanks: [2],
+        }),
+      }],
+    }],
+  }, binaryOutcomes);
+  assert.equal(parsed.probabilities.yes, 0.58);
 });
 
 test("categorical aggregation preserves the simplex", () => {

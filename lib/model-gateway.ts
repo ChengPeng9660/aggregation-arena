@@ -1,10 +1,26 @@
 import {
+  buildCloudflareBindingRequest,
   buildGatewayRequestForEndpoint,
   parseModelIdMap,
   resolveGatewayModelId,
 } from "@/lib/forecast-core.js";
 
+type CloudflareAiBinding = {
+  run(model: string, input: unknown, options: {
+    gateway: {
+      id: string;
+      skipCache: boolean;
+      collectLog: boolean;
+      metadata: Record<string, string>;
+    };
+  }): Promise<unknown>;
+};
+
 export type ModelGatewayEnv = {
+  AI?: CloudflareAiBinding;
+  PROPHET_MODEL_GATEWAY_MODE?: string;
+  PROPHET_AI_GATEWAY_ID?: string;
+  PROPHET_CLOUDFLARE_MODEL_ID_MAP?: string;
   PROPHET_MODEL_GATEWAY_URL?: string;
   PROPHET_MODEL_GATEWAY_API_KEY?: string;
   PROPHET_MODEL_ID_MAP?: string;
@@ -25,14 +41,17 @@ export class ModelGatewayRequestError extends Error {
 }
 
 export function modelGatewayConfigurationProblem(env: ModelGatewayEnv) {
-  if (!env.PROPHET_MODEL_GATEWAY_URL?.trim()) return "PROPHET_MODEL_GATEWAY_URL is not configured";
-  if (!env.PROPHET_MODEL_GATEWAY_API_KEY?.trim()) return "PROPHET_MODEL_GATEWAY_API_KEY is not configured";
   try {
+    const mode = modelGatewayMode(env);
+    if (mode === "cloudflare-hybrid" && !env.AI) return "Cloudflare AI binding is not configured";
+    if (!env.PROPHET_MODEL_GATEWAY_URL?.trim()) return "PROPHET_MODEL_GATEWAY_URL is not configured";
+    if (!env.PROPHET_MODEL_GATEWAY_API_KEY?.trim()) return "PROPHET_MODEL_GATEWAY_API_KEY is not configured";
     const endpoint = new URL(env.PROPHET_MODEL_GATEWAY_URL);
     if (!["http:", "https:"].includes(endpoint.protocol)) {
       return "PROPHET_MODEL_GATEWAY_URL must use HTTP or HTTPS";
     }
     parseModelIdMap(env.PROPHET_MODEL_ID_MAP);
+    parseModelIdMap(env.PROPHET_CLOUDFLARE_MODEL_ID_MAP);
     parseModelIdList(env.PROPHET_RESPONSES_MODEL_IDS, "PROPHET_RESPONSES_MODEL_IDS");
   } catch (error) {
     return errorMessage(error);
@@ -52,6 +71,41 @@ export async function runModelGateway(
 ) {
   const gatewayProblem = modelGatewayConfigurationProblem(env);
   if (gatewayProblem) throw new ModelGatewayRequestError(gatewayProblem);
+  const cloudflareModelMap = parseModelIdMap(env.PROPHET_CLOUDFLARE_MODEL_ID_MAP);
+  const cloudflareModelId = cloudflareModelMap[request.modelId];
+  if (modelGatewayMode(env) === "cloudflare-hybrid" && cloudflareModelId) {
+    try {
+      const payload = await env.AI!.run(
+        cloudflareModelId,
+        buildCloudflareBindingRequest(cloudflareModelId, request.messages, {
+          ...request,
+          panelModelId: request.modelId,
+        }),
+        {
+          gateway: {
+            id: env.PROPHET_AI_GATEWAY_ID?.trim() || "default",
+            skipCache: true,
+            collectLog: true,
+            metadata: {
+              application: "aggrena",
+              panelModelId: request.modelId,
+            },
+          },
+        },
+      );
+      const gatewayError = gatewayPayloadError(payload);
+      if (gatewayError) {
+        throw new ModelGatewayRequestError(`Cloudflare AI request failed for ${request.modelId}: ${gatewayError}`);
+      }
+      return { payload, gatewayModelId: cloudflareModelId };
+    } catch (error) {
+      if (error instanceof ModelGatewayRequestError) throw error;
+      throw new ModelGatewayRequestError(
+        `Cloudflare AI request failed for ${request.modelId}: ${errorMessage(error)}`,
+        { cause: error },
+      );
+    }
+  }
   const gatewayModelId = resolveGatewayModelId(request.modelId, env.PROPHET_MODEL_ID_MAP);
   const gatewayEndpoint = resolveGatewayEndpoint(
     env.PROPHET_MODEL_GATEWAY_URL!,
@@ -155,6 +209,14 @@ function parseModelIdList(value: string | undefined, variableName: string) {
     throw new Error(`${variableName} must be a JSON array of non-empty strings`);
   }
   return [...new Set(parsed.map((modelId) => modelId.trim()))];
+}
+
+function modelGatewayMode(env: ModelGatewayEnv) {
+  const mode = env.PROPHET_MODEL_GATEWAY_MODE?.trim() || "external";
+  if (!["external", "cloudflare-hybrid"].includes(mode)) {
+    throw new Error("PROPHET_MODEL_GATEWAY_MODE must be external or cloudflare-hybrid");
+  }
+  return mode;
 }
 
 function gatewayPayloadError(payload: unknown) {

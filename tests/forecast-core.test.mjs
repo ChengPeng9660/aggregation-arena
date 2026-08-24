@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   FORECAST_JOBS_PER_RUN,
   FORECAST_MODELS,
   PROPHET_MODEL_PANEL_AS_OF,
+  RETIRED_FORECAST_PARTICIPANT_IDS,
+  buildCloudflareBindingRequest,
   buildGatewayRequest,
   buildGatewayRequestForEndpoint,
   buildProphetPredictionPrompt,
@@ -16,15 +19,17 @@ import {
   resolveGatewayModelId,
 } from "../lib/forecast-core.js";
 
+const wrangler = JSON.parse(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
+
 test("scheduled forecast rounds drain sixteen model-event jobs at a time", () => {
   assert.equal(FORECAST_JOBS_PER_RUN, 16);
 });
 
-test("forecast registry matches Prophet Arena's current 18-model Fixed Context panel", () => {
-  assert.equal(PROPHET_MODEL_PANEL_AS_OF, "2026-08-10");
-  assert.equal(FORECAST_MODELS.length, 18);
-  assert.equal(new Set(FORECAST_MODELS.map((model) => model.participantId)).size, 18);
-  assert.equal(new Set(FORECAST_MODELS.map((model) => model.modelId)).size, 18);
+test("forecast registry matches Aggrena's current 16-model Fixed Context panel", () => {
+  assert.equal(PROPHET_MODEL_PANEL_AS_OF, "2026-08-24");
+  assert.equal(FORECAST_MODELS.length, 16);
+  assert.equal(new Set(FORECAST_MODELS.map((model) => model.participantId)).size, 16);
+  assert.equal(new Set(FORECAST_MODELS.map((model) => model.modelId)).size, 16);
   assert.deepEqual(
     FORECAST_MODELS.map((model) => model.modelId),
     [
@@ -40,15 +45,26 @@ test("forecast registry matches Prophet Arena's current 18-model Fixed Context p
       "grok-4.5",
       "glm-5.2",
       "deepseek-v4-pro",
-      "muse-spark-1.1",
-      "qwen-3.6-plus",
+      "qwen-3.7-plus",
       "grok-4.3",
-      "inkling-small",
+      "inkling-256k",
       "minimax-m2.7",
-      "foresight-v3",
     ],
   );
   assert.ok(FORECAST_MODELS.every((model) => model.promptVersion === "prophet-fixed-context-v1"));
+});
+
+test("Cloudflare map covers the complete current panel and former entries are retired", () => {
+  const cloudflareMap = JSON.parse(wrangler.vars.PROPHET_CLOUDFLARE_MODEL_ID_MAP);
+  assert.deepEqual(Object.keys(cloudflareMap).sort(), FORECAST_MODELS.map((model) => model.modelId).sort());
+  assert.equal(cloudflareMap["qwen-3.7-plus"], "alibaba/qwen3.7-plus");
+  assert.equal(cloudflareMap["inkling-256k"], "thinkingmachines/inkling-256k");
+  assert.ok([
+    "prophet-muse-spark-1.1",
+    "prophet-qwen-3.6-plus",
+    "prophet-inkling-small",
+    "prophet-foresight-v3",
+  ].every((participantId) => RETIRED_FORECAST_PARTICIPANT_IDS.includes(participantId)));
 });
 
 test("gateway model IDs default to Prophet slugs and support explicit deployment aliases", () => {
@@ -67,10 +83,10 @@ test("gateway model IDs default to Prophet slugs and support explicit deployment
 });
 
 test("provider-unavailable models are explicit and never silently substituted", () => {
-  const unavailable = JSON.stringify(["claude-fable-5", "foresight-v3"]);
-  assert.deepEqual(parseDisabledModelIds(unavailable), ["claude-fable-5", "foresight-v3"]);
-  assert.equal(getActiveForecastModels(unavailable).length, 16);
-  assert.ok(getActiveForecastModels(unavailable).every((model) => !["claude-fable-5", "foresight-v3"].includes(model.modelId)));
+  const unavailable = JSON.stringify(["claude-fable-5", "inkling-256k"]);
+  assert.deepEqual(parseDisabledModelIds(unavailable), ["claude-fable-5", "inkling-256k"]);
+  assert.equal(getActiveForecastModels(unavailable).length, 14);
+  assert.ok(getActiveForecastModels(unavailable).every((model) => !["claude-fable-5", "inkling-256k"].includes(model.modelId)));
   assert.throws(() => parseDisabledModelIds('{}'), /JSON array/);
 });
 
@@ -136,6 +152,77 @@ test("Poe grants larger ceilings to bots that spend heavily on hidden reasoning"
     { maxTokens: 700, temperature: 0.1, seed: 42 },
   );
   assert.equal(minimaxRequest.max_tokens, 12000);
+});
+
+test("Cloudflare binding uses the Responses contract for GPT-5.6 Sol", () => {
+  assert.deepEqual(buildCloudflareBindingRequest(
+    "openai/gpt-5.6-sol",
+    [
+      { role: "system", content: "Return JSON only." },
+      { role: "user", content: "Forecast this event." },
+    ],
+    { panelModelId: "gpt-5.6-sol", maxTokens: 700, temperature: 0.1 },
+  ), {
+    input: "Forecast this event.",
+    instructions: "Return JSON only.",
+    max_output_tokens: 2200,
+  });
+});
+
+test("Cloudflare binding preserves GPT-5.5 high reasoning effort", () => {
+  assert.deepEqual(buildCloudflareBindingRequest(
+    "openai/gpt-5.5",
+    [{ role: "user", content: "Forecast this event." }],
+    { panelModelId: "gpt-5.5-high", maxTokens: 700 },
+  ), {
+    input: "Forecast this event.",
+    max_output_tokens: 2200,
+    reasoning: { effort: "high" },
+  });
+});
+
+test("Cloudflare binding uses Anthropic Messages and adaptive thinking for Opus", () => {
+  assert.deepEqual(buildCloudflareBindingRequest(
+    "anthropic/claude-opus-4.8",
+    [
+      { role: "system", content: "Return JSON only." },
+      { role: "user", content: "Forecast this event." },
+    ],
+    { panelModelId: "claude-opus-4.8-thinking", maxTokens: 700 },
+  ), {
+    max_tokens: 2200,
+    messages: [{ role: "user", content: "Forecast this event." }],
+    system: "Return JSON only.",
+    output_config: { effort: "high" },
+    thinking: { type: "adaptive" },
+  });
+});
+
+test("Cloudflare binding retains large reasoning ceilings for MiniMax", () => {
+  assert.deepEqual(buildCloudflareBindingRequest(
+    "minimax/m2.7",
+    [{ role: "user", content: "Forecast this event." }],
+    { panelModelId: "minimax-m2.7", maxTokens: 700, temperature: 0.1 },
+  ), {
+    messages: [{ role: "user", content: "Forecast this event." }],
+    max_tokens: 12000,
+    temperature: 0.1,
+  });
+});
+
+test("Cloudflare binding uses the Anthropic contract for Inkling 256K", () => {
+  assert.deepEqual(buildCloudflareBindingRequest(
+    "thinkingmachines/inkling-256k",
+    [
+      { role: "system", content: "Return JSON only." },
+      { role: "user", content: "Forecast this event." },
+    ],
+    { panelModelId: "inkling-256k", maxTokens: 700 },
+  ), {
+    max_tokens: 6000,
+    messages: [{ role: "user", content: "Forecast this event." }],
+    system: "Return JSON only.",
+  });
 });
 
 const event = {

@@ -32,7 +32,9 @@ test("the leaderboard registers blind and evidence-aware agent harness methods s
   assert.match(source, /agg-agent-harness-evidence-v1/);
   assert.match(source, /informationSet: "blind"/);
   assert.match(source, /informationSet: "evidence-aware"/);
-  assert.match(harnessSource, /AGENT_HARNESS_MODEL = "qwen-3\.6-plus"/);
+  assert.match(harnessSource, /AGENT_HARNESS_MODEL = "qwen-3\.7-plus"/);
+  assert.match(harnessSource, /AGENT_HARNESS_MODEL\)\) \{/);
+  assert.match(harnessSource, /is disabled until its configured gateway route passes a live smoke test/);
   assert.match(harnessSource, /runModelGateway\(env/);
   assert.match(harnessSource, /requiredForecasts = options\.resolvedOnly \? 2 : activeModels\.length/);
   assert.match(harnessSource, /getActiveForecastModels\(env\.PROPHET_DISABLED_MODEL_IDS\)/);

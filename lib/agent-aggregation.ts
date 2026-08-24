@@ -21,6 +21,10 @@ import {
 
 type HarnessEnv = {
   DB: D1Database;
+  AI?: Ai;
+  PROPHET_MODEL_GATEWAY_MODE?: string;
+  PROPHET_AI_GATEWAY_ID?: string;
+  PROPHET_CLOUDFLARE_MODEL_ID_MAP?: string;
   PROPHET_MODEL_GATEWAY_URL?: string;
   PROPHET_MODEL_GATEWAY_API_KEY?: string;
   PROPHET_MODEL_ID_MAP?: string;
@@ -68,8 +72,8 @@ type HarnessPool = {
   forecasters: HarnessForecaster[];
 };
 
-export const AGENT_HARNESS_MODEL = "qwen-3.6-plus";
-export const AGENT_HARNESS_PROMPT_VERSION = "agent-weight-router-gateway-v3";
+export const AGENT_HARNESS_MODEL = "qwen-3.7-plus";
+export const AGENT_HARNESS_PROMPT_VERSION = "agent-weight-router-gateway-v4";
 
 export const AGENT_HARNESS_METHODS: HarnessMethod[] = [
   {
@@ -138,6 +142,16 @@ export async function runAgentHarnessBatch(
     ? `AND e.id IN (${targetEventIds.map(() => "?").join(", ")})`
     : "";
   const activeModels = getActiveForecastModels(env.PROPHET_DISABLED_MODEL_IDS);
+  if (!activeModels.some((model) => model.modelId === AGENT_HARNESS_MODEL)) {
+    return {
+      configured: false,
+      processedEvents: 0,
+      completed: 0,
+      fallback: 0,
+      failed: 0,
+      message: `${AGENT_HARNESS_MODEL} is disabled until its configured gateway route passes a live smoke test`,
+    };
+  }
   const requiredForecasts = options.resolvedOnly ? 2 : activeModels.length;
   const modelPlaceholders = activeModels.map(() => "?").join(", ");
   const statusClause = options.resolvedOnly ? "e.status='resolved'" : "e.status IN ('resolved','open')";
