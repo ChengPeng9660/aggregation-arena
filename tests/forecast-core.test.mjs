@@ -13,6 +13,8 @@ import {
   buildSearchQuery,
   normalizeSources,
   getActiveForecastModels,
+  isRetryableModelGatewayError,
+  modelGatewayRetryDelayMs,
   parseDisabledModelIds,
   parseModelIdMap,
   parsePredictionResponse,
@@ -156,6 +158,22 @@ test("Cloudflare binding uses Anthropic Messages and adaptive thinking for Opus"
   });
 });
 
+test("Cloudflare binding lets Fable use built-in adaptive thinking with medium effort", () => {
+  assert.deepEqual(buildCloudflareBindingRequest(
+    "anthropic/claude-fable-5",
+    [
+      { role: "system", content: "Return JSON only." },
+      { role: "user", content: "Forecast this event." },
+    ],
+    { panelModelId: "claude-fable-5", maxTokens: 700 },
+  ), {
+    max_tokens: 2200,
+    messages: [{ role: "user", content: "Forecast this event." }],
+    system: "Return JSON only.",
+    output_config: { effort: "medium" },
+  });
+});
+
 test("Cloudflare binding applies medium effort only to providers that expose it", () => {
   assert.deepEqual(buildCloudflareBindingRequest(
     "moonshotai/kimi-k3",
@@ -203,6 +221,14 @@ test("Cloudflare binding uses the Anthropic contract for Inkling 256K", () => {
     messages: [{ role: "user", content: "Forecast this event." }],
     system: "Return JSON only.",
   });
+});
+
+test("Cloudflare gateway retries only transient provider failures with bounded backoff", () => {
+  assert.equal(isRetryableModelGatewayError("Wholesale rate limit exceeded for this gateway"), true);
+  assert.equal(isRetryableModelGatewayError("2021: Invalid User Credentials"), true);
+  assert.equal(isRetryableModelGatewayError("status 503"), true);
+  assert.equal(isRetryableModelGatewayError("No exact Cloudflare model route is configured"), false);
+  assert.deepEqual([0, 1, 9].map(modelGatewayRetryDelayMs), [2000, 8000, 8000]);
 });
 
 const event = {

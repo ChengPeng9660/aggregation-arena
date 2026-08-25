@@ -203,9 +203,8 @@ const SCHEMA_STATEMENTS = [
 
 let schemaReady = false;
 
-export async function ensureArenaReady() {
+export async function ensureArenaReady(db: D1Database = getD1()) {
   if (!schemaReady) {
-    const db = getD1();
     await db.batch(SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)));
     const registryStatements = FORECAST_MODELS.map((model) => db.prepare(`
       INSERT INTO participants (id, name, organization, kind, color, status)
@@ -888,9 +887,9 @@ export async function recordAutomatedForecast(payload: {
   rationale: string;
   version: string;
   components: Record<string, unknown>;
-}) {
-  await ensureArenaReady();
-  const db = getD1();
+}, options: AutomatedForecastWriteOptions = {}) {
+  const db = options.db ?? getD1();
+  await ensureArenaReady(db);
   const event = await db.prepare("SELECT status, close_time FROM events WHERE id=?").bind(payload.eventId)
     .first<{ status: string; close_time: string | null }>();
   if (!event) throw new ArenaError(404, "Event not found");
@@ -906,9 +905,14 @@ export async function recordAutomatedForecast(payload: {
     "forecaster",
     payload.version,
     JSON.stringify(payload.components),
+    {
+      db,
+      recordedAt: options.recordedAt,
+      precedingStatements: options.precedingStatements,
+    },
   );
-  const aggregates = await syncAggregates(payload.eventId);
-  await writeAudit(
+  const aggregates = await syncAutomatedAggregates(payload.eventId, options.deferAggregateErrors);
+  await writeAutomatedAudit(
     "forecast.automated_completed",
     "event",
     payload.eventId,
@@ -917,8 +921,11 @@ export async function recordAutomatedForecast(payload: {
       probability: payload.probability,
       contextId: payload.components.contextId,
       aggregateCount: aggregates.length,
+      recovered: Boolean(options.recovered),
     },
     "forecast-cron",
+    db,
+    options.deferAggregateErrors,
   );
   return { eventId: payload.eventId, probability: payload.probability, aggregates };
 }
@@ -931,9 +938,9 @@ export async function recordAutomatedEventForecast(payload: {
   rationale: string;
   version: string;
   components: Record<string, unknown>;
-}) {
-  await ensureArenaReady();
-  const db = getD1();
+}, options: AutomatedForecastWriteOptions = {}) {
+  const db = options.db ?? getD1();
+  await ensureArenaReady(db);
   const event = await db.prepare("SELECT status, close_time FROM events WHERE id=?").bind(payload.eventId)
     .first<{ status: string; close_time: string | null }>();
   if (!event) throw new ArenaError(404, "Event not found");
@@ -946,14 +953,20 @@ export async function recordAutomatedEventForecast(payload: {
   await upsertPredictionOutcomes(
     payload.eventId, payload.participantId, payload.participantName, probabilities,
     payload.rationale, "forecaster", payload.version, JSON.stringify(payload.components),
+    {
+      db,
+      recordedAt: options.recordedAt,
+      precedingStatements: options.precedingStatements,
+    },
   );
-  const aggregates = await syncAggregates(payload.eventId);
-  await writeAudit("forecast.automated_completed", "event", payload.eventId, {
+  const aggregates = await syncAutomatedAggregates(payload.eventId, options.deferAggregateErrors);
+  await writeAutomatedAudit("forecast.automated_completed", "event", payload.eventId, {
     participantId: payload.participantId,
     probabilities,
     contextId: payload.components.contextId,
     aggregateCount: aggregates.length,
-  }, "forecast-cron");
+    recovered: Boolean(options.recovered),
+  }, "forecast-cron", db, options.deferAggregateErrors);
   return { eventId: payload.eventId, probabilities, aggregates };
 }
 
@@ -1050,10 +1063,12 @@ async function upsertPrediction(
   kind: "forecaster" | "aggregate",
   version: string,
   componentsJson: string | null,
+  options: PredictionWriteOptions = {},
 ) {
-  const db = getD1();
-  const now = new Date().toISOString();
+  const db = options.db ?? getD1();
+  const now = options.recordedAt ?? new Date().toISOString();
   await db.batch([
+    ...(options.precedingStatements ?? []),
     db.prepare(`
       INSERT INTO predictions (
         event_id, participant_id, participant_name, kind, probability, rationale,
@@ -1106,10 +1121,11 @@ async function upsertPredictionOutcomes(
   kind: "forecaster" | "aggregate",
   version: string,
   componentsJson: string | null,
+  options: PredictionWriteOptions = {},
 ) {
-  const db = getD1();
-  const now = new Date().toISOString();
-  const statements: D1PreparedStatement[] = [];
+  const db = options.db ?? getD1();
+  const now = options.recordedAt ?? new Date().toISOString();
+  const statements: D1PreparedStatement[] = [...(options.precedingStatements ?? [])];
   for (const [outcomeKey, probability] of Object.entries(probabilities)) {
     statements.push(
       db.prepare(`
@@ -1146,11 +1162,58 @@ async function writeAudit(
   entityId: string,
   detail: Record<string, unknown>,
   actor: string,
+  db: D1Database = getD1(),
 ) {
-  await getD1().prepare(`
+  await db.prepare(`
     INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `).bind(action, entityType, entityId, JSON.stringify(detail), actor, new Date().toISOString()).run();
+}
+
+type PredictionWriteOptions = {
+  db?: D1Database;
+  recordedAt?: string;
+  precedingStatements?: D1PreparedStatement[];
+};
+
+export type AutomatedForecastWriteOptions = PredictionWriteOptions & {
+  deferAggregateErrors?: boolean;
+  recovered?: boolean;
+};
+
+async function syncAutomatedAggregates(eventId: string, deferErrors = false) {
+  try {
+    return await syncAggregates(eventId);
+  } catch (error) {
+    if (!deferErrors) throw error;
+    console.error(JSON.stringify({
+      message: "aggregate sync deferred after base forecast commit",
+      eventId,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    return [];
+  }
+}
+
+async function writeAutomatedAudit(
+  action: string,
+  entityType: string,
+  entityId: string,
+  detail: Record<string, unknown>,
+  actor: string,
+  db: D1Database,
+  deferErrors = false,
+) {
+  try {
+    await writeAudit(action, entityType, entityId, detail, actor, db);
+  } catch (error) {
+    if (!deferErrors) throw error;
+    console.error(JSON.stringify({
+      message: "automated forecast audit write deferred after base forecast commit",
+      eventId: entityId,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
 }
 
 async function assertForecastAdmission(

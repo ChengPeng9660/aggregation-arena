@@ -1,5 +1,10 @@
 import { getD1 } from "@/db";
-import { recordAutomatedEventForecast, recordAutomatedForecast, syncAggregates } from "@/lib/arena";
+import {
+  ensureArenaReady,
+  recordAutomatedEventForecast,
+  recordAutomatedForecast,
+  syncAggregates,
+} from "@/lib/arena";
 import {
   FORECAST_JOBS_PER_RUN,
   FORECAST_MODELS,
@@ -136,22 +141,20 @@ export async function runForecastBatch(
   requestedEventIds: string[] = [],
 ) {
   await ensureForecastingReady(env.DB);
+  await ensureArenaReady(env.DB);
+  const repairedForecasts = await repairMissingForecastPredictions(env.DB);
+  const repairedAggregates = await repairMissingAggregates(env.DB);
   const gatewayProblem = modelGatewayConfigurationProblem(env);
   if (!env.TAVILY_API_KEY || gatewayProblem) {
     return {
       configured: false,
+      repairedForecasts,
+      repairedAggregates,
       processed: 0,
       completed: 0,
       message: !env.TAVILY_API_KEY ? "TAVILY_API_KEY is not configured" : gatewayProblem,
     };
   }
-
-  // A model run is persisted before aggregate generation begins. If a Worker
-  // reaches its wall-time limit after a slower model response, the base
-  // forecast is safe but its aggregate rows can be missing. Repair those rows
-  // at the beginning of every scheduled pass so categorical events with many
-  // outcomes still become scoreable without rerunning paid inference/search.
-  const repairedAggregates = await repairMissingAggregates(env.DB);
 
   const batchJobLimit = Math.max(1, Math.min(72, jobLimit));
   const targetEventIds = [...new Set(requestedEventIds.map((value) => String(value).trim()).filter(Boolean))].slice(0, 10);
@@ -211,6 +214,7 @@ export async function runForecastBatch(
     return model ? [{ event, model }] : [];
   });
   const contextPromises = new Map<string, Promise<Awaited<ReturnType<typeof getOrCreateContext>>>>();
+  const providerLane = createProviderLane();
   const outcomes = await mapWithConcurrency(jobs, 3, async ({ event, model }) => {
     try {
       let contextPromise = contextPromises.get(event.id);
@@ -218,7 +222,8 @@ export async function runForecastBatch(
         contextPromise = getOrCreateContext(env, event);
         contextPromises.set(event.id, contextPromise);
       }
-      return await forecastEvent(env, event, model, await contextPromise);
+      const context = await contextPromise;
+      return await providerLane.run(model.modelId, () => forecastEvent(env, event, model, context));
     } catch (error) {
       await env.DB.prepare(`
         INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
@@ -233,6 +238,7 @@ export async function runForecastBatch(
   });
   return {
     configured: true,
+    repairedForecasts,
     repairedAggregates,
     jobLimit: batchJobLimit,
     targetEventIds,
@@ -241,6 +247,92 @@ export async function runForecastBatch(
     completed: outcomes.filter((item) => item.status === "completed").length,
     outcomes,
   };
+}
+
+async function repairMissingForecastPredictions(db: D1Database) {
+  const rows = await db.prepare(`
+    SELECT mfr.context_id, mfr.event_id, mfr.participant_id, mfr.model_id,
+      mfr.prompt_version, mfr.yes_probability, mfr.probabilities_json, mfr.rationale,
+      mfr.cited_sources_json, mfr.created_at, mfr.completed_at,
+      e.event_type, p.name AS participant_name
+    FROM model_forecast_runs mfr
+    JOIN events e ON e.id=mfr.event_id
+    JOIN participants p ON p.id=mfr.participant_id
+    WHERE mfr.status='completed'
+      AND p.status='active'
+      AND e.status='open'
+      AND (e.close_time IS NULL OR datetime(e.close_time) > datetime('now'))
+      AND (
+        (
+          e.event_type='categorical'
+          AND (SELECT COUNT(*) FROM prediction_outcomes po
+               WHERE po.event_id=mfr.event_id AND po.participant_id=mfr.participant_id)
+              < (SELECT COUNT(*) FROM event_outcomes eo WHERE eo.event_id=mfr.event_id)
+        ) OR (
+          e.event_type!='categorical'
+          AND NOT EXISTS (
+            SELECT 1 FROM predictions pr
+            WHERE pr.event_id=mfr.event_id AND pr.participant_id=mfr.participant_id
+          )
+        )
+      )
+    ORDER BY mfr.completed_at, mfr.created_at
+    LIMIT 12
+  `).all<Record<string, unknown>>();
+  const repaired: { eventId: string; modelId: string }[] = [];
+  for (const row of rows.results) {
+    const eventId = String(row.event_id);
+    const modelId = String(row.model_id);
+    const probabilities = safeJson(String(row.probabilities_json || "{}"), {}) as Record<string, number>;
+    const components = {
+      contextId: String(row.context_id),
+      modelId,
+      citedSourceRanks: safeJson(String(row.cited_sources_json || "[]"), []),
+      recoveredFromCompletedRun: true,
+    };
+    const options = {
+      db,
+      recordedAt: String(row.completed_at || row.created_at || new Date().toISOString()),
+      deferAggregateErrors: true,
+      recovered: true,
+    };
+    try {
+      if (String(row.event_type) === "categorical") {
+        await recordAutomatedEventForecast({
+          eventId,
+          participantId: String(row.participant_id),
+          participantName: String(row.participant_name),
+          probabilities,
+          rationale: String(row.rationale || ""),
+          version: String(row.prompt_version),
+          components,
+        }, options);
+      } else {
+        const probability = Number(probabilities.yes ?? row.yes_probability);
+        if (!Number.isFinite(probability) || probability < 0 || probability > 1) {
+          throw new Error("completed binary run does not contain a valid yes probability");
+        }
+        await recordAutomatedForecast({
+          eventId,
+          participantId: String(row.participant_id),
+          participantName: String(row.participant_name),
+          probability,
+          rationale: String(row.rationale || ""),
+          version: String(row.prompt_version),
+          components,
+        }, options);
+      }
+      repaired.push({ eventId, modelId });
+    } catch (error) {
+      console.error(JSON.stringify({
+        message: "completed forecast recovery failed",
+        eventId,
+        modelId,
+        error: errorMessage(error),
+      }));
+    }
+  }
+  return repaired;
 }
 
 async function repairMissingAggregates(db: D1Database) {
@@ -330,7 +422,7 @@ async function forecastEvent(
     if (!parsed) throw new Error("Model response could not be parsed");
     const completedAt = new Date().toISOString();
     const latencyMs = Date.now() - requestStarted;
-    await env.DB.prepare(`
+    const completionStatement = env.DB.prepare(`
       UPDATE model_forecast_runs SET status='completed', yes_probability=?, no_probability=?,
         probabilities_json=?, rationale=?, cited_sources_json=?, raw_response=?, latency_ms=?, completed_at=?,
         error=NULL WHERE context_id=? AND participant_id=?
@@ -345,11 +437,17 @@ async function forecastEvent(
       completedAt,
       context.id,
       model.participantId,
-    ).run();
+    );
     const components = {
       contextId: context.id,
       modelId: model.modelId,
       citedSourceRanks: parsed.citedSourceRanks,
+    };
+    const writeOptions = {
+      db: env.DB,
+      recordedAt: completedAt,
+      precedingStatements: [completionStatement],
+      deferAggregateErrors: true,
     };
     if (event.eventType === "categorical") {
       await recordAutomatedEventForecast({
@@ -360,7 +458,7 @@ async function forecastEvent(
         rationale: parsed.rationale,
         version: model.promptVersion,
         components,
-      });
+      }, writeOptions);
     } else {
       await recordAutomatedForecast({
         eventId: event.id,
@@ -370,7 +468,7 @@ async function forecastEvent(
         rationale: parsed.rationale,
         version: model.promptVersion,
         components,
-      });
+      }, writeOptions);
     }
     return { eventId: event.id, contextId: context.id, modelId: model.modelId, status: "completed", probabilities: parsed.probabilities };
   } catch (error) {
@@ -656,4 +754,18 @@ async function mapWithConcurrency<Input, Output>(
   const workerCount = Math.min(items.length, Math.max(1, concurrency));
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return output;
+}
+
+function createProviderLane() {
+  const tails = new Map<string, Promise<void>>();
+  return {
+    async run<Output>(modelId: string, task: () => Promise<Output>) {
+      const lane = modelId.startsWith("claude-") ? "anthropic" : null;
+      if (!lane) return task();
+      const prior = tails.get(lane) ?? Promise.resolve();
+      const result = prior.catch(() => undefined).then(task);
+      tails.set(lane, result.then(() => undefined, () => undefined));
+      return result;
+    },
+  };
 }

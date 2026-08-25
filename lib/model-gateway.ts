@@ -1,6 +1,8 @@
 import {
   buildCloudflareBindingRequest,
   FORECAST_REASONING_PROFILE,
+  isRetryableModelGatewayError,
+  modelGatewayRetryDelayMs,
   parseModelIdMap,
 } from "@/lib/forecast-core.js";
 
@@ -66,38 +68,53 @@ export async function runModelGateway(
     throw new ModelGatewayRequestError(`No exact Cloudflare model route is configured for ${request.modelId}`);
   }
 
-  try {
-    const payload = await env.AI!.run(
-      cloudflareModelId,
-      buildCloudflareBindingRequest(cloudflareModelId, request.messages, {
-        ...request,
-        panelModelId: request.modelId,
-      }),
-      {
-        gateway: {
-          id: env.PROPHET_AI_GATEWAY_ID?.trim() || "default",
-          skipCache: true,
-          collectLog: true,
-          metadata: {
-            application: "aggrena",
-            panelModelId: request.modelId,
-            reasoningProfile: FORECAST_REASONING_PROFILE,
+  const maxAttempts = 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const payload = await env.AI!.run(
+        cloudflareModelId,
+        buildCloudflareBindingRequest(cloudflareModelId, request.messages, {
+          ...request,
+          panelModelId: request.modelId,
+        }),
+        {
+          gateway: {
+            id: env.PROPHET_AI_GATEWAY_ID?.trim() || "default",
+            skipCache: true,
+            collectLog: true,
+            metadata: {
+              application: "aggrena",
+              panelModelId: request.modelId,
+              reasoningProfile: FORECAST_REASONING_PROFILE,
+            },
           },
         },
-      },
-    );
-    const gatewayError = gatewayPayloadError(payload);
-    if (gatewayError) {
-      throw new ModelGatewayRequestError(`Cloudflare AI request failed for ${request.modelId}: ${gatewayError}`);
+      );
+      const gatewayError = gatewayPayloadError(payload);
+      if (gatewayError) {
+        throw new ModelGatewayRequestError(`Cloudflare AI request failed for ${request.modelId}: ${gatewayError}`);
+      }
+      return { payload, gatewayModelId: cloudflareModelId };
+    } catch (error) {
+      const wrapped = error instanceof ModelGatewayRequestError
+        ? error
+        : new ModelGatewayRequestError(
+          `Cloudflare AI request failed for ${request.modelId}: ${errorMessage(error)}`,
+          { cause: error },
+        );
+      if (attempt === maxAttempts - 1 || !isRetryableModelGatewayError(wrapped)) throw wrapped;
+      const retryDelayMs = modelGatewayRetryDelayMs(attempt);
+      console.warn(JSON.stringify({
+        message: "retrying transient Cloudflare model request",
+        modelId: request.modelId,
+        attempt: attempt + 1,
+        retryDelayMs,
+        error: wrapped.message.slice(0, 500),
+      }));
+      await wait(retryDelayMs);
     }
-    return { payload, gatewayModelId: cloudflareModelId };
-  } catch (error) {
-    if (error instanceof ModelGatewayRequestError) throw error;
-    throw new ModelGatewayRequestError(
-      `Cloudflare AI request failed for ${request.modelId}: ${errorMessage(error)}`,
-      { cause: error },
-    );
   }
+  throw new ModelGatewayRequestError(`Cloudflare AI request failed for ${request.modelId}`);
 }
 
 export async function listModelGatewayModels(env: ModelGatewayEnv) {
@@ -120,4 +137,8 @@ function gatewayPayloadError(payload: unknown) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
