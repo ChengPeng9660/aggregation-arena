@@ -8,7 +8,7 @@ test("Prophet event Brier averages squared error across all event outcomes", () 
   assert.ok(Math.abs(score - (0.16 + 0.09 + 0.01) / 3) < 1e-12);
 });
 
-test("the benchmark implements six deterministic aggregation methods", async () => {
+test("the benchmark implements eight deterministic aggregation methods", async () => {
   const source = await readFile(new URL("../lib/arena.ts", import.meta.url), "utf8");
   for (const id of [
     "agg-equal-mean",
@@ -17,6 +17,8 @@ test("the benchmark implements six deterministic aggregation methods", async () 
     "agg-logit-pool",
     "agg-extremized",
     "agg-performance-weighted",
+    "agg-ec-w0.56",
+    "agg-piecewise-odds-k5",
   ]) {
     assert.match(source, new RegExp(id));
   }

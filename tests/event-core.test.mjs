@@ -134,3 +134,26 @@ test("categorical aggregation preserves the simplex", () => {
   assert.ok(Math.abs(Object.values(aggregate).reduce((sum, value) => sum + value, 0) - 1) < 1e-12);
   assert.equal(prophetEventBrier(aggregate, "a", ["a", "b", "c"]), (0.45 ** 2 + 0.3 ** 2 + 0.15 ** 2) / 3);
 });
+
+test("pair-only EC and Piecewise Odds rules preserve the simplex and binary definitions", () => {
+  const forecasts = [
+    { yes: 0.8, no: 0.2 },
+    { yes: 0.3, no: 0.7 },
+  ];
+  const ec = aggregateDistribution(forecasts, ["yes", "no"], "ec-w0.56");
+  const expectedEc = 1 / (1 + Math.exp(-0.56 * (
+    Math.log(0.8 / 0.2) + Math.log(0.3 / 0.7)
+  )));
+  assert.ok(Math.abs(ec.yes - expectedEc) < 1e-12);
+
+  const piecewise = aggregateDistribution(forecasts, ["yes", "no"], "piecewise-odds");
+  assert.ok(Math.abs(piecewise.yes + piecewise.no - 1) < 1e-12);
+
+  for (const method of ["ec-w0.56", "piecewise-odds"]) {
+    const categorical = aggregateDistribution([
+      { a: 0.7, b: 0.2, c: 0.1 },
+      { a: 0.4, b: 0.4, c: 0.2 },
+    ], ["a", "b", "c"], method);
+    assert.ok(Math.abs(Object.values(categorical).reduce((sum, value) => sum + value, 0) - 1) < 1e-12);
+  }
+});

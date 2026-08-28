@@ -51,6 +51,21 @@ test("pair standings require a shared eligible resolution and support categorica
   assert.ok(Number.isFinite(standings[0].brier));
 });
 
+test("pair standings replay EC and Piecewise Odds as deterministic two-model methods", () => {
+  const standings = buildBestPairStandings({
+    methods: [
+      { id: "ec", aggregateMethod: "ec-w0.56" },
+      { id: "piecewise", aggregateMethod: "piecewise-odds" },
+    ],
+    participants: [{ id: "a", name: "A" }, { id: "b", name: "B" }],
+    events: [event("one", "2026-08-01", 1, { a: 0.8, b: 0.3 })],
+  });
+
+  assert.deepEqual(standings.map((row) => row.methodId), ["ec", "piecewise"]);
+  assert.ok(standings.every((row) => row.modelPair.length === 2));
+  assert.ok(standings.every((row) => Number.isFinite(row.brier)));
+});
+
 function event(id, resolvedAt, resolution, forecasts) {
   return {
     id,

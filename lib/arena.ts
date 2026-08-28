@@ -75,6 +75,20 @@ export const AGGREGATE_METHODS: AggregateDefinition[] = [
     color: "#f06f56",
   },
   {
+    id: "agg-ec-w0.56",
+    name: "EC (w = 0.56)",
+    shortName: "EC w0.56",
+    description: "Symmetric evidence combination: sigmoid(0.56 × (logit(p₁) + logit(p₂))). Multi-outcome events are combined outcome-wise and renormalized.",
+    color: "#302A33",
+  },
+  {
+    id: "agg-piecewise-odds-k5",
+    name: "Piecewise Odds Pool (K = 5)",
+    shortName: "Piecewise Odds",
+    description: "Threshold-5 symmetric odds pool; multi-outcome events are combined outcome-wise and renormalized.",
+    color: "#7A3E9D",
+  },
+  {
     id: "agg-agent-harness-blind-v1",
     name: "Blind Agent Harness",
     shortName: "Blind Harness",
@@ -103,6 +117,8 @@ const PAIR_AGGREGATION_METHODS = [
   { id: "agg-logit-pool", aggregateMethod: "logit" },
   { id: "agg-extremized", aggregateMethod: "extremized" },
   { id: "agg-performance-weighted", aggregateMethod: "weighted" },
+  { id: "agg-ec-w0.56", aggregateMethod: "ec-w0.56" },
+  { id: "agg-piecewise-odds-k5", aggregateMethod: "piecewise-odds" },
 ] as const;
 
 const SCHEMA_STATEMENTS = [
@@ -569,6 +585,12 @@ async function buildLeaderboard(
     JOIN events e ON e.id=f.event_id
     WHERE e.id NOT LIKE 'demo-%' AND e.season <> 'Demo Season'
   `).all<Record<string, unknown>>();
+  const historicalParticipantRows = await db.prepare(`
+    SELECT id, name, organization, color, kind
+    FROM participants
+    WHERE kind='forecaster'
+    ORDER BY created_at, name
+  `).all<Record<string, unknown>>();
   const track = filters.track ?? "aggregators";
   const activeParticipantIds = new Set(participants.map((participant) => String(participant.id)));
   const acceptsTrack = (row: Record<string, unknown>) => {
@@ -596,7 +618,7 @@ async function buildLeaderboard(
   }
   const pairForecastsByEvent = new Map<string, Record<string, Record<string, number>>>();
   for (const row of rows.results) {
-    if (row.kind !== "forecaster" || !activeParticipantIds.has(String(row.participant_id))) continue;
+    if (row.kind !== "forecaster") continue;
     const eventId = String(row.event_id);
     const forecasts = pairForecastsByEvent.get(eventId) ?? {};
     const probability = Number(row.probability);
@@ -605,7 +627,7 @@ async function buildLeaderboard(
   }
   const pairOutcomeGroups = new Map<string, Record<string, unknown>[]>();
   for (const row of outcomeRows.results) {
-    if (row.kind !== "forecaster" || !activeParticipantIds.has(String(row.participant_id))) continue;
+    if (row.kind !== "forecaster") continue;
     const key = `${row.event_id}::${row.participant_id}`;
     const group = pairOutcomeGroups.get(key) ?? [];
     group.push(row);
@@ -708,7 +730,7 @@ async function buildLeaderboard(
     .map((row, index) => ({ ...row, rank: index + 1 }));
 
   if (track === "aggregators") {
-    const pairParticipantMap = new Map(participants.map((participant) => [String(participant.id), participant]));
+    const pairParticipantMap = new Map(historicalParticipantRows.results.map((participant) => [String(participant.id), participant]));
     const bestPairs = buildBestPairStandings({
       events: pairEvents,
       methods: PAIR_AGGREGATION_METHODS,

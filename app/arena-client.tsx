@@ -576,7 +576,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
             </> : <div className="prediction-pending"><b>Awaiting prediction</b><p>This model will reuse Context ID <code>{run.contextId}</code> in the next model-event batch. Tavily will not run again.</p></div>}
           </article>;
         })}</div> : <div className="empty-block">No model output is available yet.</div>}
-        <div className="scoring-line"><span>MODEL FORECASTS</span><i>→</i><span>SIX AGGREGATION METHODS</span><i>→</i><span>EVENT RESOLUTION</span><i>→</i><span>EVENT BRIER</span><i>→</i><span>LIVE LEADERBOARD</span></div>
+        <div className="scoring-line"><span>MODEL FORECASTS</span><i>→</i><span>EIGHT DETERMINISTIC METHODS</span><i>→</i><span>EVENT RESOLUTION</span><i>→</i><span>EVENT BRIER</span><i>→</i><span>LIVE LEADERBOARD</span></div>
       </section>
     </div>
   );
@@ -675,7 +675,7 @@ function LeaderboardView({
         <section className="leaderboard-panel public-ranking-table">
           <div className="table-caption">
             <div><b>{isMethods ? "Aggregation method standings" : "Individual model standings"}</b><span>{isMethods
-              ? `Best two-model combination per deterministic method · ${pairMetadata?.modelCount ?? 0} forecasted models and ${pairMetadata?.pairCount ?? 0} overlapping pairs considered · fewer than ${snapshot.methodology.minimumResolved} common resolutions are provisional`
+              ? `Best two-model combination per deterministic method · ${pairMetadata?.modelCount ?? 0} models with eligible forecasts and ${pairMetadata?.pairCount ?? 0} overlapping pairs considered · fewer than ${snapshot.methodology.minimumResolved} common resolutions are provisional`
               : `All registered models are shown · fewer than ${snapshot.methodology.minimumResolved} resolved events are provisional`
             }</span></div>
             <span className="metric-definition">Event Brier · lower is better</span>
