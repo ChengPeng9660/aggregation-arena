@@ -69,6 +69,7 @@ const RAPID_ALLOWED_REASONS = [
 ];
 const MAX_KALSHI_MARKET_PAGES = 2;
 const KALSHI_MARKET_PAGE_SIZE = 1000;
+const KALSHI_RATE_LIMIT_BACKOFF_MS = [1_000, 3_000, 7_000];
 const MAX_RESOLUTION_CHECKS_PER_RUN = 24;
 const EXTERNAL_FETCH_TIMEOUT_MS = 15_000;
 const MAX_EXTERNAL_PAGE_BYTES = 8 * 1024 * 1024;
@@ -1188,7 +1189,7 @@ async function fetchKalshiWithRetry(url: URL) {
   let response: Response | null = null;
   const fallbackUrl = new URL(url.pathname + url.search, KALSHI_API_FALLBACK_ORIGIN);
   for (const endpoint of [url, fallbackUrl]) {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt <= KALSHI_RATE_LIMIT_BACKOFF_MS.length; attempt += 1) {
       response = await fetch(endpoint, {
         headers: {
           accept: "application/json",
@@ -1197,15 +1198,12 @@ async function fetchKalshiWithRetry(url: URL) {
         signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
       });
       if (response.status !== 429) return response;
-      if (attempt === 0) {
-        await response.body?.cancel();
-        // Kalshi's 429 response currently omits Retry-After; use documented
-        // exponential backoff so anonymous public reads do not hammer the bucket.
-        const delayMs = 750;
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
+      await response.body?.cancel();
+      // Kalshi documents that 429 responses omit Retry-After and explicitly
+      // requires exponential backoff until the read-token bucket refills.
+      const delayMs = KALSHI_RATE_LIMIT_BACKOFF_MS[attempt];
+      if (delayMs !== undefined) await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
-    await response?.body?.cancel();
   }
   return response!;
 }
