@@ -3,6 +3,7 @@ import {
   FORECAST_REASONING_PROFILE,
   isRetryableModelGatewayError,
   modelGatewayRetryDelayMs,
+  parseDisabledModelIds,
   parseModelIdMap,
 } from "@/lib/forecast-core.js";
 
@@ -44,6 +45,21 @@ export function modelGatewayConfigurationProblem(env: ModelGatewayEnv) {
     if (!env.AI) return "Cloudflare AI binding is not configured";
     const routes = parseModelIdMap(env.PROPHET_CLOUDFLARE_MODEL_ID_MAP);
     if (!Object.keys(routes).length) return "PROPHET_CLOUDFLARE_MODEL_ID_MAP is not configured";
+  } catch (error) {
+    return errorMessage(error);
+  }
+  return null;
+}
+
+export function modelGatewayModelProblem(env: ModelGatewayEnv, modelId: string) {
+  const gatewayProblem = modelGatewayConfigurationProblem(env);
+  if (gatewayProblem) return gatewayProblem;
+  try {
+    const routes = parseModelIdMap(env.PROPHET_CLOUDFLARE_MODEL_ID_MAP);
+    if (!routes[modelId]) return `No exact Cloudflare model route is configured for ${modelId}`;
+    if (parseDisabledModelIds(env.PROPHET_DISABLED_MODEL_IDS).includes(modelId)) {
+      return `${modelId} is disabled until its configured gateway route passes a live smoke test`;
+    }
   } catch (error) {
     return errorMessage(error);
   }
@@ -103,7 +119,7 @@ export async function runModelGateway(
           { cause: error },
         );
       if (attempt === maxAttempts - 1 || !isRetryableModelGatewayError(wrapped)) throw wrapped;
-      const retryDelayMs = modelGatewayRetryDelayMs(attempt);
+      const retryDelayMs = modelGatewayRetryDelayMs(attempt, wrapped);
       console.warn(JSON.stringify({
         message: "retrying transient Cloudflare model request",
         modelId: request.modelId,

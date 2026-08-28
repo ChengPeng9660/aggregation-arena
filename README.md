@@ -4,7 +4,7 @@
 
 一个支持 Polymarket + Kalshi 自动选题、共享信息检索、LLM 自动预测、手工概率录入、自动聚合、结果结算、实时排名和审计追踪的预测聚合 Benchmark 平台。
 
-系统每小时从 Polymarket Gamma API 和 Kalshi 公开 Market API 同步活跃市场，应用平台对应的成交活跃度、截止窗口、概率区间和规则完整性筛选。每天只在两个平台都能提供足够多样的合格题时发布一个严格的 20 题批次：Polymarket 10 题、Kalshi 10 题。系统在平台内部、跨平台和最近 7 天历史之间去除同一现实事件及高度相似题目，并按五个固定类别维持软均衡。结算后以 Event Brier Score 实时更新 Leaderboard。
+系统每小时从 Polymarket Gamma API 和 Kalshi 公开 Market API 同步活跃市场，应用平台对应的成交活跃度、截止窗口、概率区间和规则完整性筛选。每天只在两个平台都能提供足够多样的合格题时发布一个严格的 20 题批次：Polymarket 10 题、Kalshi 10 题。系统在平台内部、跨平台和最近 7 天历史之间去除同一现实事件及高度相似题目，并严格要求 Politics、Economics、Science、Sports、Entertainment 各 4 题。结算后以 Event Brier Score 实时更新 Leaderboard。
 
 生产站点：
 
@@ -43,8 +43,8 @@
 - 题目说明与结算依据必须有足够文字。
 - 与 Prophet Arena 的公开研究设计一致，固定为五类：Politics、Economics、Science、Sports、Entertainment。
 - 每日 `00:10 UTC` 生成不可变批次，严格要求 Polymarket 10 题 + Kalshi 10 题。
-- 五类的全局软目标为每类 4 题、每个平台每类先取 2 题；若某类不足，可由同平台其他类别补齐，但平台 10 + 10 配额不变。
-- 如果任一平台无法提供 10 道符合质量和 diversity 约束的题目，当日批次标记为 `incomplete` 并保持未发布，不会从另一平台借题补位。
+- 五类严格要求每类 4 题；选择器优先从每个平台每类取 2 题，最终发布校验不允许用其他类别补齐后形成偏科题集。
+- 如果任一平台无法提供 10 道合格题、任一类别不足 4 题，或去重后不足 20 个独立现实事件，当日批次标记为 `incomplete` 并保持未发布，不会跨平台借题、重复题目或降低质量门槛。
 - `incomplete` 或中断在 `running` 的当日批次会在后续成功的整点同步后自动重试，仍使用同一个不可变 run ID。
 - 一个 Polymarket Event 每个批次最多入选一次；若它是 `negRisk` 互斥 Event，则保留全部活跃、具名 outcomes，而不是只保留代表 Market。
 - 自动忽略 `Company A`、`Person X` 等尚未具名的 augmented negRisk 占位 Market。
@@ -85,14 +85,14 @@
 - 在 Forecast Pipeline 中直接展示全部冻结来源、域名、发布日期、引用状态和原文链接。
 - 一道题只检索一次；新闻来源、检索时间，以及来源市场入选时和预测前的价格、成交量、深度双快照冻结到 `research_contexts`。
 - 所有当前和未来模型复用完全相同的 Context，避免检索差异污染模型比较。
-- 当前注册 13 个具有精确 Cloudflare 路由的 Fixed Context 模型，其中 11 个已通过当前账户计费路径；不使用 Poe，也不使用相近型号替代。
+- 当前注册 13 个具有精确 Cloudflare 路由的 Fixed Context 模型，其中 12 个已通过当前账户计费路径；不使用 Poe，也不使用相近型号替代。
 - Prompt 仿照 Prophet Arena：明确题目、结算规则、截止时间、共享来源和市场快照。
 - 模型必须为 Event 的每个 outcome key 输出概率、最多三句话的理由和所引用的 Source Rank。
 - 系统解析 Prophet 风格的 outcome 数组并归一化到概率 simplex；缺少任何 outcome 时自动重试一次。
 - 每次运行完整保存模型、Prompt 版本、原始响应、延迟、引用来源和失败原因。
 - 二元预测写入 `predictions`；多 outcome 预测写入 `prediction_outcomes` 和不可变 `prediction_outcome_history`，随后进入 Aggregation 和 Leaderboard。
 - Forecasts 页面显示流水线配置、待处理数量、预测结果、理由和冻结证据。
-- 每小时 `20` 分独立补跑最多 16 个 model-event 任务；即使整点市场同步失败，模型队列仍会继续处理已有题目。同一 Event 的 11 个当前活跃模型复用同一个 Frozen Context，不会重复调用 Tavily。管理员也可以手工触发下一个任务。
+- 每日 `00:20 UTC` 独立处理最多 20 个 model-event 任务；即使整点市场同步失败，模型队列仍会继续处理已有题目。同一 Event 的 12 个当前活跃模型复用同一个 Frozen Context，不会重复调用 Tavily。管理员也可以手工触发下一个任务。
 
 ### 聚合计算
 
@@ -226,7 +226,7 @@ Cloudflare AI Gateway / Worker AI binding
       ↓
 严格 JSON 解析 + 概率归一化 + 一次格式重试
       ↓
-11 个当前活跃基础预测完成
+12 个当前活跃基础预测完成
   ├─ Blind Harness：匿名概率 + 严格 pre-event 历史
   └─ Evidence-Aware Harness：冻结证据 + 概率 + rationale
       ↓（同一个 Gateway，失败可重试）
@@ -235,7 +235,7 @@ Prediction History → Deterministic + Harness Aggregators → Brier Leaderboard
 
 这个实现保留了 Prophet Arena 最重要的实验控制：同一事件的模型必须看到同样的信息来源与市场快照。模型注册表按 Event × Model 生成任务，已有 `context_id` 时直接复用，不能重新搜索。
 
-当前模型注册表于 2026-08-24 修订为 13 个 Cloudflare-only Fixed Context 模型：Gemini 3.6 Flash、Gemini 3.1 Pro、Claude Fable 5、DeepSeek V4 Flash、Claude Opus 4.8、Claude Sonnet 4.6、Grok 4.6、DeepSeek V4 Pro、Kimi K3、Grok 4.5、GLM-5.2、Grok 4.3 和 MiniMax M2.7。DeepSeek V4 Flash 与 GLM-5.2 的 `@cf/...` smoke test 被当前 Workers Free plan 拒绝，已临时熔断，因此线上当前显示 11 个活跃模型。GPT-5.6 Sol 与 GPT-5.5 的 Cloudflare 账户实测仍返回上游 payment error；Inkling 明确要求 BYOK；Qwen 3.6 Plus、Muse Spark 1.1 与 Foresight V3 没有可用的精确 Cloudflare 路由，因此六者从当前注册表退出。不会使用 Poe、Qwen 3.7、Inkling 256K 或其他相近型号冒充这些 individual models。历史预测和成绩保留。Market baseline 和 Agentic predictors 不进入这个模型注册表。
+当前模型注册表于 2026-08-28 修订为 13 个 Cloudflare-only Fixed Context 模型：Gemini 3.6 Flash、Gemini 3.1 Pro、Claude Fable 5、DeepSeek V4 Flash、Claude Opus 4.8、Claude Sonnet 4.6、Grok 4.6、DeepSeek V4 Pro、Kimi K3、Grok 4.5、GLM-5.2、Grok 4.3 和 MiniMax M2.7。切换 Unified Billing 后，DeepSeek V4 Flash 与 GLM-5.2 已通过 `@cf/...` 生产同构 smoke test，线上当前显示 12 个活跃模型；仅持续返回上游 500 的 DeepSeek V4 Pro 暂时熔断。GPT-5.6 Sol 与 GPT-5.5 的 Cloudflare 账户实测仍返回上游 payment error；Inkling 明确要求 BYOK；Qwen 3.6 Plus、Muse Spark 1.1 与 Foresight V3 没有可用的精确 Cloudflare 路由，因此六者从当前注册表退出。不会使用 Poe、Qwen 3.7、Inkling 256K 或其他相近型号冒充这些 individual models。历史预测和成绩保留。Market baseline 和 Agentic predictors 不进入这个模型注册表。
 
 所有 Fixed Context 模型统一使用 `reasoning_profile=medium`，配置版本为 `prophet-fixed-context-v2-medium`。Anthropic adaptive-thinking、xAI、DeepSeek、Kimi 和 GLM 路由在 API 支持时显式发送对应的 medium effort 字段；不提供推理档位参数的精确型号保持供应商默认推理方式，但不会发送可能被供应商拒绝的伪造参数。该版本写入每条 `model_forecast_runs.prompt_version`，避免不同推理预算的预测被静默混用。
 
@@ -243,8 +243,9 @@ Prediction History → Deterministic + Harness Aggregators → Brier Leaderboard
 
 - Tavily 免费账户每月 1,000 API Credits；Basic Search 每次 1 Credit。
 - 每日发布 20 题，每题搜索一次，30 天约使用 `20 × 30 = 600 Credits`。
-- 11 个当前活跃模型每天最多产生 `20 × 11 = 220` 个 model-event forecasts。
-- 预测 Cron 每小时最多处理 16 个 model-event jobs；正常输出每个 job 只调用一次模型，只有 JSON 无法解析时才做一次格式重试。
+- 12 个当前活跃模型共享每天 20 个 model-event forecast 配额；配额是全体模型合计，不是每题每模型各跑一次。
+- 预测 Cron 每日 `00:20 UTC` 最多处理 20 个 model-event jobs；正常输出每个 job 只调用一次模型，只有 JSON 无法解析时才做一次格式重试。
+- Agent Harness 自动聚合当前暂停，不产生新的定时模型调用；历史 Harness 结果和实现代码保留。
 - 每个来源摘要最多 1,800 字符，模型输出最多 700 tokens。模型费用由 Gateway 后面的实际供应商和 deployment alias 决定。
 
 ### 配置 API 密钥
@@ -259,21 +260,21 @@ npx wrangler whoami
 npx wrangler secret put TAVILY_API_KEY
 ```
 
-生产配置使用 `PROPHET_MODEL_GATEWAY_MODE=cloudflare-only`。13 个注册模型和 Qwen 3.7 Plus agent harness 都必须在 `PROPHET_CLOUDFLARE_MODEL_ID_MAP` 中具有明确 Cloudflare 路由；缺少映射会直接报错，不会自动回退到外部网关。当前由 `PROPHET_DISABLED_MODEL_IDS` 临时熔断两个付费 Workers AI 路由。
+生产配置使用 `PROPHET_MODEL_GATEWAY_MODE=cloudflare-only`。13 个注册模型和 Qwen 3.7 Plus agent harness 都必须在 `PROPHET_CLOUDFLARE_MODEL_ID_MAP` 中具有明确 Cloudflare 路由；缺少映射会直接报错，不会自动回退到外部网关。当前由 `PROPHET_DISABLED_MODEL_IDS` 临时熔断 DeepSeek V4 Pro。
 
 逐型号路由、请求协议与下线决策见 [`docs/cloudflare-model-audit-2026-08-24.md`](docs/cloudflare-model-audit-2026-08-24.md)。型号替换必须显式更名并保留审计记录。
 
-11 个当前活跃基础预测模型、Blind Harness 和 Evidence-Aware Harness 共用 Cloudflare 路由；Harness 调用 Cloudflare 的 `alibaba/qwen3.7-plus`，但它不属于 individual forecasters。模型显示名、participant ID、ranking 和 score calculation 不随底层路由改变。
+12 个当前活跃基础预测模型、Blind Harness 和 Evidence-Aware Harness 共用 Cloudflare 路由；Harness 调用 Cloudflare 的 `alibaba/qwen3.7-plus`，但它不属于 individual forecasters。模型显示名、participant ID、ranking 和 score calculation 不随底层路由改变。
 
 应用不会用相近型号静默替代。若某个 Cloudflare 精确路由调用失败，该 model-event 会记录为 `failed`，其他模型继续运行；维护者应修复或下线该精确路由，而不是把另一型号冒充成原模型。
 
-`PROPHET_DISABLED_MODEL_IDS` 只用于临时熔断仍在注册表中的型号；当前为 `deepseek-v4-flash` 和 `glm-5.2`。旧 participant IDs 位于 retired 列表，历史 individual-model scores 仍保留。
+`PROPHET_DISABLED_MODEL_IDS` 只用于临时熔断仍在注册表中的型号；当前为 `deepseek-v4-pro`。旧 participant IDs 位于 retired 列表，历史 individual-model scores 仍保留。
 
-两种 Harness 会在同一个事件的全部 active exact models 完成后自动运行（当前为 11 个）。Gateway 的网络错误、超时或上游错误会记录为可重试的 `failed`，不会永久替换为聚合结果；只有两次成功请求都返回无法解析的权重 JSON 时，才会记录 equal-mean fallback。已解决事件的维护者回填允许从至少两个完整基础预测开始。
+两种 Harness 会在同一个事件的全部 active exact models 完成后自动运行（当前为 12 个）。Gateway 的网络错误、超时或上游错误会记录为可重试的 `failed`，不会永久替换为聚合结果；只有两次成功请求都返回无法解析的权重 JSON 时，才会记录 equal-mean fallback。已解决事件的维护者回填允许从至少两个完整基础预测开始。
 
-本地开发先复制 [`.dev.vars.example`](.dev.vars.example) 为 `.dev.vars` 再填入真实值；`.dev.vars` 已被 Git 忽略。部署后打开网站的 `Pipeline` 页面查看配置状态，也可以在 `Forecasts` 页面检查模型任务。配置正常时可等待每小时 `:20` 的预测 Cron，或登录后点击 `Run next forecast`。
+本地开发先复制 [`.dev.vars.example`](.dev.vars.example) 为 `.dev.vars` 再填入真实值；`.dev.vars` 已被 Git 忽略。部署后打开网站的 `Pipeline` 页面查看配置状态，也可以在 `Forecasts` 页面检查模型任务。配置正常时可等待每日 `00:20 UTC` 的预测 Cron，或登录后点击 `Run next forecast`。
 
-生产环境若需要立即发布当日题集并生成首批 16 条预测，可由维护者使用仅存于
+生产环境若需要立即发布当日题集并生成当日最多 20 条预测，可由维护者使用仅存于
 Cloudflare Secret 的 `PIPELINE_ADMIN_TOKEN` 调用 `run_daily_forecast_batch`。
 该操作会复用当天不可变 selection run，多次调用不会重复发布题目。
 同一密钥还可以调用 `run_pipeline_sync`，用于运维人员立即执行一次与整点 Cron 相同的同步和结算检查。
@@ -791,7 +792,9 @@ npx wrangler deploy
 
 - `0 * * * *`：每小时同步候选市场并检查结算。
 - `10 0 * * *`：每日发布新的均衡题集。
-- `20 * * * *`：每小时独立处理最多 16 个 model-event 预测任务。
+- `20 0 * * *`：每日独立处理最多 20 个 model-event 预测任务。
+
+Agent Harness 的自动 Cron 当前未注册；历史结果与手工维护代码保留。
 
 必须先检查 `wrangler whoami` 的账号和目标 D1 ID。当前生产目标是 ChengPeng 账户与 `aggregation-arena-production`。
 

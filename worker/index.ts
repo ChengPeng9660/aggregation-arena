@@ -3,7 +3,6 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 import { runMarketScheduled } from "../lib/polymarket";
 import { runForecastBatch } from "../lib/forecasting";
-import { runAgentHarnessBatch } from "../lib/agent-aggregation";
 
 type ImageOutputFormat = "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "image/avif" | "rgb" | "rgba";
 const IMAGE_OUTPUT_FORMATS = new Set<ImageOutputFormat>([
@@ -61,10 +60,8 @@ const worker = {
     let task: Promise<unknown>;
     if (controller.cron === "0 * * * *" || controller.cron === "10 0 * * *") {
       task = runThenRefreshArenaCache(runMarketScheduled(env, controller), env, ctx);
-    } else if (controller.cron === "20 * * * *") {
+    } else if (controller.cron === "20 0 * * *") {
       task = runThenRefreshArenaCache(runForecastBatch(env), env, ctx);
-    } else if (controller.cron === "30 * * * *") {
-      task = runThenRefreshArenaCache(runAgentHarnessBatch(env, { eventLimit: 3 }), env, ctx);
     } else {
       console.warn(`Ignoring unknown cron schedule: ${controller.cron}`);
       return;
@@ -105,11 +102,10 @@ async function serveArenaApi(request: Request, env: Env, ctx: ExecutionContext) 
     safeKvGet(env.ARENA_SNAPSHOT_CACHE, arenaApiKvKey(request)),
     safeCacheMatch(cache, staleKey),
   ]);
-  if (durable.value) {
+  if (durable.value && arenaSnapshotAgeSeconds(durable.metadata) <= ARENA_API_FRESH_SECONDS) {
     ctx.waitUntil(cacheArenaSnapshotLocally(cache, request, durable.value, durable.metadata?.contentType));
-    return kvResponse(durable.value, durable.metadata);
+    return kvResponse(durable.value, durable.metadata, "kv-hit");
   }
-  if (stale) return cacheResponse(stale, "stale");
 
   let response: Response;
   try {
@@ -119,6 +115,8 @@ async function serveArenaApi(request: Request, env: Env, ctx: ExecutionContext) 
       message: "arena API failed without an available snapshot",
       error: error instanceof Error ? error.message : String(error),
     }));
+    if (durable.value) return kvResponse(durable.value, durable.metadata, "kv-stale");
+    if (stale) return cacheResponse(stale, "stale");
     return arenaUnavailableResponse();
   }
 
@@ -127,6 +125,8 @@ async function serveArenaApi(request: Request, env: Env, ctx: ExecutionContext) 
       message: "arena API returned a failure without an available snapshot",
       status: response.status,
     }));
+    if (durable.value) return kvResponse(durable.value, durable.metadata, "kv-stale");
+    if (stale) return cacheResponse(stale, "stale");
     return arenaUnavailableResponse();
   }
 
@@ -227,19 +227,23 @@ function cacheResponse(response: Response, state: "hit" | "stale") {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
-function kvResponse(body: ArrayBuffer, metadata: ArenaSnapshotMetadata | null) {
-  const ageSeconds = metadata?.storedAt
-    ? Math.max(0, Math.floor((Date.now() - Date.parse(metadata.storedAt)) / 1000))
-    : null;
+function arenaSnapshotAgeSeconds(metadata: ArenaSnapshotMetadata | null) {
+  if (!metadata?.storedAt) return Number.POSITIVE_INFINITY;
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(metadata.storedAt)) / 1000));
+  return Number.isFinite(ageSeconds) ? ageSeconds : Number.POSITIVE_INFINITY;
+}
+
+function kvResponse(body: ArrayBuffer, metadata: ArenaSnapshotMetadata | null, state: "kv-hit" | "kv-stale") {
+  const ageSeconds = arenaSnapshotAgeSeconds(metadata);
   const headers = new Headers({
     "cache-control": "no-store",
     "content-type": metadata?.contentType || "application/json; charset=utf-8",
-    "x-aggrena-cache": "kv-hit",
+    "x-aggrena-cache": state,
   });
-  if (ageSeconds !== null && Number.isFinite(ageSeconds)) {
+  if (Number.isFinite(ageSeconds)) {
     headers.set("x-aggrena-snapshot-age", String(ageSeconds));
-    if (ageSeconds > 300) headers.set("warning", '110 - "Response is stale"');
   }
+  if (state === "kv-stale") headers.set("warning", '110 - "Response is stale"');
   return new Response(body, { status: 200, headers });
 }
 

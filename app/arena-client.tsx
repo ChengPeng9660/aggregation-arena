@@ -487,7 +487,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       <section className={`automation-health ${automation.status}`}>
         <span aria-hidden="true" />
         <div><small>AUTOMATION</small><b>{automation.status}</b></div>
-        <p>Intake at :00 · forecast at :20 · daily selection at 00:10 UTC</p>
+        <p>Hourly intake at :00 · daily forecast at 00:20 UTC · daily selection at 00:10 UTC</p>
         <dl><DetailTerm label="Last successful sync" value={automation.lastSuccessfulSyncAt ? formatDateTime(automation.lastSuccessfulSyncAt) : "Waiting"} /><DetailTerm label="Latest attempt" value={automation.latestAttemptStatus || "Waiting"} /></dl>
       </section>
 
@@ -527,7 +527,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </section>
 
       <section id="pipeline-stage-3" className="story-stage">
-        <StageHeader number="03" eyebrow="SELECTION" title="Daily question slate" summary="Exactly 10 questions per provider, with cross-market and recent-history deduplication." />
+        <StageHeader number="03" eyebrow="SELECTION" title="Daily question slate" summary="Exactly 10 questions per provider and 4 per domain, with cross-market and recent-history deduplication." />
         <div className="release-summary">
           <div><small>Release ID</small><strong>{curation.latestSelection?.id || "Pending"}</strong></div>
           <div><small>Eligible candidates</small><strong>{curation.latestSelection?.eligibleCount || 0}</strong></div>
@@ -769,7 +769,7 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
       </section>
 
       <section className="balance-board">
-        <div className="section-title"><div><span className="eyebrow">DOMAIN TARGETS</span><h2>Prophet Arena five-domain balance</h2></div><span>{curation.config.targetPerCategory} per domain target / release</span></div>
+        <div className="section-title"><div><span className="eyebrow">DOMAIN TARGETS</span><h2>Prophet Arena five-domain balance</h2></div><span>{curation.config.targetPerCategory} per domain required / release</span></div>
         <div className="balance-grid">
           {curation.categories.map((item) => (
             <article key={item.category}>
@@ -996,7 +996,7 @@ function ForecastsView({
         <Metric label="Frozen contexts" value={pipeline.stats.contextsReady} detail="one search per event" />
         <Metric label="Completed" value={pipeline.stats.completed} detail={`${pipeline.models.length} model families`} />
         <Metric label="Pending" value={pipeline.stats.pending} detail="model-event runs" />
-        <Metric label="Pipeline" value={ready ? "READY" : "SETUP"} detail="up to 16 model-event runs / hour" highlight />
+        <Metric label="Pipeline" value={ready ? "READY" : "SETUP"} detail="up to 20 model-event runs / day" highlight />
       </section>
 
       <section className="pipeline-flow" aria-label="Forecast pipeline">

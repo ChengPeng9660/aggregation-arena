@@ -142,12 +142,14 @@ export async function runForecastBatch(
 ) {
   await ensureForecastingReady(env.DB);
   await ensureArenaReady(env.DB);
+  const repairedStaleRuns = await repairStaleForecastRuns(env.DB);
   const repairedForecasts = await repairMissingForecastPredictions(env.DB);
   const repairedAggregates = await repairMissingAggregates(env.DB);
   const gatewayProblem = modelGatewayConfigurationProblem(env);
   if (!env.TAVILY_API_KEY || gatewayProblem) {
     return {
       configured: false,
+      repairedStaleRuns,
       repairedForecasts,
       repairedAggregates,
       processed: 0,
@@ -187,6 +189,13 @@ export async function runForecastBatch(
           AND recent_failure.status='failed'
           AND datetime(recent_failure.completed_at) > datetime('now', '-15 minutes')
       )
+      AND NOT EXISTS (
+        SELECT 1 FROM model_forecast_runs active_run
+        WHERE active_run.event_id=e.id
+          AND active_run.participant_id=fm.participant_id
+          AND active_run.status='running'
+          AND datetime(active_run.created_at) > datetime('now', '-20 minutes')
+      )
       GROUP BY e.id, fm.participant_id, fm.model_order
       ORDER BY MIN(si.selected_at), MIN(si.category), MIN(si.rank), e.id, fm.model_order
       LIMIT ?
@@ -215,7 +224,7 @@ export async function runForecastBatch(
   });
   const contextPromises = new Map<string, Promise<Awaited<ReturnType<typeof getOrCreateContext>>>>();
   const providerLane = createProviderLane();
-  const outcomes = await mapWithConcurrency(jobs, 3, async ({ event, model }) => {
+  const outcomes = await mapWithConcurrency(jobs, 2, async ({ event, model }) => {
     try {
       let contextPromise = contextPromises.get(event.id);
       if (!contextPromise) {
@@ -238,6 +247,7 @@ export async function runForecastBatch(
   });
   return {
     configured: true,
+    repairedStaleRuns,
     repairedForecasts,
     repairedAggregates,
     jobLimit: batchJobLimit,
@@ -247,6 +257,19 @@ export async function runForecastBatch(
     completed: outcomes.filter((item) => item.status === "completed").length,
     outcomes,
   };
+}
+
+async function repairStaleForecastRuns(db: D1Database) {
+  const completedAt = new Date().toISOString();
+  const result = await db.prepare(`
+    UPDATE model_forecast_runs
+    SET status='failed',
+      error='Recovered stale running forecast after worker termination',
+      completed_at=?
+    WHERE status='running'
+      AND datetime(created_at) <= datetime('now', '-20 minutes')
+  `).bind(completedAt).run();
+  return Number(result.meta?.changes || 0);
 }
 
 async function repairMissingForecastPredictions(db: D1Database) {
@@ -381,7 +404,9 @@ async function forecastEvent(
     ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?)
     ON CONFLICT(context_id, participant_id) DO UPDATE SET
       id=excluded.id, model_id=excluded.model_id, prompt_version=excluded.prompt_version,
-      status='running', error=NULL, created_at=excluded.created_at, completed_at=NULL
+      status='running', yes_probability=NULL, no_probability=NULL, probabilities_json=NULL,
+      rationale=NULL, cited_sources_json='[]', raw_response=NULL, latency_ms=NULL,
+      error=NULL, created_at=excluded.created_at, completed_at=NULL
   `).bind(
     runId,
     context.id,
@@ -758,14 +783,50 @@ async function mapWithConcurrency<Input, Output>(
 
 function createProviderLane() {
   const tails = new Map<string, Promise<void>>();
+  let pacingTail = Promise.resolve();
+  let nextStartAt = 0;
+  const providerNextStartAt = new Map<string, number>();
+  const pace = (lane: string) => {
+    const turn = pacingTail.catch(() => undefined).then(async () => {
+      const delay = Math.max(0, nextStartAt - Date.now(), (providerNextStartAt.get(lane) || 0) - Date.now());
+      if (delay) await wait(delay);
+      nextStartAt = Date.now() + 4000;
+      providerNextStartAt.set(lane, Date.now() + providerCooldownMs(lane));
+    });
+    pacingTail = turn;
+    return turn;
+  };
   return {
     async run<Output>(modelId: string, task: () => Promise<Output>) {
-      const lane = modelId.startsWith("claude-") ? "anthropic" : null;
-      if (!lane) return task();
+      const lane = providerLaneForModel(modelId);
       const prior = tails.get(lane) ?? Promise.resolve();
-      const result = prior.catch(() => undefined).then(task);
+      const result = prior.catch(() => undefined).then(async () => {
+        await pace(lane);
+        return task();
+      });
       tails.set(lane, result.then(() => undefined, () => undefined));
       return result;
     },
   };
+}
+
+function providerCooldownMs(lane: string) {
+  if (lane === "anthropic") return 12000;
+  if (["google", "xai"].includes(lane)) return 5000;
+  return 4000;
+}
+
+function providerLaneForModel(modelId: string) {
+  if (modelId.startsWith("claude-")) return "anthropic";
+  if (modelId.startsWith("gemini-")) return "google";
+  if (modelId.startsWith("grok-")) return "xai";
+  if (modelId.startsWith("deepseek-")) return "deepseek";
+  if (modelId.startsWith("kimi-")) return "moonshot";
+  if (modelId.startsWith("minimax-")) return "minimax";
+  if (modelId.startsWith("glm-")) return "zai";
+  return modelId;
+}
+
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }

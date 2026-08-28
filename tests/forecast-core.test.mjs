@@ -22,12 +22,15 @@ import {
 
 const wrangler = JSON.parse(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
 
-test("scheduled forecast rounds drain sixteen model-event jobs at a time", () => {
-  assert.equal(FORECAST_JOBS_PER_RUN, 16);
+test("scheduled forecast rounds enforce the twenty model-event daily budget", () => {
+  assert.equal(FORECAST_JOBS_PER_RUN, 20);
+  assert.ok(wrangler.triggers.crons.includes("20 0 * * *"));
+  assert.ok(!wrangler.triggers.crons.includes("20 * * * *"));
+  assert.ok(!wrangler.triggers.crons.includes("30 * * * *"));
 });
 
-test("forecast registry contains the 13 exact Cloudflare-runnable medium models", () => {
-  assert.equal(PROPHET_MODEL_PANEL_AS_OF, "2026-08-24");
+test("forecast registry contains the 13 audited medium model routes", () => {
+  assert.equal(PROPHET_MODEL_PANEL_AS_OF, "2026-08-28");
   assert.equal(FORECAST_MODELS.length, 13);
   assert.equal(new Set(FORECAST_MODELS.map((model) => model.participantId)).size, 13);
   assert.equal(new Set(FORECAST_MODELS.map((model) => model.modelId)).size, 13);
@@ -61,7 +64,10 @@ test("production is Cloudflare-only and every active model has an exact route", 
   assert.equal(wrangler.vars.PROPHET_MODEL_ID_MAP, undefined);
   assert.equal(wrangler.vars.PROPHET_RESPONSES_MODEL_IDS, undefined);
   assert.equal(wrangler.secrets.required.includes("PROPHET_MODEL_GATEWAY_API_KEY"), false);
-  assert.deepEqual(JSON.parse(wrangler.vars.PROPHET_DISABLED_MODEL_IDS), ["deepseek-v4-flash", "glm-5.2"]);
+  assert.deepEqual(
+    JSON.parse(wrangler.vars.PROPHET_DISABLED_MODEL_IDS),
+    ["deepseek-v4-pro"],
+  );
   assert.deepEqual(
     FORECAST_MODELS.map((model) => model.modelId).sort(),
     Object.keys(cloudflareMap).filter((modelId) => modelId !== "qwen-3.7-plus").sort(),
@@ -182,7 +188,7 @@ test("Cloudflare binding applies medium effort only to providers that expose it"
   ), {
     messages: [{ role: "user", content: "Forecast this event." }],
     max_tokens: 2200,
-    temperature: 0.1,
+    temperature: 1,
     reasoning_effort: "medium",
   });
   assert.deepEqual(buildCloudflareBindingRequest(
@@ -229,6 +235,10 @@ test("Cloudflare gateway retries only transient provider failures with bounded b
   assert.equal(isRetryableModelGatewayError("status 503"), true);
   assert.equal(isRetryableModelGatewayError("No exact Cloudflare model route is configured"), false);
   assert.deepEqual([0, 1, 9].map(modelGatewayRetryDelayMs), [2000, 8000, 8000]);
+  assert.deepEqual(
+    [0, 1, 9].map((attempt) => modelGatewayRetryDelayMs(attempt, "Wholesale rate limit exceeded for this gateway")),
+    [5000, 20000, 20000],
+  );
 });
 
 const event = {

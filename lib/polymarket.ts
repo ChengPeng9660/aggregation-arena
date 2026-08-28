@@ -8,6 +8,7 @@ import {
   selectPersistenceCandidates,
   selectRapidResolutionCandidates,
   selectDiverseSourceBalancedCandidates,
+  validateDailySlate,
 } from "@/lib/curation-core";
 import {
   inspectKalshiMarket,
@@ -306,7 +307,7 @@ export const syncPolymarketCandidates = syncLiveMarketCandidates;
 export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = new Date()) {
   await ensureCurationReady(db);
   const date = now.toISOString().slice(0, 10);
-  const runId = `live-${date}-v1`;
+  const runId = `live-${date}-${CURATION_CONFIG.configVersion}`;
   const existing = await db.prepare("SELECT * FROM selection_runs WHERE id=?").bind(runId).first<Record<string, unknown>>();
   if (existing?.status === "completed") return {
     runId,
@@ -350,16 +351,10 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
     recentCategoryCounts: recentCounts,
     recentTitles: recentTitles.results.map((row) => row.title),
   }) as EventCandidate[];
-  const categoryCounts = Object.fromEntries(CANONICAL_CATEGORIES.map((category) => [
-    category,
-    selected.filter((candidate) => candidate.category === category).length,
-  ]));
-  const sourceCounts = Object.fromEntries(Object.keys(CURATION_CONFIG.sourceQuotas).map((source) => [
-    source,
-    selected.filter((candidate) => candidate.sourcePlatform === source).length,
-  ]));
+  const validation = validateDailySlate(selected);
+  const { categoryCounts, sourceCounts } = validation;
   const completedAt = new Date().toISOString();
-  const quotaMet = Object.entries(CURATION_CONFIG.sourceQuotas).every(([source, quota]) => sourceCounts[source] === quota);
+  const quotaMet = validation.valid;
 
   await db.prepare(`
     INSERT INTO selection_runs (
@@ -381,7 +376,18 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
     await db.prepare(`
       INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
       VALUES ('curation.selection_incomplete', 'selection_run', ?, ?, 'market-curation-cron', ?)
-    `).bind(runId, JSON.stringify({ sourceCounts, required: CURATION_CONFIG.sourceQuotas }), completedAt).run();
+    `).bind(runId, JSON.stringify({
+      sourceCounts,
+      categoryCounts,
+      requirements: {
+        dailyTotal: CURATION_CONFIG.dailyTotal,
+        sourceQuotas: CURATION_CONFIG.sourceQuotas,
+        targetPerCategory: CURATION_CONFIG.targetPerCategory,
+        uniqueDiversityGroups: true,
+        uniqueTitles: true,
+      },
+      validation,
+    }), completedAt).run();
     return { runId, selected: 0, sourceCounts, categoryCounts, quotaMet: false, reused: false };
   }
 
@@ -900,7 +906,7 @@ export async function getCurationSnapshot(db: D1Database = getD1()) {
       schedules: {
         intake: "Hourly at minute 00 UTC",
         selection: "Daily at 00:10 UTC",
-        forecast: "Hourly at minute 20 UTC",
+        forecast: "Daily at 00:20 UTC",
       },
       latestAttemptStatus: latestAttempt?.status ? String(latestAttempt.status) : null,
       latestAttemptAt: latestAttempt?.started_at ? String(latestAttempt.started_at) : null,

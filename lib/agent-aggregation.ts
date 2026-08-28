@@ -15,7 +15,7 @@ import {
 import { FORECAST_MODELS, getActiveForecastModels } from "@/lib/forecast-core.js";
 import {
   ModelGatewayRequestError,
-  modelGatewayConfigurationProblem,
+  modelGatewayModelProblem,
   runModelGateway,
 } from "@/lib/model-gateway";
 
@@ -129,9 +129,10 @@ export async function runAgentHarnessBatch(
   options: { resolvedOnly?: boolean; eventLimit?: number; eventIds?: string[] } = {},
 ) {
   await ensureAgentHarnessReady(env.DB);
-  const gatewayProblem = modelGatewayConfigurationProblem(env);
+  const repairedStaleRuns = await repairStaleHarnessRuns(env.DB);
+  const gatewayProblem = modelGatewayModelProblem(env, AGENT_HARNESS_MODEL);
   if (gatewayProblem) {
-    return { configured: false, processedEvents: 0, completed: 0, fallback: 0, failed: 0, message: gatewayProblem };
+    return { configured: false, repairedStaleRuns, processedEvents: 0, completed: 0, fallback: 0, failed: 0, message: gatewayProblem };
   }
   const eventLimit = Math.max(1, Math.min(10, Number(options.eventLimit || 3)));
   const targetEventIds = [...new Set((options.eventIds || []).map((value) => String(value).trim()).filter(Boolean))].slice(0, 10);
@@ -139,16 +140,6 @@ export async function runAgentHarnessBatch(
     ? `AND e.id IN (${targetEventIds.map(() => "?").join(", ")})`
     : "";
   const activeModels = getActiveForecastModels(env.PROPHET_DISABLED_MODEL_IDS);
-  if (!activeModels.some((model) => model.modelId === AGENT_HARNESS_MODEL)) {
-    return {
-      configured: false,
-      processedEvents: 0,
-      completed: 0,
-      fallback: 0,
-      failed: 0,
-      message: `${AGENT_HARNESS_MODEL} is disabled until its configured gateway route passes a live smoke test`,
-    };
-  }
   const requiredForecasts = options.resolvedOnly ? 2 : activeModels.length;
   const modelPlaceholders = activeModels.map(() => "?").join(", ");
   const statusClause = options.resolvedOnly ? "e.status='resolved'" : "e.status IN ('resolved','open')";
@@ -208,6 +199,7 @@ export async function runAgentHarnessBatch(
   }
   return {
     configured: true,
+    repairedStaleRuns,
     resolvedOnly: Boolean(options.resolvedOnly),
     requiredForecasts,
     eventLimit,
@@ -219,6 +211,19 @@ export async function runAgentHarnessBatch(
     skipped: outcomes.filter((item) => item.status === "skipped").length,
     outcomes,
   };
+}
+
+async function repairStaleHarnessRuns(db: D1Database) {
+  const completedAt = new Date().toISOString();
+  const result = await db.prepare(`
+    UPDATE aggregation_harness_runs
+    SET status='failed',
+      fallback_reason='Recovered stale running harness after worker termination',
+      completed_at=?
+    WHERE status='running'
+      AND datetime(created_at) <= datetime('now', '-20 minutes')
+  `).bind(completedAt).run();
+  return Number(result.meta?.changes || 0);
 }
 
 async function loadHarnessPool(

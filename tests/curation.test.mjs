@@ -13,6 +13,7 @@ import {
   selectBalancedCandidates,
   selectDiverseSourceBalancedCandidates,
   titleSimilarity,
+  validateDailySlate,
 } from "../lib/curation-core.js";
 
 const now = new Date("2026-07-29T00:00:00.000Z");
@@ -339,11 +340,55 @@ test("dual-market selector publishes exactly 10 plus 10 with cross-source divers
   assert.equal(selected.filter((item) => item.sourcePlatform === "polymarket").length, 10);
   assert.equal(selected.filter((item) => item.sourcePlatform === "kalshi").length, 10);
   assert.equal(new Set(selected.map((item) => item.diversityGroupId)).size, 20);
+  const validation = validateDailySlate(selected);
+  assert.equal(validation.valid, true);
+  assert.deepEqual(validation.sourceCounts, { polymarket: 10, kalshi: 10 });
+  assert.deepEqual(validation.categoryCounts, {
+    Politics: 4,
+    Economics: 4,
+    Science: 4,
+    Sports: 4,
+    Entertainment: 4,
+  });
   for (let left = 0; left < selected.length; left += 1) {
     for (let right = left + 1; right < selected.length; right += 1) {
       assert.ok(titleSimilarity(selected[left].title, selected[right].title) < CURATION_CONFIG.titleSimilarityThreshold);
     }
   }
+});
+
+test("strict daily slate validation rejects category skew and duplicate real events", () => {
+  const uniqueTerms = [
+    "albatross", "banyan", "cobalt", "dahlia", "ember",
+    "fjord", "garnet", "harbor", "indigo", "juniper",
+    "keystone", "lantern", "monsoon", "nectar", "orchid",
+    "prairie", "quartz", "redwood", "saffron", "tundra",
+  ];
+  const candidates = ["polymarket", "kalshi"].flatMap((sourcePlatform, sourceIndex) =>
+    CANONICAL_CATEGORIES.flatMap((category, categoryIndex) =>
+      Array.from({ length: 2 }, (_, index) => candidate({
+        sourcePlatform,
+        marketId: `${sourcePlatform}-${category}-${index}`,
+        sourceEventId: `${sourcePlatform}-${category}-${index}`,
+        diversityGroupId: `${sourcePlatform}-group-${category}-${index}`,
+        title: `will ${uniqueTerms[sourceIndex * 10 + categoryIndex * 2 + index]} resolve yes?`,
+        category,
+      })),
+    ),
+  );
+  assert.equal(validateDailySlate(candidates).valid, true);
+
+  const skewed = candidates.map((item, index) => index === 0 ? { ...item, category: "Economics" } : item);
+  const skewedValidation = validateDailySlate(skewed);
+  assert.equal(skewedValidation.valid, false);
+  assert.equal(skewedValidation.categoryQuotasMet, false);
+
+  const duplicateEvent = candidates.map((item, index) => index === candidates.length - 1
+    ? { ...item, diversityGroupId: candidates[0].diversityGroupId }
+    : item);
+  const duplicateValidation = validateDailySlate(duplicateEvent);
+  assert.equal(duplicateValidation.valid, false);
+  assert.equal(duplicateValidation.uniqueDiversityGroups, false);
 });
 
 test("diversity anchors normalize named entities and possessives", () => {

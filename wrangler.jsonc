@@ -30,7 +30,7 @@
     "PROPHET_MODEL_GATEWAY_MODE": "cloudflare-only",
     "PROPHET_AI_GATEWAY_ID": "default",
     "PROPHET_CLOUDFLARE_MODEL_ID_MAP": "{\"gemini-3.6-flash\":\"google/gemini-3.6-flash\",\"gemini-3.1-pro\":\"google/gemini-3.1-pro\",\"claude-fable-5\":\"anthropic/claude-fable-5\",\"deepseek-v4-flash\":\"@cf/deepseek-ai/deepseek-v4-flash-0731\",\"claude-opus-4.8\":\"anthropic/claude-opus-4.8\",\"claude-sonnet-4.6\":\"anthropic/claude-sonnet-4.6\",\"grok-4.6\":\"xai/grok-4.6\",\"deepseek-v4-pro\":\"deepseek/deepseek-v4-pro\",\"kimi-k3\":\"moonshotai/kimi-k3\",\"grok-4.5\":\"xai/grok-4.5\",\"glm-5.2\":\"@cf/zai-org/glm-5.2\",\"grok-4.3\":\"xai/grok-4.3\",\"minimax-m2.7\":\"minimax/m2.7\",\"qwen-3.7-plus\":\"alibaba/qwen3.7-plus\"}",
-    "PROPHET_DISABLED_MODEL_IDS": "[\"deepseek-v4-flash\",\"glm-5.2\"]"
+    "PROPHET_DISABLED_MODEL_IDS": "[\"deepseek-v4-pro\"]"
   },
   "secrets": {
     "required": [
@@ -38,7 +38,7 @@
     ]
   },
   "triggers": {
-    "crons": ["0 * * * *", "10 0 * * *", "20 * * * *", "30 * * * *"]
+    "crons": ["0 * * * *", "10 0 * * *", "20 0 * * *"]
   },
   "kv_namespaces": [
     {
