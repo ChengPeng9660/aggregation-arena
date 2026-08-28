@@ -30,7 +30,7 @@ export async function GET(request: Request) {
           : "all",
         season: url.searchParams.get("season") || "all",
         category: url.searchParams.get("category") || "all",
-      }),
+      }, (env as unknown as { PROPHET_DISABLED_MODEL_IDS?: string }).PROPHET_DISABLED_MODEL_IDS),
       getForecastPipelineSnapshot(
         undefined,
         env as unknown as Parameters<typeof getForecastPipelineSnapshot>[1],

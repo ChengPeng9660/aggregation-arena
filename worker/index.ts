@@ -60,7 +60,7 @@ const worker = {
     let task: Promise<unknown>;
     if (controller.cron === "0 * * * *" || controller.cron === "10 0 * * *") {
       task = runThenRefreshArenaCache(runMarketScheduled(env, controller), env, ctx);
-    } else if (controller.cron === "20 0 * * *") {
+    } else if (controller.cron === "20 * * * *") {
       task = runThenRefreshArenaCache(runForecastBatch(env), env, ctx);
     } else {
       console.warn(`Ignoring unknown cron schedule: ${controller.cron}`);

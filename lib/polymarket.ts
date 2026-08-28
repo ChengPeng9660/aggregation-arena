@@ -2,6 +2,7 @@ import { getD1 } from "@/db";
 import {
   CANONICAL_CATEGORIES,
   CURATION_CONFIG,
+  dailySelectionRunId,
   normalizeKalshiMarket,
   normalizePolymarketMarket,
   rankCandidates,
@@ -306,8 +307,7 @@ export const syncPolymarketCandidates = syncLiveMarketCandidates;
 
 export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = new Date()) {
   await ensureCurationReady(db);
-  const date = now.toISOString().slice(0, 10);
-  const runId = `live-${date}-${CURATION_CONFIG.configVersion}`;
+  const runId = dailySelectionRunId(now);
   const existing = await db.prepare("SELECT * FROM selection_runs WHERE id=?").bind(runId).first<Record<string, unknown>>();
   if (existing?.status === "completed") return {
     runId,
@@ -906,7 +906,7 @@ export async function getCurationSnapshot(db: D1Database = getD1()) {
       schedules: {
         intake: "Hourly at minute 00 UTC",
         selection: "Daily at 00:10 UTC",
-        forecast: "Daily at 00:20 UTC",
+        forecast: "Hourly at minute 20 UTC until all models cover the daily slate",
       },
       latestAttemptStatus: latestAttempt?.status ? String(latestAttempt.status) : null,
       latestAttemptAt: latestAttempt?.started_at ? String(latestAttempt.started_at) : null,
@@ -1271,7 +1271,7 @@ async function closeStaleSyncRuns(db: D1Database, now: Date) {
 }
 
 async function retryIncompleteDailySelection(db: D1Database, now = new Date()) {
-  const runId = `live-${now.toISOString().slice(0, 10)}-v1`;
+  const runId = dailySelectionRunId(now);
   const run = await db.prepare("SELECT status FROM selection_runs WHERE id=?").bind(runId)
     .first<{ status: string }>();
   return run && ["incomplete", "running"].includes(run.status)

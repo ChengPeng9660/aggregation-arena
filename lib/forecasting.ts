@@ -6,14 +6,17 @@ import {
   syncAggregates,
 } from "@/lib/arena";
 import {
-  FORECAST_JOBS_PER_RUN,
+  DAILY_FORECAST_QUESTION_TARGET,
+  FORECAST_JOBS_PER_BATCH,
   FORECAST_MODELS,
   RETIRED_FORECAST_PARTICIPANT_IDS,
   buildProphetPredictionPrompt,
   buildSearchQuery,
   normalizeSources,
+  dailyForecastJobTarget,
   getActiveForecastModels,
 } from "@/lib/forecast-core.js";
+import { CURATION_CONFIG } from "@/lib/curation-core.js";
 import { parseEventPredictionResponse } from "@/lib/event-core.js";
 import { modelGatewayConfigurationProblem, runModelGateway } from "@/lib/model-gateway";
 
@@ -137,7 +140,7 @@ export async function ensureForecastingReady(db: D1Database = getD1()) {
 
 export async function runForecastBatch(
   env: ForecastEnv,
-  jobLimit = FORECAST_JOBS_PER_RUN,
+  jobLimit = FORECAST_JOBS_PER_BATCH,
   requestedEventIds: string[] = [],
 ) {
   await ensureForecastingReady(env.DB);
@@ -160,18 +163,56 @@ export async function runForecastBatch(
 
   const batchJobLimit = Math.max(1, Math.min(72, jobLimit));
   const targetEventIds = [...new Set(requestedEventIds.map((value) => String(value).trim()).filter(Boolean))].slice(0, 10);
+  const scheduledDailySlate = targetEventIds.length === 0;
+  const dailyRunCte = scheduledDailySlate
+    ? `, latest_daily_run(run_id) AS (
+        SELECT id FROM selection_runs
+        WHERE status='completed'
+          AND config_version=?
+          AND selected_count=?
+          AND datetime(started_at) >= datetime('now', '-36 hours')
+        ORDER BY started_at DESC
+        LIMIT 1
+      )`
+    : "";
+  const dailyRunJoin = scheduledDailySlate
+    ? "JOIN latest_daily_run daily_run ON daily_run.run_id=si.run_id"
+    : "";
   const targetEventClause = targetEventIds.length
     ? `AND e.id IN (${targetEventIds.map(() => "?").join(", ")})`
     : "";
   const activeModels = getActiveForecastModels(env.PROPHET_DISABLED_MODEL_IDS);
+  if (!activeModels.length) {
+    return {
+      configured: true,
+      repairedStaleRuns,
+      repairedForecasts,
+      repairedAggregates,
+      jobLimit: batchJobLimit,
+      targetEventIds,
+      processedEvents: 0,
+      processed: 0,
+      completed: 0,
+      message: "No forecast models are enabled",
+    };
+  }
   const modelValues = activeModels.map(() => "(?, ?)").join(", ");
   const modelBindings = activeModels.flatMap((model, index) => [model.participantId, index]);
+  const scopeBindings = scheduledDailySlate
+    ? [CURATION_CONFIG.configVersion, DAILY_FORECAST_QUESTION_TARGET]
+    : [];
   const rows = await env.DB.prepare(`
-    WITH forecast_models(participant_id, model_order) AS (VALUES ${modelValues}),
+    WITH forecast_models(participant_id, model_order) AS (VALUES ${modelValues})
+    ${dailyRunCte},
     pending_jobs AS (
-      SELECT e.id AS event_id, fm.participant_id, fm.model_order
+      SELECT e.id AS event_id, si.run_id, fm.participant_id, fm.model_order,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM model_forecast_runs prior_run
+          WHERE prior_run.event_id=e.id AND prior_run.participant_id=fm.participant_id
+        ) THEN 1 ELSE 0 END AS previously_attempted
       FROM events e
       JOIN selection_items si ON si.event_id=e.id
+      ${dailyRunJoin}
       CROSS JOIN forecast_models fm
       WHERE e.status='open'
         AND (e.close_time IS NULL OR datetime(e.close_time) > datetime('now'))
@@ -196,8 +237,8 @@ export async function runForecastBatch(
           AND active_run.status='running'
           AND datetime(active_run.created_at) > datetime('now', '-20 minutes')
       )
-      GROUP BY e.id, fm.participant_id, fm.model_order
-      ORDER BY MIN(si.selected_at), MIN(si.category), MIN(si.rank), e.id, fm.model_order
+      GROUP BY e.id, si.run_id, fm.participant_id, fm.model_order
+      ORDER BY previously_attempted, MIN(si.category), MIN(si.rank), e.id, fm.model_order
       LIMIT ?
     )
     SELECT e.id, e.title, e.description, e.category, e.close_time, e.event_type,
@@ -212,10 +253,10 @@ export async function runForecastBatch(
       )) FROM event_outcomes eo WHERE eo.event_id=e.id ORDER BY eo.display_order) AS event_outcomes_json
     FROM pending_jobs pj
     JOIN events e ON e.id=pj.event_id
-    JOIN selection_items si ON si.event_id=e.id
+    JOIN selection_items si ON si.event_id=e.id AND si.run_id=pj.run_id
     JOIN polymarket_candidates pc ON pc.market_id=si.market_id
-    ORDER BY si.selected_at, si.category, si.rank, e.id, pj.model_order
-  `).bind(...modelBindings, ...targetEventIds, batchJobLimit).all<Record<string, unknown>>();
+    ORDER BY pj.previously_attempted, si.category, si.rank, e.id, pj.model_order
+  `).bind(...modelBindings, ...scopeBindings, ...targetEventIds, batchJobLimit).all<Record<string, unknown>>();
 
   const jobs = rows.results.flatMap((row) => {
     const event = rowToForecastEvent(row);
@@ -252,6 +293,9 @@ export async function runForecastBatch(
     repairedAggregates,
     jobLimit: batchJobLimit,
     targetEventIds,
+    scheduledDailySlate,
+    dailyQuestionTarget: DAILY_FORECAST_QUESTION_TARGET,
+    dailyModelEventTarget: dailyForecastJobTarget(activeModels.length),
     processedEvents: new Set(outcomes.map((item) => item.eventId)).size,
     processed: outcomes.length,
     completed: outcomes.filter((item) => item.status === "completed").length,
@@ -596,9 +640,9 @@ export async function getForecastPipelineSnapshot(
   await ensureForecastingReady(db);
   const gatewayProblem = modelGatewayConfigurationProblem(runtime);
   const activeModels = getActiveForecastModels(runtime.PROPHET_DISABLED_MODEL_IDS);
-  const modelValues = activeModels.map(() => "(?)").join(", ");
+  const modelValues = activeModels.length ? activeModels.map(() => "(?)").join(", ") : "(NULL)";
   const modelBindings = activeModels.map((model) => model.participantId);
-  const [counts, runRows, pending] = await Promise.all([
+  const [counts, runRows, dailySlate] = await Promise.all([
     db.prepare(`
       SELECT
         (SELECT COUNT(*) FROM research_contexts WHERE status='ready') AS contexts_ready,
@@ -615,17 +659,41 @@ export async function getForecastPipelineSnapshot(
       ORDER BY mfr.created_at DESC LIMIT 30
     `).all<Record<string, unknown>>(),
     db.prepare(`
-      WITH forecast_models(participant_id) AS (VALUES ${modelValues})
-      SELECT COUNT(*) AS count FROM events e
-      JOIN selection_items si ON si.event_id=e.id
-      CROSS JOIN forecast_models
-      LEFT JOIN model_forecast_runs mfr
-        ON mfr.event_id=e.id AND mfr.participant_id=forecast_models.participant_id AND mfr.status='completed'
-      WHERE e.status='open'
-        AND (e.close_time IS NULL OR datetime(e.close_time) > datetime('now'))
-        AND mfr.id IS NULL
-    `).bind(...modelBindings).first<{ count: number }>(),
+      WITH forecast_models(participant_id) AS (VALUES ${modelValues}),
+      latest_daily_run(run_id) AS (
+        SELECT id FROM selection_runs
+        WHERE status='completed'
+          AND config_version=?
+          AND selected_count=?
+          AND datetime(started_at) >= datetime('now', '-36 hours')
+        ORDER BY started_at DESC
+        LIMIT 1
+      ),
+      slate_jobs AS (
+        SELECT si.run_id, si.event_id, forecast_models.participant_id
+        FROM selection_items si
+        JOIN latest_daily_run latest ON latest.run_id=si.run_id
+        CROSS JOIN forecast_models
+      )
+      SELECT
+        MAX(run_id) AS run_id,
+        COUNT(DISTINCT event_id) AS selected_questions,
+        COUNT(*) AS target,
+        SUM(CASE WHEN EXISTS (
+          SELECT 1 FROM model_forecast_runs mfr
+          WHERE mfr.event_id=slate_jobs.event_id
+            AND mfr.participant_id=slate_jobs.participant_id
+            AND mfr.status='completed'
+        ) THEN 1 ELSE 0 END) AS completed
+      FROM slate_jobs
+    `).bind(
+      ...modelBindings,
+      CURATION_CONFIG.configVersion,
+      DAILY_FORECAST_QUESTION_TARGET,
+    ).first<Record<string, unknown>>(),
   ]);
+  const dailyTarget = dailyForecastJobTarget(activeModels.length);
+  const dailyCompleted = Number(dailySlate?.completed || 0);
   return {
     models: activeModels,
     activeModels: activeModels.map((model) => model.modelId),
@@ -640,7 +708,17 @@ export async function getForecastPipelineSnapshot(
       contextsReady: Number(counts?.contexts_ready || 0),
       completed: Number(counts?.completed || 0),
       failed: Number(counts?.failed || 0),
-      pending: Number(pending?.count || 0),
+      pending: Math.max(0, Number(dailySlate?.target || 0) - dailyCompleted),
+    },
+    dailySlate: {
+      runId: dailySlate?.run_id ? String(dailySlate.run_id) : null,
+      questionTarget: DAILY_FORECAST_QUESTION_TARGET,
+      selectedQuestions: Number(dailySlate?.selected_questions || 0),
+      activeModelCount: activeModels.length,
+      modelEventTarget: dailyTarget,
+      completed: dailyCompleted,
+      pending: Math.max(0, Number(dailySlate?.target || 0) - dailyCompleted),
+      jobsPerHourlyBatch: FORECAST_JOBS_PER_BATCH,
     },
     runs: runRows.results.map((row) => ({
       id: row.id,

@@ -4,7 +4,7 @@ import { CANONICAL_CATEGORIES } from "@/lib/curation-core.js";
 import { aggregateDistribution, normalizeDistribution, prophetEventBrier } from "@/lib/event-core.js";
 import { forecastAdmission } from "@/lib/event-state-core.js";
 import { lockEvent } from "@/lib/event-state";
-import { FORECAST_MODELS, RETIRED_FORECAST_PARTICIPANT_IDS } from "@/lib/forecast-core.js";
+import { FORECAST_MODELS, RETIRED_FORECAST_PARTICIPANT_IDS, getActiveForecastModels } from "@/lib/forecast-core.js";
 import { buildBestPairStandings } from "@/lib/pair-leaderboard-core.js";
 
 export type ArenaFilters = {
@@ -239,7 +239,7 @@ export async function ensureArenaReady(db: D1Database = getD1()) {
   }
 }
 
-export async function getArenaSnapshot(filters: ArenaFilters = {}) {
+export async function getArenaSnapshot(filters: ArenaFilters = {}, disabledModelIds?: string) {
   await ensureArenaReady();
   const db = getD1();
   const [eventRows, participantRows, predictionRows, predictionOutcomeRows, eventOutcomeRows, auditRows, curation] = await Promise.all([
@@ -252,9 +252,15 @@ export async function getArenaSnapshot(filters: ArenaFilters = {}) {
     getCurationSnapshot(db),
   ]);
 
-  const activeParticipantIds = new Set(
-    (participantRows.results as Record<string, unknown>[]).map((row) => String(row.id)),
+  const enabledCurrentParticipantIds = new Set(
+    getActiveForecastModels(disabledModelIds).map((model) => model.participantId),
   );
+  const currentParticipantIds = new Set(FORECAST_MODELS.map((model) => model.participantId));
+  const visibleParticipantRows = (participantRows.results as Record<string, unknown>[]).filter((row) => {
+    const id = String(row.id);
+    return !currentParticipantIds.has(id) || enabledCurrentParticipantIds.has(id);
+  });
+  const activeParticipantIds = new Set(visibleParticipantRows.map((row) => String(row.id)));
   const predictionsByEvent = new Map<string, Record<string, unknown>[]>();
   for (const raw of predictionRows.results as Record<string, unknown>[]) {
     if (raw.kind === "forecaster" && !activeParticipantIds.has(String(raw.participant_id))) continue;
@@ -328,7 +334,7 @@ export async function getArenaSnapshot(filters: ArenaFilters = {}) {
     };
   });
 
-  const participants = (participantRows.results as Record<string, unknown>[]).map((row) => ({
+  const participants = visibleParticipantRows.map((row) => ({
     id: row.id,
     name: row.name,
     organization: row.organization,

@@ -177,6 +177,16 @@ type ForecastPipelineSnapshot = {
   model: ForecastModel;
   configured: { modelGateway: boolean; modelGatewayProblem: string | null; searchSecret: boolean };
   stats: { contextsReady: number; completed: number; failed: number; pending: number };
+  dailySlate: {
+    runId: string | null;
+    questionTarget: number;
+    selectedQuestions: number;
+    activeModelCount: number;
+    modelEventTarget: number;
+    completed: number;
+    pending: number;
+    jobsPerHourlyBatch: number;
+  };
   runs: {
     id: string;
     eventId: string;
@@ -995,8 +1005,8 @@ function ForecastsView({
       <section className="metric-strip">
         <Metric label="Frozen contexts" value={pipeline.stats.contextsReady} detail="one search per event" />
         <Metric label="Completed" value={pipeline.stats.completed} detail={`${pipeline.models.length} model families`} />
-        <Metric label="Pending" value={pipeline.stats.pending} detail="model-event runs" />
-        <Metric label="Pipeline" value={ready ? "READY" : "SETUP"} detail="up to 20 model-event runs / day" highlight />
+        <Metric label="Pending" value={pipeline.stats.pending} detail="current daily slate model-event runs" />
+        <Metric label="Pipeline" value={ready ? "READY" : "SETUP"} detail={`${pipeline.dailySlate.questionTarget} questions × ${pipeline.dailySlate.activeModelCount} models`} highlight />
       </section>
 
       <section className="pipeline-flow" aria-label="Forecast pipeline">
@@ -1008,7 +1018,7 @@ function ForecastsView({
         <i>→</i>
         <div className="model-step"><span>04</span><b>{pipeline.models.length} independent models</b><small>{pipeline.models.map((model) => model.participantName).join(" · ")}</small></div>
         <i>→</i>
-        <div><span>05</span><b>Agent Harnesses</b><small>blind + evidence-aware · Cloudflare AI Gateway</small></div>
+        <div><span>05</span><b>Hourly completion + retry</b><small>{pipeline.dailySlate.jobsPerHourlyBatch} model-event jobs per batch · Agent Harness paused</small></div>
         <i>→</i>
         <div><span>06</span><b>Arena score</b><small>prediction history + Brier</small></div>
       </section>

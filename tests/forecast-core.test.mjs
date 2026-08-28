@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  FORECAST_JOBS_PER_RUN,
+  DAILY_FORECAST_QUESTION_TARGET,
+  FORECAST_JOBS_PER_BATCH,
   FORECAST_CONFIG_VERSION,
   FORECAST_MODELS,
   FORECAST_REASONING_PROFILE,
@@ -11,6 +12,7 @@ import {
   buildCloudflareBindingRequest,
   buildProphetPredictionPrompt,
   buildSearchQuery,
+  dailyForecastJobTarget,
   normalizeSources,
   getActiveForecastModels,
   isRetryableModelGatewayError,
@@ -22,10 +24,12 @@ import {
 
 const wrangler = JSON.parse(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
 
-test("scheduled forecast rounds enforce the twenty model-event daily budget", () => {
-  assert.equal(FORECAST_JOBS_PER_RUN, 20);
-  assert.ok(wrangler.triggers.crons.includes("20 0 * * *"));
-  assert.ok(!wrangler.triggers.crons.includes("20 * * * *"));
+test("scheduled forecast rounds cover twenty questions for every active model", () => {
+  assert.equal(DAILY_FORECAST_QUESTION_TARGET, 20);
+  assert.equal(FORECAST_JOBS_PER_BATCH, 20);
+  assert.equal(dailyForecastJobTarget(12), 240);
+  assert.ok(wrangler.triggers.crons.includes("20 * * * *"));
+  assert.ok(!wrangler.triggers.crons.includes("20 0 * * *"));
   assert.ok(!wrangler.triggers.crons.includes("30 * * * *"));
 });
 
@@ -93,9 +97,10 @@ test("production is Cloudflare-only and every active model has an exact route", 
     "prophet-medium-inkling",
     "prophet-medium-muse-spark-1.1",
     "prophet-medium-foresight-v3",
-    "prophet-medium-deepseek-v4-flash",
-    "prophet-medium-glm-5.2",
   ].every((participantId) => RETIRED_FORECAST_PARTICIPANT_IDS.includes(participantId)));
+  assert.ok(FORECAST_MODELS.every(
+    (model) => !RETIRED_FORECAST_PARTICIPANT_IDS.includes(model.participantId),
+  ));
 });
 
 test("Cloudflare route maps require explicit non-empty model IDs", () => {
