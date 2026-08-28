@@ -218,16 +218,31 @@ const SCHEMA_STATEMENTS = [
 ];
 
 let schemaReady = false;
+let registryReadySignature: string | null = null;
 
-export async function ensureArenaReady(db: D1Database = getD1()) {
+export async function ensureArenaReady(db: D1Database = getD1(), disabledModelIds?: string) {
   if (!schemaReady) {
     await db.batch(SCHEMA_STATEMENTS.map((statement) => db.prepare(statement)));
-    const registryStatements = FORECAST_MODELS.map((model) => db.prepare(`
+    schemaReady = true;
+  }
+  const enabledParticipantIds = new Set(
+    getActiveForecastModels(disabledModelIds).map((model) => model.participantId),
+  );
+  const registrySignature = disabledModelIds === undefined
+    ? "preserve-existing-status"
+    : [...enabledParticipantIds].sort().join(",");
+  if (registryReadySignature !== registrySignature) {
+    const registryStatements = FORECAST_MODELS.map((model) => {
+      const status = enabledParticipantIds.has(model.participantId) ? "active" : "inactive";
+      const conflictUpdate = disabledModelIds === undefined
+        ? "name=excluded.name, organization=excluded.organization, color=excluded.color"
+        : "name=excluded.name, organization=excluded.organization, color=excluded.color, status=excluded.status";
+      return db.prepare(`
       INSERT INTO participants (id, name, organization, kind, color, status)
-      VALUES (?, ?, ?, 'forecaster', ?, 'active')
-      ON CONFLICT(id) DO UPDATE SET name=excluded.name, organization=excluded.organization,
-        color=excluded.color, status='active'
-    `).bind(model.participantId, model.participantName, model.organization, model.color));
+      VALUES (?, ?, ?, 'forecaster', ?, ?)
+      ON CONFLICT(id) DO UPDATE SET ${conflictUpdate}
+    `).bind(model.participantId, model.participantName, model.organization, model.color, status);
+    });
     if (RETIRED_FORECAST_PARTICIPANT_IDS.length) {
       registryStatements.push(db.prepare(`
         UPDATE participants SET status='inactive'
@@ -235,12 +250,12 @@ export async function ensureArenaReady(db: D1Database = getD1()) {
       `).bind(...RETIRED_FORECAST_PARTICIPANT_IDS));
     }
     await db.batch(registryStatements);
-    schemaReady = true;
+    registryReadySignature = registrySignature;
   }
 }
 
 export async function getArenaSnapshot(filters: ArenaFilters = {}, disabledModelIds?: string) {
-  await ensureArenaReady();
+  await ensureArenaReady(undefined, disabledModelIds);
   const db = getD1();
   const [eventRows, participantRows, predictionRows, predictionOutcomeRows, eventOutcomeRows, auditRows, curation] = await Promise.all([
     db.prepare("SELECT * FROM events WHERE id NOT LIKE 'demo-%' AND season <> 'Demo Season' ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'locked' THEN 1 ELSE 2 END, updated_at DESC").all(),

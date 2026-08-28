@@ -9,7 +9,6 @@ import {
   DAILY_FORECAST_QUESTION_TARGET,
   FORECAST_JOBS_PER_BATCH,
   FORECAST_MODELS,
-  RETIRED_FORECAST_PARTICIPANT_IDS,
   buildProphetPredictionPrompt,
   buildSearchQuery,
   normalizeSources,
@@ -108,33 +107,12 @@ const FORECAST_SCHEMA = [
 ];
 
 let forecastingSchemaReady = false;
-let modelRegistryReady = false;
 
-export async function ensureForecastingReady(db: D1Database = getD1()) {
+export async function ensureForecastingReady(db: D1Database = getD1(), disabledModelIds?: string) {
+  await ensureArenaReady(db, disabledModelIds);
   if (!forecastingSchemaReady) {
     await db.batch(FORECAST_SCHEMA.map((statement) => db.prepare(statement)));
     forecastingSchemaReady = true;
-  }
-  if (!modelRegistryReady) {
-    const registryStatements = FORECAST_MODELS.map((model) => db.prepare(`
-      INSERT INTO participants (id, name, organization, kind, color, status)
-      VALUES (?, ?, ?, 'forecaster', ?, 'active')
-      ON CONFLICT(id) DO UPDATE SET name=excluded.name, organization=excluded.organization,
-        color=excluded.color, status='active'
-    `).bind(
-      model.participantId,
-      model.participantName,
-      model.organization,
-      model.color,
-    ));
-    if (RETIRED_FORECAST_PARTICIPANT_IDS.length) {
-      registryStatements.push(db.prepare(`
-        UPDATE participants SET status='inactive'
-        WHERE id IN (${RETIRED_FORECAST_PARTICIPANT_IDS.map(() => "?").join(", ")})
-      `).bind(...RETIRED_FORECAST_PARTICIPANT_IDS));
-    }
-    await db.batch(registryStatements);
-    modelRegistryReady = true;
   }
 }
 
@@ -143,8 +121,7 @@ export async function runForecastBatch(
   jobLimit = FORECAST_JOBS_PER_BATCH,
   requestedEventIds: string[] = [],
 ) {
-  await ensureForecastingReady(env.DB);
-  await ensureArenaReady(env.DB);
+  await ensureForecastingReady(env.DB, env.PROPHET_DISABLED_MODEL_IDS);
   const repairedStaleRuns = await repairStaleForecastRuns(env.DB);
   const repairedForecasts = await repairMissingForecastPredictions(env.DB);
   const repairedAggregates = await repairMissingAggregates(env.DB);
@@ -637,7 +614,7 @@ export async function getForecastPipelineSnapshot(
   db: D1Database = getD1(),
   runtime: Pick<ForecastEnv, "AI" | "TAVILY_API_KEY" | "PROPHET_MODEL_GATEWAY_MODE" | "PROPHET_AI_GATEWAY_ID" | "PROPHET_CLOUDFLARE_MODEL_ID_MAP" | "PROPHET_DISABLED_MODEL_IDS"> = {},
 ) {
-  await ensureForecastingReady(db);
+  await ensureForecastingReady(db, runtime.PROPHET_DISABLED_MODEL_IDS);
   const gatewayProblem = modelGatewayConfigurationProblem(runtime);
   const activeModels = getActiveForecastModels(runtime.PROPHET_DISABLED_MODEL_IDS);
   const modelValues = activeModels.length ? activeModels.map(() => "(?)").join(", ") : "(NULL)";
