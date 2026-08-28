@@ -66,6 +66,24 @@ test("pair standings replay EC and Piecewise Odds as deterministic two-model met
   assert.ok(standings.every((row) => Number.isFinite(row.brier)));
 });
 
+test("pair selection does not let a one-event provisional pair outrank an adequately resolved pair", () => {
+  const standings = buildBestPairStandings({
+    methods: [{ id: "mean", aggregateMethod: "mean" }],
+    participants: ["a", "b", "c", "d"].map((id) => ({ id, name: id.toUpperCase() })),
+    events: [
+      event("one", "2026-08-01", 1, { a: 0.6, b: 0.6 }),
+      event("two", "2026-08-02", 0, { a: 0.4, b: 0.4 }),
+      event("three", "2026-08-03", 1, { a: 0.6, b: 0.6 }),
+      event("four", "2026-08-04", 0, { a: 0.4, b: 0.4 }),
+      event("five", "2026-08-05", 1, { a: 0.6, b: 0.6 }),
+      event("cherry-picked", "2026-08-06", 1, { c: 1, d: 1 }),
+    ],
+  });
+
+  assert.deepEqual([standings[0].firstId, standings[0].secondId], ["a", "b"]);
+  assert.equal(standings[0].losses.length, 5);
+});
+
 function event(id, resolvedAt, resolution, forecasts) {
   return {
     id,
