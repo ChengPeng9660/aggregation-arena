@@ -7,6 +7,11 @@ test('fulfilled source orchestration cannot hide a failed required market', () =
   assert.match(pipelineReportedFailure(result), /kalshi intake failed: 429/);
 });
 
+test('unavailable resolution sources are failures instead of silently successful checks', () => {
+  assert.match(pipelineReportedFailure({resolution:{checked:4,resolved:1,failed:2}}), /2 selected market resolution checks failed/);
+  assert.equal(pipelineReportedFailure({resolution:{checked:4,resolved:0,failed:0}}), null);
+});
+
 test('zero or incomplete daily selection is a failure for combined and direct invocations', () => {
   assert.match(pipelineReportedFailure({selection:{selected:0,quotaMet:false}}), /20 questions/);
   assert.match(pipelineReportedFailure({selected:18,quotaMet:false}), /20 questions/);

@@ -5,6 +5,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import ts from 'typescript';
 import * as curation from '../lib/curation-core.js';
+import { createKalshiGetHeaders } from '../lib/kalshi-auth-core.js';
 
 const file = new URL('../lib/polymarket.ts', import.meta.url);
 const source = ts.createSourceFile(file.pathname, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
@@ -15,9 +16,10 @@ const moduleBody = stripTypeScriptTypes(source.statements
   .map((node) => node.getText(source).replace(/^export\s+/, ''))
   .join('\n'));
 function load(fetch, getD1 = () => { throw new Error('No test database'); }) {
-  const dependencies = { ...curation, fetch, getD1 };
+  const dependencies = { ...curation, createKalshiGetHeaders, fetch, getD1 };
   return new Function(...Object.keys(dependencies), `${moduleBody}\nreturn {
     fetchPolymarketEventPayloads, fetchKalshiEventPayloads, readJsonLimited,
+    fetchIntakeJson, intakeBudget,
     syncLiveMarketCandidates, closeStaleSyncRuns, CURATION_SCHEMA,
   };`)(...Object.values(dependencies));
 }
@@ -180,6 +182,41 @@ test('next-day Kalshi discovery looks past used groups and retains official cate
   assert.ok(result.events.every((event) => event.markets.every((market) => !('unneeded_blob' in market))));
 });
 
+test('a provider rate limit stops further discovery and honors its cooldown without switching hostnames', async () => {
+  const calls = [];
+  const earliestRetry = Date.now() + 3_600_000;
+  const lib = load(async (input) => {
+    calls.push(new URL(input));
+    return new Response('{"error":{"code":"too_many_requests"}}', {status:429,headers:{'retry-after':'3600'}});
+  });
+  await assert.rejects(lib.fetchKalshiEventPayloads(now), (error) => {
+    const diagnostics = JSON.parse(error.message);
+    assert.ok(diagnostics.limitsReached.includes('source_rate_limited'));
+    assert.ok(Date.parse(diagnostics.retryAfter) >= earliestRetry);
+    assert.ok(diagnostics.errors.some((item) => item.error.includes('returned 429; retry after')));
+    return true;
+  });
+  assert.ok(calls.length <= 2, 'only the already-started requests may finish');
+  assert.ok(calls.every((url) => url.hostname === 'external-api.kalshi.com'));
+});
+
+test('concurrent callers obey the shared request pace and cannot overrun the source request budget', async () => {
+  const starts = [];
+  const lib = load(async () => {
+    starts.push(Date.now());
+    return Response.json({ events: [] });
+  });
+  const budget = lib.intakeBudget(3, 30);
+  const outcomes = await Promise.allSettled(Array.from({length: 5}, () =>
+    lib.fetchIntakeJson(new URL('https://external-api.kalshi.com/trade-api/v2/events'), budget)));
+  assert.equal(starts.length, 3);
+  assert.equal(outcomes.filter((outcome) => outcome.status === 'fulfilled').length, 3);
+  for (let index = 1; index < starts.length; index += 1) {
+    assert.ok(starts[index] - starts[index - 1] >= 30, 'concurrency must not create a burst');
+  }
+  assert.ok(budget.diagnostics.limitsReached.includes('source_request_budget'));
+});
+
 test('real sync SQL stores complete outcomes across bounded multirow batches and timeout diagnostics preserve progress', async () => {
   const kalshi = kalshiFixture();
   const fixture = sqliteFixture(async (input) => {
@@ -192,11 +229,15 @@ test('real sync SQL stores complete outcomes across bounded multirow batches and
   });
   try {
     const result = await fixture.lib.syncLiveMarketCandidates(fixture.db, now);
-    assert.equal(fixture.sqlite.prepare('SELECT COUNT(*) AS n FROM polymarket_candidates').get().n, 117);
-    assert.equal(fixture.sqlite.prepare('SELECT COUNT(*) AS n FROM market_snapshots').get().n, 117);
+    // Near-identical fixture titles do not stop discovery after the first
+    // series: retain both series' actual source rows without counting them as
+    // independent daily questions.
+    const expectedRows = 97 + sourceCategories.length * 8;
+    assert.equal(fixture.sqlite.prepare('SELECT COUNT(*) AS n FROM polymarket_candidates').get().n, expectedRows);
+    assert.equal(fixture.sqlite.prepare('SELECT COUNT(*) AS n FROM market_snapshots').get().n, expectedRows);
     assert.equal(fixture.sqlite.prepare("SELECT COUNT(*) AS n FROM polymarket_candidates WHERE source_event_id='A'").get().n, 97);
     const upserts = fixture.statements.filter((statement) => statement.sql.includes('INSERT INTO polymarket_candidates'));
-    assert.ok(upserts.length < 117 / 2, 'upserts must batch rows, not issue one query per candidate');
+    assert.ok(upserts.length < expectedRows / 2, 'upserts must batch rows, not issue one query per candidate');
     assert.ok(upserts.every((statement) => statement.bindings.length <= 100));
     assert.ok(fixture.statements.some((statement) => statement.sql.includes('$.lastStage') && statement.bindings.includes('persisting')));
     assert.ok(result.sourceStats.polymarket.underTargetCategories.includes('Science'), 'insufficient supply remains visible regardless of status label');

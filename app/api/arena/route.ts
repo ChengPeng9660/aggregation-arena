@@ -109,7 +109,7 @@ export async function POST(request: Request) {
       const forecast = await runForecastBatch(runtime);
       result = { selection, forecast };
     } else if (action === "run_pipeline_sync") {
-      const runtime = env as unknown as Parameters<typeof runForecastBatch>[0];
+      const runtime = env as unknown as Parameters<typeof runMarketScheduled>[0];
       result = await runMarketScheduled(runtime, { cron: "0 * * * *" });
     } else if (action === "run_rapid_forecast_batch") {
       const runtime = env as unknown as Parameters<typeof runRapidResolutionRound>[0];

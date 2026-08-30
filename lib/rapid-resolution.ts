@@ -1,5 +1,6 @@
 import { runAgentHarnessBatch } from "@/lib/agent-aggregation";
 import { runForecastBatch } from "@/lib/forecasting";
+import type { KalshiAuthEnv } from "@/lib/kalshi-auth-core.js";
 import {
   ensureCurationReady,
   selectRapidResolutionSlate,
@@ -7,7 +8,8 @@ import {
 } from "@/lib/polymarket";
 
 type RapidResolutionEnv = Parameters<typeof runForecastBatch>[0]
-  & Parameters<typeof runAgentHarnessBatch>[0];
+  & Parameters<typeof runAgentHarnessBatch>[0]
+  & KalshiAuthEnv;
 
 export async function runRapidResolutionRound(
   env: RapidResolutionEnv,
@@ -33,7 +35,7 @@ export async function runRapidResolutionRound(
     : Number.POSITIVE_INFINITY;
   const sync = existing?.status === "completed" || latestSyncAgeMs < 90 * 60_000
     ? null
-    : await syncLiveMarketCandidates(env.DB, now);
+    : await syncLiveMarketCandidates(env.DB, now, env);
   const selection = await selectRapidResolutionSlate(env.DB, now);
   const forecast = selection.eventIds.length && options.runForecast !== false
     ? await runForecastBatch(env, Math.max(1, Math.min(72, Number(options.jobLimit || 16))), selection.eventIds)

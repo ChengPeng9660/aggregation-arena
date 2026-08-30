@@ -1,4 +1,5 @@
 import { getD1 } from "@/db";
+import { createKalshiGetHeaders, type KalshiAuthEnv, type KalshiGetHeaders } from "@/lib/kalshi-auth-core.js";
 import {
   CANONICAL_CATEGORIES,
   CURATION_CONFIG,
@@ -60,6 +61,9 @@ const KALSHI_DISCOVERY_GROUP_TARGET = 4;
 const INTAKE_CONCURRENCY = 2;
 const INTAKE_REQUEST_TIMEOUT_MS = 8_000;
 const INTAKE_SOURCE_TIMEOUT_MS = 45_000;
+const KALSHI_SOURCE_TIMEOUT_MS = 90_000;
+const KALSHI_REQUEST_INTERVAL_MS = 1_250;
+const MAX_KALSHI_INTAKE_REQUESTS = 32;
 const INTAKE_PAGE_MAX_BYTES = 2 * 1024 * 1024;
 const INTAKE_SOURCE_MAX_BYTES = 32 * 1024 * 1024;
 const RAPID_RESOLUTION_HOURS = 3;
@@ -158,7 +162,7 @@ export async function ensureCurationReady(db: D1Database = getD1()) {
   curationSchemaReady = true;
 }
 
-export async function syncLiveMarketCandidates(db: D1Database = getD1(), now = new Date()) {
+export async function syncLiveMarketCandidates(db: D1Database = getD1(), now = new Date(), kalshiEnv: KalshiAuthEnv = {}) {
   await ensureCurationReady(db);
   const startedAt = now.toISOString();
   await closeStaleSyncRuns(db, now);
@@ -198,7 +202,7 @@ export async function syncLiveMarketCandidates(db: D1Database = getD1(), now = n
     const blockedGroups = new Set(used.results.map((row) => row.diversity_group_id));
     const sourceResults = await Promise.allSettled([
       collectSource("polymarket", () => fetchPolymarketCandidates(now, blockedGroups)),
-      collectSource("kalshi", () => fetchKalshiCandidates(now, blockedGroups)),
+      collectSource("kalshi", () => fetchKalshiCandidates(now, blockedGroups, kalshiEnv)),
     ]);
     const successes = sourceResults
       .filter((result): result is PromiseFulfilledResult<SourceFetchResult> => result.status === "fulfilled")
@@ -749,7 +753,7 @@ export async function selectRapidResolutionSlate(db: D1Database = getD1(), now =
   return { runId, selected: selected.length, eventIds, sourceCounts, categoryCounts, reused: false };
 }
 
-export async function resolveSelectedMarkets(db: D1Database = getD1()) {
+export async function resolveSelectedMarkets(db: D1Database = getD1(), kalshiEnv: KalshiAuthEnv = {}) {
   await ensureCurationReady(db);
   const rows = await db.prepare(`
     SELECT si.market_id, si.source_platform, si.event_id, e.status, e.close_time,
@@ -771,6 +775,8 @@ export async function resolveSelectedMarkets(db: D1Database = getD1()) {
   let locked = 0;
   let resolved = 0;
   let failed = 0;
+  let kalshiHeaders: KalshiGetHeaders | undefined;
+  const kalshiBudget = intakeBudget(MAX_RESOLUTION_CHECKS_PER_RUN, KALSHI_REQUEST_INTERVAL_MS, KALSHI_SOURCE_TIMEOUT_MS);
   for (const row of checkRows) {
     try {
       if (row.status === "open" && deadlinePassed(row.close_time)) {
@@ -784,12 +790,9 @@ export async function resolveSelectedMarkets(db: D1Database = getD1()) {
 
       if (row.source_platform === "kalshi") {
         const ticker = row.market_id.replace(/^kalshi:/, "");
-        const response = await fetch(`${KALSHI_API}/markets/${encodeURIComponent(ticker)}`, {
-          headers: { accept: "application/json", "user-agent": "Aggrena/1.0" },
-          signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
-        });
-        if (!response.ok) continue;
-        const payload = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as Record<string, unknown>;
+        const url = new URL(`${KALSHI_API}/markets/${encodeURIComponent(ticker)}`);
+        kalshiHeaders ??= createKalshiGetHeaders(kalshiEnv);
+        const payload = await fetchIntakeJson(url, kalshiBudget, MAX_EXTERNAL_PAGE_BYTES, kalshiHeaders);
         const market = (payload.market && typeof payload.market === "object" ? payload.market : payload) as Record<string, unknown>;
         const state = inspectKalshiMarket(market);
         if (state.resolvedOutcome) {
@@ -817,7 +820,10 @@ export async function resolveSelectedMarkets(db: D1Database = getD1()) {
           headers: { accept: "application/json", "user-agent": "Aggrena/1.0" },
           signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
         });
-        if (!response.ok) continue;
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error(`Polymarket event resolution returned ${response.status}`);
+        }
         const sourceEvent = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as Record<string, unknown>;
         const outcomeRows = await db.prepare(
           "SELECT outcome_key, market_id FROM event_outcomes WHERE event_id=? ORDER BY display_order",
@@ -846,7 +852,10 @@ export async function resolveSelectedMarkets(db: D1Database = getD1()) {
         headers: { accept: "application/json", "user-agent": "Aggrena/1.0" },
         signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
       });
-      if (!response.ok) continue;
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`Polymarket market resolution returned ${response.status}`);
+      }
       const market = await readJsonLimited(response, MAX_EXTERNAL_PAGE_BYTES) as Record<string, unknown>;
       const state = inspectPolymarketBinaryMarket(market);
       if (state.resolvedOutcome) {
@@ -920,7 +929,7 @@ function deadlinePassed(closeTime: string | null) {
 export const resolveSelectedPolymarketMarkets = resolveSelectedMarkets;
 
 export async function runMarketScheduled(
-  env: { DB: D1Database },
+  env: { DB: D1Database } & KalshiAuthEnv,
   controller: { cron: string },
 ) {
   const daily = controller.cron === "10 0 * * *";
@@ -928,18 +937,20 @@ export async function runMarketScheduled(
     return { sync: null, resolution: null, selection: await selectDailyBalancedSlate(env.DB) };
   }
   await ensureCurationReady(env.DB);
-  const [sync, resolution] = await Promise.allSettled([
-    syncLiveMarketCandidates(env.DB),
-    resolveSelectedMarkets(env.DB),
-  ]);
+  // Source discovery and resolution each have their own invocation budget.
+  // Sharing an invocation can exhaust its external request limit before cache
+  // refresh, even when each stage stays within its individual source budgets.
+  if (controller.cron === "5 * * * *") {
+    return { sync: null, resolution: await resolveSelectedMarkets(env.DB, env), selection: null };
+  }
+  const [sync] = await Promise.allSettled([syncLiveMarketCandidates(env.DB, new Date(), env)]);
   if (sync.status === "rejected") console.error("Market sync failed", sync.reason);
-  if (resolution.status === "rejected") console.error("Market resolution failed", resolution.reason);
   const selection = sync.status === "fulfilled"
     ? await retryIncompleteDailySelection(env.DB)
     : null;
   return {
     sync: settledValue(sync),
-    resolution: settledValue(resolution),
+    resolution: null,
     selection,
   };
 }
@@ -1004,6 +1015,7 @@ export async function getCurationSnapshot(db: D1Database = getD1()) {
         : latestAttemptFailedAfterSuccess ? "recovering" : "healthy",
       schedules: {
         intake: "Hourly at minute 00 UTC",
+        resolution: "Hourly at minute 05 UTC",
         selection: "Daily at 00:10 UTC",
         forecast: "Hourly at minute 20 UTC until all models cover the daily slate",
       },
@@ -1147,11 +1159,15 @@ type IntakeDiagnostics = {
   hydratedEvents: number;
   errors: Array<{ stage: string; error: string }>;
   limitsReached: string[];
+  retryAfter?: string;
 };
 
 type IntakeBudget = {
   deadline: number;
   maximumRequests: number;
+  minimumIntervalMs: number;
+  nextRequestAt: number;
+  rateLimitedUntil?: number;
   diagnostics: IntakeDiagnostics;
 };
 
@@ -1168,11 +1184,13 @@ type SourceFetchResult = {
   diagnostics: IntakeDiagnostics;
 };
 
-function intakeBudget(maximumRequests: number): IntakeBudget {
+function intakeBudget(maximumRequests: number, minimumIntervalMs = 0, timeoutMs = INTAKE_SOURCE_TIMEOUT_MS): IntakeBudget {
   const startedAt = new Date().toISOString();
   return {
-    deadline: Date.now() + INTAKE_SOURCE_TIMEOUT_MS,
+    deadline: Date.now() + timeoutMs,
     maximumRequests,
+    minimumIntervalMs,
+    nextRequestAt: Date.now(),
     diagnostics: {
       startedAt, elapsedMs: 0, requests: 0, bytes: 0, fetchedMarkets: 0,
       discoveredEvents: 0, hydratedEvents: 0, errors: [], limitsReached: [],
@@ -1181,7 +1199,8 @@ function intakeBudget(maximumRequests: number): IntakeBudget {
 }
 
 function intakeAvailable(budget: IntakeBudget) {
-  const reason = Date.now() >= budget.deadline ? "source_time_budget"
+  const reason = (budget.rateLimitedUntil || 0) > Date.now() ? "source_rate_limited"
+    : Date.now() >= budget.deadline ? "source_time_budget"
     : budget.diagnostics.requests >= budget.maximumRequests ? "source_request_budget"
       : budget.diagnostics.bytes >= INTAKE_SOURCE_MAX_BYTES ? "source_byte_budget" : null;
   if (reason && !budget.diagnostics.limitsReached.includes(reason)) budget.diagnostics.limitsReached.push(reason);
@@ -1192,27 +1211,47 @@ function intakeFailure(budget: IntakeBudget, stage: string, error: unknown) {
   budget.diagnostics.errors.push({ stage, error: error instanceof Error ? error.message : String(error) });
 }
 
-async function fetchIntakeJson(url: URL, budget: IntakeBudget, maximumBytes = INTAKE_PAGE_MAX_BYTES) {
+async function fetchIntakeJson(url: URL, budget: IntakeBudget, maximumBytes = INTAKE_PAGE_MAX_BYTES, kalshiHeaders?: KalshiGetHeaders) {
   const endpoints = url.origin === new URL(KALSHI_API).origin
     ? [url, new URL(url.pathname + url.search, KALSHI_API_FALLBACK_ORIGIN)] : [url];
   let lastError: unknown = new Error("Intake source budget exhausted");
   for (const endpoint of endpoints) {
     if (!intakeAvailable(budget)) break;
+    // Both source workers share one start pace. Recheck after every wait so a
+    // delayed timer cannot release a burst of previously reserved requests.
+    while (intakeAvailable(budget) && Date.now() < budget.nextRequestAt) {
+      const delay = Math.min(budget.nextRequestAt, budget.deadline) - Date.now();
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    // Another in-flight request may have returned 429 while this one waited.
+    if (!intakeAvailable(budget)) break;
+    budget.nextRequestAt = Date.now() + budget.minimumIntervalMs;
     budget.diagnostics.requests += 1;
     try {
+      const authHeaders = kalshiHeaders ? await kalshiHeaders(endpoint) : {};
       const response = await fetch(endpoint, {
-        headers: { accept: "application/json", "user-agent": "Aggrena/1.0 (+https://www.aggrena.com)" },
+        headers: { accept: "application/json", "user-agent": "Aggrena/1.0 (+https://www.aggrena.com)", ...authHeaders },
+        redirect: authHeaders["KALSHI-ACCESS-KEY"] ? "error" : "follow",
         signal: AbortSignal.timeout(Math.max(1, Math.min(INTAKE_REQUEST_TIMEOUT_MS, budget.deadline - Date.now()))),
       });
       if (!response.ok) {
+        if (response.status === 429) {
+          const hint = response.headers.get('retry-after');
+          const seconds = hint && /^\d+(?:\.\d+)?$/.test(hint.trim()) ? Number(hint) : NaN;
+          const retryAt = Number.isFinite(seconds) ? Date.now() + seconds * 1000 : Date.parse(hint || '');
+          // Honor the source's cooldown. Without a hint, defer for at least a
+          // minute rather than immediately retrying through another hostname.
+          budget.rateLimitedUntil = Math.max(budget.rateLimitedUntil || 0,
+            Number.isFinite(retryAt) ? Math.max(Date.now() + 1000, retryAt) : Date.now() + 60_000);
+          budget.diagnostics.retryAfter = new Date(budget.rateLimitedUntil).toISOString();
+          if (!budget.diagnostics.limitsReached.includes('source_rate_limited')) budget.diagnostics.limitsReached.push('source_rate_limited');
+          await response.body?.cancel();
+          throw new Error(`${endpoint.hostname}${endpoint.pathname} returned 429; retry after ${budget.diagnostics.retryAfter}`);
+        }
         await response.body?.cancel();
         const error = new Error(`${endpoint.hostname}${endpoint.pathname} returned ${response.status}`);
-        if (response.status !== 429 && response.status < 500) throw error;
         lastError = error;
-        if (response.status === 429 && endpoints.length > 1) {
-          const delay = Math.min(1_000, Math.max(0, budget.deadline - Date.now()));
-          if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-        }
+        if (response.status < 500) break;
         continue;
       }
       return await readJsonLimited(
@@ -1398,22 +1437,45 @@ const KALSHI_DISCOVERY_CATEGORIES = [
   ["Sports", "Sports"], ["Entertainment", "Entertainment"],
 ] as const;
 
-async function fetchKalshiCandidates(now: Date, blockedGroups = new Set<string>()): Promise<SourceFetchResult> {
-  const result = await fetchKalshiEventPayloads(now, blockedGroups);
+async function fetchKalshiCandidates(now: Date, blockedGroups = new Set<string>(), kalshiEnv: KalshiAuthEnv = {}): Promise<SourceFetchResult> {
+  const result = await fetchKalshiEventPayloads(now, blockedGroups, kalshiEnv);
   const candidates = result.events.flatMap((event) => objectRows(event.markets)
     .map((market) => normalizeKalshiMarket(event, market, now))).filter((candidate) => candidate.marketId !== "kalshi:");
   return { source: "kalshi", eventCount: result.events.length, pages: result.diagnostics.requests, candidates, diagnostics: result.diagnostics };
 }
 
-async function fetchKalshiEventPayloads(now: Date, blockedGroups = new Set<string>()): Promise<EventPayloadResult> {
-  const budget = intakeBudget(40);
+type KalshiDiscoveryCandidate = Pick<ReturnType<typeof normalizeKalshiMarket>,
+  "sourcePlatform" | "sourceEventId" | "diversityGroupId" | "category" | "title">;
+
+function recordKalshiDiscoveryCandidate(
+  supply: Map<string, KalshiDiscoveryCandidate[]>, candidate: KalshiDiscoveryCandidate,
+  blockedGroups: Set<string>,
+) {
+  const compatible = supply.get(String(candidate.category));
+  if (!compatible || compatible.length >= KALSHI_DISCOVERY_GROUP_TARGET
+    || blockedGroups.has(candidate.diversityGroupId)) return;
+  // A witness of four pairwise-compatible questions is sufficient for intake
+  // to stop. Raw group counts are not: different dates/strikes may all share
+  // the same subject. A conservative greedy witness can only fetch extra;
+  // the final joint selector still decides the complete slate.
+  const proposed = [...compatible, candidate];
+  const validation = validateDailySlate(proposed);
+  if (validation.uniqueDiversityGroups && validation.uniqueTitles) {
+    const { sourcePlatform, sourceEventId, diversityGroupId, category, title } = candidate;
+    compatible.push({ sourcePlatform, sourceEventId, diversityGroupId, category, title });
+  }
+}
+
+async function fetchKalshiEventPayloads(now: Date, blockedGroups = new Set<string>(), kalshiEnv: KalshiAuthEnv = {}): Promise<EventPayloadResult> {
+  const kalshiHeaders = createKalshiGetHeaders(kalshiEnv);
+  const budget = intakeBudget(MAX_KALSHI_INTAKE_REQUESTS, KALSHI_REQUEST_INTERVAL_MS, KALSHI_SOURCE_TIMEOUT_MS);
   const pools = new Map<string, Array<{ ticker: string; volume: number }>>();
   await intakeMap([...KALSHI_DISCOVERY_CATEGORIES], budget, async ([category, sourceCategory]) => {
     try {
       const url = new URL(`${KALSHI_API}/series`);
       url.searchParams.set("category", sourceCategory);
       url.searchParams.set("include_volume", "true");
-      const payload = await fetchIntakeJson(url, budget, MAX_EXTERNAL_PAGE_BYTES);
+      const payload = await fetchIntakeJson(url, budget, MAX_EXTERNAL_PAGE_BYTES, kalshiHeaders);
       if (!Array.isArray(payload.series)) throw new Error("Kalshi discovery missing series array");
       const series = objectRows(payload.series).map((item) => ({
         ticker: String(item.ticker || ""), volume: Number(item.volume_fp ?? item.volume ?? 0),
@@ -1424,14 +1486,14 @@ async function fetchKalshiEventPayloads(now: Date, blockedGroups = new Set<strin
   });
   const queried = new Set<string>();
   const events = new Map<string, Record<string, unknown>>();
-  const groups = new Map(CANONICAL_CATEGORIES.map((category) => [category, new Set<string>()]));
+  const supply = new Map<string, KalshiDiscoveryCandidate[]>(CANONICAL_CATEGORIES.map((category) => [category, []]));
   const attempts = new Map(CANONICAL_CATEGORIES.map((category) => [category, 0]));
   while (queried.size < MAX_KALSHI_SERIES_REQUESTS && intakeAvailable(budget)) {
     const categories = [...CANONICAL_CATEGORIES].filter((category) =>
-      (groups.get(category)?.size || 0) < KALSHI_DISCOVERY_GROUP_TARGET
+      (supply.get(category)?.length || 0) < KALSHI_DISCOVERY_GROUP_TARGET
       && pools.get(category)?.some((series) => !queried.has(series.ticker)),
     ).sort((left, right) =>
-      (groups.get(left)?.size || 0) - (groups.get(right)?.size || 0)
+      (supply.get(left)?.length || 0) - (supply.get(right)?.length || 0)
       || (attempts.get(left) || 0) - (attempts.get(right) || 0));
     if (!categories.length) break;
     const queue: Array<{ category: string; ticker: string }> = [];
@@ -1453,7 +1515,7 @@ async function fetchKalshiEventPayloads(now: Date, blockedGroups = new Set<strin
         // source expiration/occurrence time, not the administrative close only.
         url.searchParams.set("min_close_ts", String(Math.floor(now.getTime() / 1000)));
         url.searchParams.set("limit", String(KALSHI_EVENTS_PER_SERIES));
-        const payload = await fetchIntakeJson(url, budget);
+        const payload = await fetchIntakeJson(url, budget, INTAKE_PAGE_MAX_BYTES, kalshiHeaders);
         if (!Array.isArray(payload.events)) throw new Error("Kalshi series missing events array");
         const rows = objectRows(payload.events);
         budget.diagnostics.discoveredEvents += rows.length;
@@ -1469,7 +1531,7 @@ async function fetchKalshiEventPayloads(now: Date, blockedGroups = new Set<strin
             if (evaluateHardEligibility(candidate, now).eligible) {
               // Previously completed questions may be refreshed, but must not
               // satisfy the supply target for new daily questions.
-              if (!blockedGroups.has(candidate.diversityGroupId)) groups.get(String(candidate.category))?.add(candidate.diversityGroupId);
+              recordKalshiDiscoveryCandidate(supply, candidate, blockedGroups);
               return true;
             }
             return rapidIntakeCandidate(candidate, now);

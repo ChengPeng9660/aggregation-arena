@@ -61,8 +61,9 @@ const worker = {
   async scheduled(controller: { cron:string; scheduledTime?:number }, env:Env, ctx:ExecutionContext):Promise<void> {
     let stage:string;
     let task:()=>Promise<unknown>;
-    if (controller.cron === "0 * * * *" || controller.cron === "10 0 * * *") {
-      stage = controller.cron === "0 * * * *" ? "market_sync" : "daily_selection";
+    if (["0 * * * *", "5 * * * *", "10 0 * * *"].includes(controller.cron)) {
+      stage = controller.cron === "0 * * * *" ? "market_sync"
+        : controller.cron === "5 * * * *" ? "market_resolution" : "daily_selection";
       task = () => runMarketScheduled(env, controller);
     } else if (controller.cron === "20 * * * *") {
       stage = "forecast_batch";
@@ -84,12 +85,17 @@ const worker = {
 export class PipelineAdminEntrypoint extends WorkerEntrypoint<Env> {
   describe() {
     return { service:"aggrena-pipeline", version:1,
-      now:new Date().toISOString(), actions:["sync", "select", "forecast"] };
+      now:new Date().toISOString(), actions:["sync", "resolve", "select", "forecast"] };
   }
 
   async sync() {
     return executePipelineStage("manual_market_sync", this.env, this.ctx,
       () => runMarketScheduled(this.env, { cron:"0 * * * *" }));
+  }
+
+  async resolve() {
+    return executePipelineStage("manual_market_resolution", this.env, this.ctx,
+      () => runMarketScheduled(this.env, { cron:"5 * * * *" }));
   }
 
   async select() {
