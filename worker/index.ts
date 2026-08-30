@@ -4,6 +4,7 @@ import handler from "vinext/server/app-router-entry";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { runMarketScheduled, selectDailyBalancedSlate } from "../lib/polymarket";
 import { runForecastBatch } from "../lib/forecasting";
+import { pipelineReportedFailure } from "../lib/pipeline-status-core.js";
 
 type ImageOutputFormat = "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "image/avif" | "rgb" | "rgba";
 const IMAGE_OUTPUT_FORMATS = new Set<ImageOutputFormat>([
@@ -130,21 +131,6 @@ async function executePipelineStage<T>(
       elapsedMs:Date.now()-started, error:error instanceof Error ? error.message.slice(0,1000) : String(error).slice(0,1000) }));
     throw error;
   }
-}
-
-// runMarketScheduled uses Promise.allSettled and reports stage failures as data.
-// Do not let a completed wrapper conceal an unsuccessful market source stage.
-function pipelineReportedFailure(result:unknown):string|null {
-  if (!result || typeof result!=="object") return null;
-  const value=result as Record<string, unknown>;
-  if (value.configured===false) return String(value.message || "Forecast pipeline is not configured");
-  for (const stage of ["sync", "resolution"]) {
-    const child=value[stage];
-    if (child && typeof child==="object" && "status" in child && child.status==="failed") {
-      return `${stage} failed: ${"error" in child ? String(child.error) : "unspecified error"}`;
-    }
-  }
-  return null;
 }
 
 async function runThenRefreshArenaCache<T>(task: Promise<T>, env: Env, ctx: ExecutionContext, trace:PipelineTrace) {

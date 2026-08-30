@@ -53,6 +53,7 @@ const KALSHI_API_FALLBACK_ORIGIN = "https://api.elections.kalshi.com";
 const MAX_POLYMARKET_DISCOVERY_PAGES = 3;
 const POLYMARKET_DISCOVERY_PAGE_SIZE = 100;
 const MAX_POLYMARKET_HYDRATED_EVENTS = 48;
+const POLYMARKET_HYDRATION_BATCH_SIZE = 12;
 const MAX_KALSHI_SERIES_REQUESTS = 24;
 const KALSHI_EVENTS_PER_SERIES = 30;
 const KALSHI_DISCOVERY_GROUP_TARGET = 4;
@@ -1362,13 +1363,28 @@ async function fetchPolymarketEventPayloads(now: Date, blockedGroups = new Set<s
   const queue = [...regular.slice(0, MAX_POLYMARKET_HYDRATED_EVENTS - rapid.length), ...rapid];
   if (queue.length < discovered.size) budget.diagnostics.limitsReached.push("event_hydration_limit");
   const events: Record<string, unknown>[] = [];
-  await intakeMap(queue, budget, async ({ id }) => {
+  const batches = Array.from({ length: Math.ceil(queue.length / POLYMARKET_HYDRATION_BATCH_SIZE) }, (_, index) =>
+    queue.slice(index * POLYMARKET_HYDRATION_BATCH_SIZE, (index + 1) * POLYMARKET_HYDRATION_BATCH_SIZE));
+  await intakeMap(batches, budget, async (batch) => {
+    // Gamma accepts repeated id parameters and returns each complete event,
+    // including closed/ineligible siblings. Batch parents, never trim children.
+    const url = new URL('/events', GAMMA_API);
+    url.searchParams.set('limit', String(batch.length));
+    for (const { id } of batch) url.searchParams.append('id', id);
     try {
-      const payload = await fetchIntakeJson(new URL(`/events/${encodeURIComponent(id)}`, GAMMA_API), budget, MAX_EXTERNAL_PAGE_BYTES);
-      const event = compactPolymarketEvent(payload);
-      if (String(event.id) !== id) throw new Error(`Polymarket hydration identity mismatch for ${id}`);
-      events.push(event);
-    } catch (error) { intakeFailure(budget, `hydrate:${id}`, error); }
+      const payload = await fetchIntakeJson(url, budget, MAX_EXTERNAL_PAGE_BYTES);
+      if (!Array.isArray(payload)) throw new Error('Polymarket bulk hydration missing events array');
+      const byId = new Map(objectRows(payload).map((event) => [String(event.id), event]));
+      for (const { id } of batch) {
+        try {
+          const raw = byId.get(id);
+          if (!raw) throw new Error(`Polymarket bulk hydration omitted requested event ${id}`);
+          events.push(compactPolymarketEvent(raw));
+        } catch (error) { intakeFailure(budget, `hydrate:${id}`, error); }
+      }
+    } catch (error) {
+      for (const { id } of batch) intakeFailure(budget, `hydrate:${id}`, error);
+    }
   });
   budget.diagnostics.hydratedEvents = events.length;
   if (events.length < queue.length && !budget.diagnostics.limitsReached.includes("incomplete_hydration")) budget.diagnostics.limitsReached.push("incomplete_hydration");

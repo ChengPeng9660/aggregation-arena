@@ -121,25 +121,50 @@ test('market discovery hydrates all categorical siblings, skips used groups, and
   const calls = [];
   const lib = load(async (input) => {
     const url = new URL(input);
-    calls.push(url.pathname);
+    calls.push(url.pathname + url.search);
     if (url.pathname === '/markets/keyset') return Response.json({
       markets: url.searchParams.has('volume_min') ? [polyMarket('a', 'A'), polyMarket('b', 'B'), polyMarket('c', 'C')] : [],
     });
-    if (url.pathname === '/events/A') return Response.json(polyEvent('A', 13));
-    if (url.pathname === '/events/B') throw new Error('Previously used event must not be hydrated');
+    if (url.pathname === '/events') {
+      assert.deepEqual(url.searchParams.getAll('id'), ['A', 'C']);
+      assert.equal(url.searchParams.get('limit'), '2');
+      return Response.json([polyEvent('A', 13), polyEvent('unrequested', 2)]);
+    }
     return new Response('upstream failure', { status: 503 });
   });
   const result = await lib.fetchPolymarketEventPayloads(now, new Set(['polymarket-event:B']));
   assert.equal(result.events.length, 1);
   assert.deepEqual(result.events[0].markets.map((market) => market.id), Array.from({ length: 13 }, (_, index) => `A-${index}`));
   assert.ok(result.events[0].markets.every((market) => !('unusedImage' in market)));
-  assert.ok(!calls.includes('/events/B'));
+  assert.equal(calls.filter((url) => url.startsWith('/events?')).length, 1);
   assert.ok(result.diagnostics.errors.some((error) => error.stage === 'hydrate:C'));
 });
 
 test('oversized external payloads are rejected before they can be admitted as partial events', async () => {
   const lib = load(async () => { throw new Error('No network expected'); });
   await assert.rejects(lib.readJsonLimited(new Response('x'.repeat(100)), 32), /exceeded/);
+});
+
+test('bulk parent hydration uses bounded requests while retaining every child outcome', async () => {
+  const batches = [];
+  const ids = Array.from({length:25}, (_, index) => `event-${index}`);
+  const lib = load(async (input) => {
+    const url = new URL(input);
+    if (url.pathname === '/markets/keyset') return Response.json({
+      markets: url.searchParams.has('volume_min') ? ids.map((id) => polyMarket(`m-${id}`, id)) : [],
+    });
+    assert.equal(url.pathname, '/events');
+    const selectedIds = url.searchParams.getAll('id');
+    batches.push(selectedIds);
+    assert.equal(Number(url.searchParams.get('limit')), selectedIds.length);
+    return Response.json(selectedIds.map((id) => polyEvent(id, 13)));
+  });
+  const result = await lib.fetchPolymarketEventPayloads(now);
+  assert.equal(result.events.length,25);
+  assert.equal(batches.length,3);
+  assert.ok(batches.every((batch) => batch.length <= 12));
+  assert.equal(result.events.flatMap((event) => event.markets).length,325);
+  assert.deepEqual(result.diagnostics.errors,[]);
 });
 
 test('next-day Kalshi discovery looks past used groups and retains official categories with at most two concurrent requests', async () => {
@@ -161,7 +186,7 @@ test('real sync SQL stores complete outcomes across bounded multirow batches and
     const url = new URL(input);
     if (url.hostname.includes('polymarket')) {
       if (url.pathname === '/markets/keyset') return Response.json({ markets: url.searchParams.has('volume_min') ? [polyMarket('a', 'A')] : [] });
-      if (url.pathname === '/events/A') return Response.json(polyEvent('A', 97));
+      if (url.pathname === '/events') return Response.json([polyEvent('A', 97)]);
     }
     return kalshi.fetch(input);
   });
