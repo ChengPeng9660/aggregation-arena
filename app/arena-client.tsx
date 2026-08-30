@@ -172,12 +172,26 @@ type ForecastModel = {
     color: string;
 };
 
+type DailyModelProgress = {
+  participantId: string;
+  target: number;
+  completed: number;
+  running: number;
+  failed: number;
+  unattempted: number;
+  missed: number;
+};
+
 type ForecastPipelineSnapshot = {
   models: ForecastModel[];
   model: ForecastModel;
   configured: { modelGateway: boolean; modelGatewayProblem: string | null; searchSecret: boolean };
   stats: { contextsReady: number; completed: number; failed: number; pending: number };
   dailySlate: {
+    utcDate?: string;
+    status?: "blocked_selection" | "paused" | "completed" | "missed_deadline" | "retrying" | "running" | "queued";
+    blockedReason?: string | null;
+    perModel?: DailyModelProgress[];
     runId: string | null;
     questionTarget: number;
     selectedQuestions: number;
@@ -682,6 +696,8 @@ function LeaderboardView({
           <button className="export-button" onClick={() => exportLeaderboard(snapshot)} disabled={!snapshot.leaderboard.length}>Export CSV ↓</button>
         </div>
 
+        {!isMethods && <DailyForecastStatus slate={snapshot.forecastPipeline.dailySlate} />}
+
         <section className="leaderboard-panel public-ranking-table">
           <div className="table-caption">
             <div><b>{isMethods ? "Aggregation method standings" : "Individual model standings"}</b><span>{isMethods
@@ -700,10 +716,10 @@ function LeaderboardView({
                 <col className="methods-resolved-column" />
                 <col className="methods-coverage-column" />
               </colgroup>}
-              <thead><tr><th>Rank</th><th>{isMethods ? "Method" : "Model"}</th>{isMethods && <th>Model pair / panel</th>}<th>Event Brier ↓</th><th>{isMethods ? "Common resolved" : "Resolved / live"}</th><th>Coverage</th></tr></thead>
+              <thead><tr><th>Rank</th><th>{isMethods ? "Method" : "Model"}</th>{isMethods && <th>Model pair / panel</th>}<th>Event Brier ↓</th><th>{isMethods ? "Common resolved" : "Resolved / live"}</th>{!isMethods && <th title="Published forecasts on today's shared daily slate; all categories, UTC">Today (UTC)</th>}<th>Coverage</th></tr></thead>
               <tbody>
-                {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} showInputs={isMethods} />) : (
-                  <tr><td colSpan={isMethods ? 6 : 5} className="empty-cell">No resolved scores match the current filters.</td></tr>
+                {snapshot.leaderboard.length ? snapshot.leaderboard.map((row) => <LeaderboardRowView key={row.id} row={row} showInputs={isMethods} dailyProgress={snapshot.forecastPipeline.dailySlate.perModel?.find((model) => model.participantId === row.id)} dailyTarget={snapshot.forecastPipeline.dailySlate.questionTarget} />) : (
+                  <tr><td colSpan={6} className="empty-cell">No resolved scores match the current filters.</td></tr>
                 )}
               </tbody>
             </table>
@@ -715,14 +731,58 @@ function LeaderboardView({
   );
 }
 
-function LeaderboardRowView({ row, showInputs = false }: { row: LeaderboardRow; showInputs?: boolean }) {
+function DailyForecastStatus({ slate }: { slate: ForecastPipelineSnapshot["dailySlate"] }) {
+  const status = slate.status;
+  const hasDailyData = Boolean(status && slate.utcDate && slate.perModel);
+  const needsAttention = status === "blocked_selection" || status === "missed_deadline" || status === "retrying" || status === "paused";
+  const labels = {
+    blocked_selection: "Daily slate incomplete",
+    paused: "Predictions paused",
+    completed: "Daily target complete",
+    missed_deadline: "Forecast deadlines missed",
+    retrying: "Some forecasts failed",
+    running: "Predictions running",
+    queued: "Predictions queued",
+  };
+  const remaining = slate.perModel?.reduce((counts, model) => ({
+    running: counts.running + model.running,
+    failed: counts.failed + model.failed,
+    unattempted: counts.unattempted + model.unattempted,
+    missed: counts.missed + model.missed,
+  }), { running: 0, failed: 0, unattempted: 0, missed: 0 });
+
+  return (
+    <aside className={`daily-forecast-status ${!hasDailyData || needsAttention ? "needs-attention" : status === "completed" ? "complete" : "in-progress"}`} role="status">
+      <div className="daily-forecast-heading">
+        <b>{hasDailyData && status ? labels[status] : "Daily progress unavailable"}</b>
+        <span>{slate.utcDate ? `${slate.utcDate} UTC` : "UTC daily schedule"}</span>
+      </div>
+      <div className="daily-forecast-summary">
+        <strong>{hasDailyData ? `${slate.completed} / ${slate.modelEventTarget}` : `— / ${slate.modelEventTarget}`} <small>forecasts published</small></strong>
+        <span>{slate.selectedQuestions} / {slate.questionTarget} shared events selected · {slate.questionTarget} per model × {slate.activeModelCount} models</span>
+      </div>
+      {slate.blockedReason && <p className="daily-forecast-problem">{slate.blockedReason}</p>}
+      {hasDailyData && remaining && status !== "completed" && <p className="daily-forecast-details">
+        {[
+          remaining.running > 0 && `${remaining.running} running`,
+          remaining.failed > 0 && `${remaining.failed} failed`,
+          remaining.unattempted > 0 && `${remaining.unattempted} not yet attempted`,
+          remaining.missed > 0 && `${remaining.missed} missed deadline`,
+        ].filter(Boolean).join(" · ")}
+      </p>}
+      <p>Today (UTC) counts published forecasts on the daily slate across all categories. Resolved / live follows the leaderboard filters; awaiting outcome means a saved forecast is waiting to be scored.</p>
+    </aside>
+  );
+}
+
+function LeaderboardRowView({ row, showInputs = false, dailyProgress, dailyTarget }: { row: LeaderboardRow; showInputs?: boolean; dailyProgress?: DailyModelProgress; dailyTarget?: number }) {
   const rank = row.rank;
   const brier = row.brier;
   const hasScore = rank !== null && brier !== null;
   const statusLabel = row.status === "provisional"
     ? "PROV"
     : row.status === "awaiting_resolution"
-      ? "PENDING"
+      ? "Awaiting outcome"
       : row.status === "awaiting_forecast"
         ? "QUEUED"
         : null;
@@ -743,6 +803,21 @@ function LeaderboardRowView({ row, showInputs = false }: { row: LeaderboardRow; 
         : <span className="awaiting-score">{row.status === "awaiting_resolution" ? "Awaiting outcome" : "Awaiting first forecast"}</span>
       }</td>
       <td><div className="forecast-count"><b>{row.resolved}</b>{row.kind === "forecaster" && row.pending > 0 && <small>{row.pending} live</small>}</div></td>
+      {!showInputs && <td>
+        <div className={`daily-model-progress ${dailyProgress && (dailyProgress.failed > 0 || dailyProgress.missed > 0) ? "needs-attention" : ""}`}>
+          <b>{dailyProgress ? dailyProgress.completed : "—"} / {dailyProgress?.target ?? dailyTarget ?? "—"}</b>
+          <small>{dailyProgress
+            ? dailyProgress.completed >= dailyProgress.target
+              ? "Complete"
+              : [
+                  dailyProgress.running > 0 && `${dailyProgress.running} running`,
+                  dailyProgress.failed > 0 && `${dailyProgress.failed} failed`,
+                  dailyProgress.missed > 0 && `${dailyProgress.missed} missed`,
+                  dailyProgress.unattempted > 0 && `${dailyProgress.unattempted} not started`,
+                ].filter(Boolean).join(" · ")
+            : "Daily data unavailable"}</small>
+        </div>
+      </td>}
       <td>{hasScore
         ? <div className="coverage-cell"><span><i style={{ width: `${Math.min(100, row.coverage)}%` }} /></span><b>{row.coverage.toFixed(0)}%</b></div>
         : <span className="muted-number">—</span>

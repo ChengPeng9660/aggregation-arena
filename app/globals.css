@@ -1323,6 +1323,25 @@ td { font-size: 12px; }
 .public-ranking-toolbar .select-row label { font-size: 7px; }
 .public-ranking-toolbar .select-row select { min-width: 116px; margin-top: 3px; padding-block: 6px; border-color: var(--line); border-radius: 5px; }
 .public-ranking-toolbar .export-button { min-height: 32px; margin-bottom: 9px; border-color: var(--line); border-radius: 5px; font-size: 10px; }
+.daily-forecast-status { margin: 0 0 18px; padding: 14px 16px; border: 1px solid var(--line); border-left: 3px solid var(--purple-deep); background: #fbf9fd; }
+.daily-forecast-status.needs-attention { border-left-color: var(--red); background: #fff9f7; }
+.daily-forecast-status.complete { border-left-color: var(--green); }
+.daily-forecast-heading, .daily-forecast-summary { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 18px; }
+.daily-forecast-heading b { font-size: 12px; }
+.daily-forecast-heading > span { color: var(--muted); font: 10px var(--font-geist-mono), monospace; }
+.daily-forecast-status.needs-attention .daily-forecast-heading b { color: var(--red); }
+.daily-forecast-status.complete .daily-forecast-heading b { color: var(--green); }
+.daily-forecast-summary { justify-content: flex-start; margin-top: 10px; }
+.daily-forecast-summary > strong { color: var(--purple-deep); font: 15px var(--font-geist-mono), monospace; }
+.daily-forecast-summary small, .daily-forecast-summary > span { color: var(--muted); font: 11px var(--font-geist-sans), sans-serif; }
+.daily-forecast-status p { margin: 9px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+.daily-forecast-status .daily-forecast-problem { color: var(--red); font-size: 11px; }
+.daily-forecast-status .daily-forecast-details { font-family: var(--font-geist-mono), monospace; }
+.public-ranking-table .daily-model-progress { display: grid; justify-items: end; gap: 4px; min-width: 100px; max-width: 155px; margin-left: auto; }
+.public-ranking-table .daily-model-progress b { color: var(--purple-deep); font: 11px var(--font-geist-mono), monospace; white-space: nowrap; }
+.public-ranking-table .daily-model-progress small { color: var(--muted); font-size: 9px; line-height: 1.45; }
+.public-ranking-table .daily-model-progress.needs-attention small { color: var(--red); }
+.public-ranking-table .method-cell em { white-space: nowrap; }
 .public-ranking-table { border: 0; border-radius: 0; box-shadow: none; }
 .public-ranking-table .table-caption { padding: 12px 0; border-bottom-color: var(--line-strong); }
 .public-ranking-table table { min-width: 820px; }

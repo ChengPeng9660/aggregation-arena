@@ -7,6 +7,7 @@ import {
 } from "@/lib/arena";
 import {
   DAILY_FORECAST_QUESTION_TARGET,
+  FORECAST_CONFIG_VERSION,
   FORECAST_JOBS_PER_BATCH,
   FORECAST_MODELS,
   buildProphetPredictionPrompt,
@@ -15,9 +16,15 @@ import {
   dailyForecastJobTarget,
   getActiveForecastModels,
 } from "@/lib/forecast-core.js";
-import { CURATION_CONFIG } from "@/lib/curation-core.js";
+import { CURATION_CONFIG, dailySelectionRunId } from "@/lib/curation-core.js";
 import { parseEventPredictionResponse } from "@/lib/event-core.js";
 import { modelGatewayConfigurationProblem, runModelGateway } from "@/lib/model-gateway";
+
+import {
+  FORECAST_BATCH_ELAPSED_MS, FORECAST_BATCH_LEASE_MS, FORECAST_SEARCH_TIMEOUT_MS,
+  FORECAST_LEASE_CLAIM_SQL, VALID_FORECAST_SLATES_SQL,
+  publishedForecastSql, summarizeDailyForecasts, waitForForecast,
+} from "@/lib/forecast-pipeline-core.js";
 
 type ForecastEnv = {
   DB: D1Database;
@@ -65,6 +72,9 @@ type ResearchSource = {
 type ForecastModel = (typeof FORECAST_MODELS)[number];
 
 const FORECAST_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS forecast_batch_lease (
+    id TEXT PRIMARY KEY, owner TEXT NOT NULL, acquired_at TEXT NOT NULL, expires_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS research_contexts (
     id TEXT PRIMARY KEY,
     event_id TEXT NOT NULL,
@@ -104,6 +114,69 @@ const FORECAST_SCHEMA = [
   "CREATE INDEX IF NOT EXISTS idx_research_context_event ON research_contexts(event_id, created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_model_forecast_event ON model_forecast_runs(event_id, created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_model_forecast_status ON model_forecast_runs(status, created_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_model_forecast_participant_version ON model_forecast_runs(event_id, participant_id, prompt_version, created_at DESC, id DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_model_forecast_created ON model_forecast_runs(created_at DESC, id DESC)",
+  // Triggers run inside the same transaction as completion, publication and history.
+  `CREATE TRIGGER IF NOT EXISTS guard_predictions_insert_admission
+BEFORE INSERT ON predictions WHEN NEW.kind='forecaster'
+BEGIN
+  SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM events e WHERE e.id=NEW.event_id AND e.status='open'
+      AND (e.close_time IS NULL OR datetime(e.close_time)>datetime('now'))
+  ) THEN RAISE(ABORT, 'forecast_event_closed') END;
+  SELECT CASE WHEN json_extract(CASE WHEN json_valid(NEW.components_json) THEN NEW.components_json ELSE '{}' END, '$.runId') IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM model_forecast_runs r
+      WHERE r.id=json_extract(NEW.components_json, '$.runId')
+        AND r.event_id=NEW.event_id AND r.participant_id=NEW.participant_id
+        AND r.prompt_version=NEW.version AND r.status='completed'
+    ) THEN RAISE(ABORT, 'forecast_run_ownership_changed') END;
+END`,
+  `CREATE TRIGGER IF NOT EXISTS guard_predictions_update_admission
+BEFORE UPDATE ON predictions WHEN NEW.kind='forecaster'
+BEGIN
+  SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM events e WHERE e.id=NEW.event_id AND e.status='open'
+      AND (e.close_time IS NULL OR datetime(e.close_time)>datetime('now'))
+  ) THEN RAISE(ABORT, 'forecast_event_closed') END;
+  SELECT CASE WHEN json_extract(CASE WHEN json_valid(NEW.components_json) THEN NEW.components_json ELSE '{}' END, '$.runId') IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM model_forecast_runs r
+      WHERE r.id=json_extract(NEW.components_json, '$.runId')
+        AND r.event_id=NEW.event_id AND r.participant_id=NEW.participant_id
+        AND r.prompt_version=NEW.version AND r.status='completed'
+    ) THEN RAISE(ABORT, 'forecast_run_ownership_changed') END;
+END`,
+  `CREATE TRIGGER IF NOT EXISTS guard_prediction_outcomes_insert_admission
+BEFORE INSERT ON prediction_outcomes WHEN NEW.kind='forecaster'
+BEGIN
+  SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM events e WHERE e.id=NEW.event_id AND e.status='open'
+      AND (e.close_time IS NULL OR datetime(e.close_time)>datetime('now'))
+  ) THEN RAISE(ABORT, 'forecast_event_closed') END;
+  SELECT CASE WHEN json_extract(CASE WHEN json_valid(NEW.components_json) THEN NEW.components_json ELSE '{}' END, '$.runId') IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM model_forecast_runs r
+      WHERE r.id=json_extract(NEW.components_json, '$.runId')
+        AND r.event_id=NEW.event_id AND r.participant_id=NEW.participant_id
+        AND r.prompt_version=NEW.version AND r.status='completed'
+    ) THEN RAISE(ABORT, 'forecast_run_ownership_changed') END;
+END`,
+  `CREATE TRIGGER IF NOT EXISTS guard_prediction_outcomes_update_admission
+BEFORE UPDATE ON prediction_outcomes WHEN NEW.kind='forecaster'
+BEGIN
+  SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM events e WHERE e.id=NEW.event_id AND e.status='open'
+      AND (e.close_time IS NULL OR datetime(e.close_time)>datetime('now'))
+  ) THEN RAISE(ABORT, 'forecast_event_closed') END;
+  SELECT CASE WHEN json_extract(CASE WHEN json_valid(NEW.components_json) THEN NEW.components_json ELSE '{}' END, '$.runId') IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM model_forecast_runs r
+      WHERE r.id=json_extract(NEW.components_json, '$.runId')
+        AND r.event_id=NEW.event_id AND r.participant_id=NEW.participant_id
+        AND r.prompt_version=NEW.version AND r.status='completed'
+    ) THEN RAISE(ABORT, 'forecast_run_ownership_changed') END;
+END`,
 ];
 
 let forecastingSchemaReady = false;
@@ -121,10 +194,34 @@ export async function runForecastBatch(
   jobLimit = FORECAST_JOBS_PER_BATCH,
   requestedEventIds: string[] = [],
 ) {
+  const deadline = Date.now() + FORECAST_BATCH_ELAPSED_MS;
   await ensureForecastingReady(env.DB, env.PROPHET_DISABLED_MODEL_IDS);
+  const startedAt = new Date();
+  if (startedAt.getTime() >= deadline) return { configured:true, processed:0, completed:0, deferred:true };
+  const owner = crypto.randomUUID();
+  const lease = await env.DB.prepare(FORECAST_LEASE_CLAIM_SQL).bind(
+    owner, startedAt.toISOString(), new Date(startedAt.getTime()+FORECAST_BATCH_LEASE_MS).toISOString(),
+  ).first<{ owner:string }>();
+  if (lease?.owner !== owner) return { configured:true, processed:0, completed:0, busy:true };
+  try {
+    if (Date.now() >= deadline) return { configured:true, processed:0, completed:0, deferred:true };
+    const signal = AbortSignal.timeout(Math.max(1, deadline-Date.now()));
+    return await runLeasedForecastBatch(env, jobLimit, requestedEventIds, signal);
+  } finally {
+    await env.DB.prepare("DELETE FROM forecast_batch_lease WHERE id='forecast' AND owner=?").bind(owner).run();
+  }
+}
+
+async function runLeasedForecastBatch(
+  env:ForecastEnv, jobLimit:number, requestedEventIds:string[], signal:AbortSignal,
+) {
+  signal.throwIfAborted();
   const repairedStaleRuns = await repairStaleForecastRuns(env.DB);
+  signal.throwIfAborted();
   const repairedForecasts = await repairMissingForecastPredictions(env.DB);
+  signal.throwIfAborted();
   const repairedAggregates = await repairMissingAggregates(env.DB);
+  signal.throwIfAborted();
   const gatewayProblem = modelGatewayConfigurationProblem(env);
   if (!env.TAVILY_API_KEY || gatewayProblem) {
     return {
@@ -138,22 +235,12 @@ export async function runForecastBatch(
     };
   }
 
-  const batchJobLimit = Math.max(1, Math.min(72, jobLimit));
-  const targetEventIds = [...new Set(requestedEventIds.map((value) => String(value).trim()).filter(Boolean))].slice(0, 10);
+  const batchJobLimit = Math.max(1, Math.min(FORECAST_JOBS_PER_BATCH, Math.floor(jobLimit) || FORECAST_JOBS_PER_BATCH));
+  const targetEventIds = [...new Set(requestedEventIds.map((value) => String(value).trim()).filter(Boolean))].slice(0, 20);
   const scheduledDailySlate = targetEventIds.length === 0;
-  const dailyRunCte = scheduledDailySlate
-    ? `, latest_daily_run(run_id) AS (
-        SELECT id FROM selection_runs
-        WHERE status='completed'
-          AND config_version=?
-          AND selected_count=?
-          AND datetime(started_at) >= datetime('now', '-36 hours')
-        ORDER BY started_at DESC
-        LIMIT 1
-      )`
-    : "";
+  const dailyRunCte = scheduledDailySlate ? `, ${VALID_FORECAST_SLATES_SQL}` : "";
   const dailyRunJoin = scheduledDailySlate
-    ? "JOIN latest_daily_run daily_run ON daily_run.run_id=si.run_id"
+    ? "JOIN valid_daily_runs daily_run ON daily_run.run_id=si.run_id"
     : "";
   const targetEventClause = targetEventIds.length
     ? `AND e.id IN (${targetEventIds.map(() => "?").join(", ")})`
@@ -182,7 +269,7 @@ export async function runForecastBatch(
     WITH forecast_models(participant_id, model_order) AS (VALUES ${modelValues})
     ${dailyRunCte},
     pending_jobs AS (
-      SELECT e.id AS event_id, si.run_id, fm.participant_id, fm.model_order,
+      SELECT e.id AS event_id, MIN(si.id) AS selection_item_id, fm.participant_id, fm.model_order,
         CASE WHEN EXISTS (
           SELECT 1 FROM model_forecast_runs prior_run
           WHERE prior_run.event_id=e.id AND prior_run.participant_id=fm.participant_id
@@ -194,16 +281,19 @@ export async function runForecastBatch(
       WHERE e.status='open'
         AND (e.close_time IS NULL OR datetime(e.close_time) > datetime('now'))
         ${targetEventClause}
+        AND NOT ${publishedForecastSql("e", "fm.participant_id")}
         AND NOT EXISTS (
         SELECT 1 FROM model_forecast_runs completed_run
         WHERE completed_run.event_id=e.id
           AND completed_run.participant_id=fm.participant_id
+          AND completed_run.prompt_version='${FORECAST_CONFIG_VERSION}'
           AND completed_run.status='completed'
       )
       AND NOT EXISTS (
         SELECT 1 FROM model_forecast_runs recent_failure
         WHERE recent_failure.event_id=e.id
           AND recent_failure.participant_id=fm.participant_id
+          AND recent_failure.prompt_version='${FORECAST_CONFIG_VERSION}'
           AND recent_failure.status='failed'
           AND datetime(recent_failure.completed_at) > datetime('now', '-15 minutes')
       )
@@ -211,11 +301,12 @@ export async function runForecastBatch(
         SELECT 1 FROM model_forecast_runs active_run
         WHERE active_run.event_id=e.id
           AND active_run.participant_id=fm.participant_id
+          AND active_run.prompt_version='${FORECAST_CONFIG_VERSION}'
           AND active_run.status='running'
           AND datetime(active_run.created_at) > datetime('now', '-20 minutes')
       )
-      GROUP BY e.id, si.run_id, fm.participant_id, fm.model_order
-      ORDER BY previously_attempted, MIN(si.category), MIN(si.rank), e.id, fm.model_order
+      GROUP BY e.id, fm.participant_id, fm.model_order
+      ORDER BY previously_attempted, MIN(e.close_time), MIN(si.selected_at), MIN(si.category), MIN(si.rank), e.id, fm.model_order
       LIMIT ?
     )
     SELECT e.id, e.title, e.description, e.category, e.close_time, e.event_type,
@@ -230,9 +321,9 @@ export async function runForecastBatch(
       )) FROM event_outcomes eo WHERE eo.event_id=e.id ORDER BY eo.display_order) AS event_outcomes_json
     FROM pending_jobs pj
     JOIN events e ON e.id=pj.event_id
-    JOIN selection_items si ON si.event_id=e.id AND si.run_id=pj.run_id
+    JOIN selection_items si ON si.id=pj.selection_item_id
     JOIN polymarket_candidates pc ON pc.market_id=si.market_id
-    ORDER BY pj.previously_attempted, si.category, si.rank, e.id, pj.model_order
+    ORDER BY pj.previously_attempted, e.close_time, si.selected_at, si.category, si.rank, e.id, pj.model_order
   `).bind(...modelBindings, ...scopeBindings, ...targetEventIds, batchJobLimit).all<Record<string, unknown>>();
 
   const jobs = rows.results.flatMap((row) => {
@@ -241,16 +332,17 @@ export async function runForecastBatch(
     return model ? [{ event, model }] : [];
   });
   const contextPromises = new Map<string, Promise<Awaited<ReturnType<typeof getOrCreateContext>>>>();
-  const providerLane = createProviderLane();
+  const providerLane = createProviderLane(signal);
   const outcomes = await mapWithConcurrency(jobs, 2, async ({ event, model }) => {
+    if (signal.aborted) return { eventId:event.id, modelId:model.modelId, status:"deferred" };
     try {
       let contextPromise = contextPromises.get(event.id);
       if (!contextPromise) {
-        contextPromise = getOrCreateContext(env, event);
+        contextPromise = getOrCreateContext(env, event, signal);
         contextPromises.set(event.id, contextPromise);
       }
       const context = await contextPromise;
-      return await providerLane.run(model.modelId, () => forecastEvent(env, event, model, context));
+      return await providerLane.run(model.modelId, () => forecastEvent(env, event, model, context, signal));
     } catch (error) {
       await env.DB.prepare(`
         INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
@@ -276,6 +368,8 @@ export async function runForecastBatch(
     processedEvents: new Set(outcomes.map((item) => item.eventId)).size,
     processed: outcomes.length,
     completed: outcomes.filter((item) => item.status === "completed").length,
+    deferred: outcomes.filter((item) => item.status === "deferred").length,
+    timedOut: signal.aborted,
     outcomes,
   };
 }
@@ -295,44 +389,54 @@ async function repairStaleForecastRuns(db: D1Database) {
 
 async function repairMissingForecastPredictions(db: D1Database) {
   const rows = await db.prepare(`
-    SELECT mfr.context_id, mfr.event_id, mfr.participant_id, mfr.model_id,
+    SELECT mfr.id, mfr.context_id, mfr.event_id, mfr.participant_id, mfr.model_id,
       mfr.prompt_version, mfr.yes_probability, mfr.probabilities_json, mfr.rationale,
       mfr.cited_sources_json, mfr.created_at, mfr.completed_at,
-      e.event_type, p.name AS participant_name
+      e.event_type, p.name AS participant_name,
+      (SELECT json_group_array(eo.outcome_key) FROM event_outcomes eo
+       WHERE eo.event_id=e.id) AS outcome_keys_json
     FROM model_forecast_runs mfr
     JOIN events e ON e.id=mfr.event_id
     JOIN participants p ON p.id=mfr.participant_id
-    WHERE mfr.status='completed'
+    WHERE mfr.status='completed' AND mfr.prompt_version=?
       AND p.status='active'
       AND e.status='open'
       AND (e.close_time IS NULL OR datetime(e.close_time) > datetime('now'))
-      AND (
-        (
-          e.event_type='categorical'
-          AND (SELECT COUNT(*) FROM prediction_outcomes po
-               WHERE po.event_id=mfr.event_id AND po.participant_id=mfr.participant_id)
-              < (SELECT COUNT(*) FROM event_outcomes eo WHERE eo.event_id=mfr.event_id)
-        ) OR (
-          e.event_type!='categorical'
-          AND NOT EXISTS (
-            SELECT 1 FROM predictions pr
-            WHERE pr.event_id=mfr.event_id AND pr.participant_id=mfr.participant_id
-          )
-        )
-      )
+      AND NOT ${publishedForecastSql("e", "mfr.participant_id")}
     ORDER BY mfr.completed_at, mfr.created_at
-    LIMIT 12
-  `).all<Record<string, unknown>>();
+    LIMIT ${FORECAST_JOBS_PER_BATCH}
+  `).bind(FORECAST_CONFIG_VERSION).all<Record<string, unknown>>();
   const repaired: { eventId: string; modelId: string }[] = [];
   for (const row of rows.results) {
     const eventId = String(row.event_id);
     const modelId = String(row.model_id);
     const probabilities = safeJson(String(row.probabilities_json || "{}"), {}) as Record<string, number>;
+    const outcomeKeys = safeJson(String(row.outcome_keys_json || "[]"), []) as string[];
+    const probability = probabilities?.yes ?? row.yes_probability;
+    const validProbability = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+    const validPayload = String(row.event_type) === "categorical"
+      ? outcomeKeys.length > 0
+        && outcomeKeys.every((key) => validProbability(probabilities?.[key]))
+        && Math.abs(outcomeKeys.reduce((sum, key) => sum + probabilities[key], 0) - 1) < 0.000001
+      : validProbability(probability);
+    if (!validPayload) {
+      // A response that cannot be published must not block a fresh model run forever.
+      // Do not convert missing probabilities to zero or silently complete missing outcomes.
+      await db.prepare(`
+        UPDATE model_forecast_runs SET status='failed', error=?, completed_at=?
+        WHERE id=? AND status='completed' AND prompt_version=?
+      `).bind(
+        "Completed model response has invalid or incomplete probabilities; new forecast required",
+        new Date().toISOString(), String(row.id), FORECAST_CONFIG_VERSION,
+      ).run();
+      continue;
+    }
     const components = {
       contextId: String(row.context_id),
       modelId,
       citedSourceRanks: safeJson(String(row.cited_sources_json || "[]"), []),
       recoveredFromCompletedRun: true,
+      runId: String(row.id),
     };
     const options = {
       db,
@@ -352,15 +456,11 @@ async function repairMissingForecastPredictions(db: D1Database) {
           components,
         }, options);
       } else {
-        const probability = Number(probabilities.yes ?? row.yes_probability);
-        if (!Number.isFinite(probability) || probability < 0 || probability > 1) {
-          throw new Error("completed binary run does not contain a valid yes probability");
-        }
         await recordAutomatedForecast({
           eventId,
           participantId: String(row.participant_id),
           participantName: String(row.participant_name),
-          probability,
+          probability: probability as number,
           rationale: String(row.rationale || ""),
           version: String(row.prompt_version),
           components,
@@ -416,10 +516,18 @@ async function forecastEvent(
   event: ForecastEvent,
   model: ForecastModel,
   context: Awaited<ReturnType<typeof getOrCreateContext>>,
+  signal: AbortSignal,
 ) {
+  signal.throwIfAborted();
+  const admissible = await env.DB.prepare(`
+    SELECT id FROM events WHERE id=? AND status='open'
+      AND (close_time IS NULL OR datetime(close_time)>datetime('now'))
+  `).bind(event.id).first();
+  if (!admissible) return { eventId:event.id, modelId:model.modelId, status:"expired" };
+  signal.throwIfAborted();
   const runId = `run-${crypto.randomUUID()}`;
   const startedAt = new Date().toISOString();
-  await env.DB.prepare(`
+  const claim = await env.DB.prepare(`
     INSERT INTO model_forecast_runs (
       id, context_id, event_id, participant_id, model_id, prompt_version, status, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?)
@@ -428,6 +536,9 @@ async function forecastEvent(
       status='running', yes_probability=NULL, no_probability=NULL, probabilities_json=NULL,
       rationale=NULL, cited_sources_json='[]', raw_response=NULL, latency_ms=NULL,
       error=NULL, created_at=excluded.created_at, completed_at=NULL
+    WHERE (model_forecast_runs.status!='completed' OR model_forecast_runs.prompt_version!=excluded.prompt_version)
+      AND (model_forecast_runs.status!='running' OR model_forecast_runs.prompt_version!=excluded.prompt_version
+        OR datetime(model_forecast_runs.created_at)<=datetime(excluded.created_at, '-20 minutes'))
   `).bind(
     runId,
     context.id,
@@ -438,6 +549,7 @@ async function forecastEvent(
     startedAt,
   ).run();
 
+  if (!Number(claim.meta?.changes || 0)) return { eventId:event.id, modelId:model.modelId, status:"skipped" };
   const prompt = buildProphetPredictionPrompt(context);
   const requestStarted = Date.now();
   let raw: unknown;
@@ -446,6 +558,7 @@ async function forecastEvent(
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const gatewayResult = await runModelGateway(env, {
         modelId: model.modelId,
+        signal,
         messages: [
           {
             role: "system",
@@ -457,6 +570,7 @@ async function forecastEvent(
         temperature: 0.1,
         seed: deterministicSeed(`${event.id}-${model.participantId}-${attempt}`),
       });
+      signal.throwIfAborted();
       raw = gatewayResult.payload;
       try {
         parsed = parseEventPredictionResponse(raw, event.outcomes);
@@ -466,12 +580,17 @@ async function forecastEvent(
       }
     }
     if (!parsed) throw new Error("Model response could not be parsed");
+    signal.throwIfAborted();
+    const owned = await env.DB.prepare("SELECT id FROM model_forecast_runs WHERE id=? AND status='running'")
+      .bind(runId).first();
+    if (!owned) throw new Error("Forecast run ownership changed; discarded late response");
+    signal.throwIfAborted();
     const completedAt = new Date().toISOString();
     const latencyMs = Date.now() - requestStarted;
     const completionStatement = env.DB.prepare(`
       UPDATE model_forecast_runs SET status='completed', yes_probability=?, no_probability=?,
         probabilities_json=?, rationale=?, cited_sources_json=?, raw_response=?, latency_ms=?, completed_at=?,
-        error=NULL WHERE context_id=? AND participant_id=?
+        error=NULL WHERE id=? AND status='running'
     `).bind(
       parsed.probabilities.yes ?? null,
       parsed.probabilities.no ?? null,
@@ -481,12 +600,12 @@ async function forecastEvent(
       parsed.rawText.slice(0, 12000),
       latencyMs,
       completedAt,
-      context.id,
-      model.participantId,
+      runId,
     );
     const components = {
       contextId: context.id,
       modelId: model.modelId,
+      runId,
       citedSourceRanks: parsed.citedSourceRanks,
     };
     const writeOptions = {
@@ -520,20 +639,20 @@ async function forecastEvent(
   } catch (error) {
     await env.DB.prepare(`
       UPDATE model_forecast_runs SET status='failed', error=?, raw_response=?, latency_ms=?, completed_at=?
-      WHERE context_id=? AND participant_id=?
+      WHERE id=? AND status='running'
     `).bind(
       errorMessage(error).slice(0, 1500),
       serializeRawResponse(raw),
       Date.now() - requestStarted,
       new Date().toISOString(),
-      context.id,
-      model.participantId,
+      runId,
     ).run();
     throw error;
   }
 }
 
-async function getOrCreateContext(env: ForecastEnv, event: ForecastEvent) {
+async function getOrCreateContext(env: ForecastEnv, event: ForecastEvent, signal:AbortSignal) {
+  signal.throwIfAborted();
   const existing = await env.DB.prepare(`
     SELECT * FROM research_contexts WHERE event_id=? AND search_prompt_version='tavily-basic-v1'
   `).bind(event.id).first<Record<string, unknown>>();
@@ -541,10 +660,10 @@ async function getOrCreateContext(env: ForecastEnv, event: ForecastEvent) {
 
   if (!env.TAVILY_API_KEY) throw new Error("TAVILY_API_KEY is not configured");
   const searchQuery = buildSearchQuery(event);
-  const newsResults = await searchTavily(env.TAVILY_API_KEY, searchQuery, "news");
+  const newsResults = await searchTavily(env.TAVILY_API_KEY, searchQuery, "news", signal);
   let sources = normalizeSources(newsResults, 10) as ResearchSource[];
   if (sources.length < 2) {
-    const generalResults = await searchTavily(env.TAVILY_API_KEY, searchQuery, "general");
+    const generalResults = await searchTavily(env.TAVILY_API_KEY, searchQuery, "general", signal);
     sources = normalizeSources([...newsResults, ...generalResults], 10) as ResearchSource[];
   }
   if (sources.length < 2) throw new Error(`Tavily returned only ${sources.length} usable sources`);
@@ -588,8 +707,10 @@ async function getOrCreateContext(env: ForecastEnv, event: ForecastEvent) {
   return { id, event, sources, marketSnapshot, asOfTime };
 }
 
-async function searchTavily(apiKey: string, query: string, topic: "news" | "general") {
+async function searchTavily(apiKey: string, query: string, topic: "news" | "general", signal:AbortSignal) {
+  signal.throwIfAborted();
   const response = await fetch("https://api.tavily.com/search", {
+    signal:AbortSignal.any([signal, AbortSignal.timeout(FORECAST_SEARCH_TIMEOUT_MS)]),
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -619,7 +740,9 @@ export async function getForecastPipelineSnapshot(
   const activeModels = getActiveForecastModels(runtime.PROPHET_DISABLED_MODEL_IDS);
   const modelValues = activeModels.length ? activeModels.map(() => "(?)").join(", ") : "(NULL)";
   const modelBindings = activeModels.map((model) => model.participantId);
-  const [counts, runRows, dailySlate] = await Promise.all([
+  const snapshotNow = new Date();
+  const todayRunId = dailySelectionRunId(snapshotNow);
+  const [counts, runRows, selection, dailyRows] = await Promise.all([
     db.prepare(`
       SELECT
         (SELECT COUNT(*) FROM research_contexts WHERE status='ready') AS contexts_ready,
@@ -636,41 +759,32 @@ export async function getForecastPipelineSnapshot(
       ORDER BY mfr.created_at DESC LIMIT 30
     `).all<Record<string, unknown>>(),
     db.prepare(`
-      WITH forecast_models(participant_id) AS (VALUES ${modelValues}),
-      latest_daily_run(run_id) AS (
-        SELECT id FROM selection_runs
-        WHERE status='completed'
-          AND config_version=?
-          AND selected_count=?
-          AND datetime(started_at) >= datetime('now', '-36 hours')
-        ORDER BY started_at DESC
-        LIMIT 1
-      ),
-      slate_jobs AS (
-        SELECT si.run_id, si.event_id, forecast_models.participant_id
-        FROM selection_items si
-        JOIN latest_daily_run latest ON latest.run_id=si.run_id
-        CROSS JOIN forecast_models
+      SELECT sr.id, sr.status,
+        (SELECT COUNT(DISTINCT si.event_id) FROM selection_items si WHERE si.run_id=sr.id) AS actual_questions
+      FROM selection_runs sr WHERE sr.id=? AND sr.config_version=?
+    `).bind(todayRunId, CURATION_CONFIG.configVersion).first<Record<string, unknown>>(),
+    db.prepare(`
+      WITH forecast_models(participant_id) AS (VALUES ${modelValues})
+      SELECT si.event_id, fm.participant_id, e.status AS event_status, e.close_time,
+        ${publishedForecastSql("e", "fm.participant_id")} AS published,
+        latest.status AS latest_status, latest.created_at AS latest_created_at, latest.error AS latest_error
+      FROM selection_items si JOIN events e ON e.id=si.event_id
+      CROSS JOIN forecast_models fm
+      LEFT JOIN model_forecast_runs latest ON latest.id=(
+        SELECT r.id FROM model_forecast_runs r
+        WHERE r.event_id=e.id AND r.participant_id=fm.participant_id AND r.prompt_version=?
+        ORDER BY r.created_at DESC, r.id DESC LIMIT 1
       )
-      SELECT
-        MAX(run_id) AS run_id,
-        COUNT(DISTINCT event_id) AS selected_questions,
-        COUNT(*) AS target,
-        SUM(CASE WHEN EXISTS (
-          SELECT 1 FROM model_forecast_runs mfr
-          WHERE mfr.event_id=slate_jobs.event_id
-            AND mfr.participant_id=slate_jobs.participant_id
-            AND mfr.status='completed'
-        ) THEN 1 ELSE 0 END) AS completed
-      FROM slate_jobs
-    `).bind(
-      ...modelBindings,
-      CURATION_CONFIG.configVersion,
-      DAILY_FORECAST_QUESTION_TARGET,
-    ).first<Record<string, unknown>>(),
+      WHERE si.run_id=?
+    `).bind(...modelBindings, FORECAST_CONFIG_VERSION, todayRunId).all<Record<string, unknown>>(),
   ]);
-  const dailyTarget = dailyForecastJobTarget(activeModels.length);
-  const dailyCompleted = Number(dailySlate?.completed || 0);
+  const dailySlate = summarizeDailyForecasts({
+    utcDate:snapshotNow.toISOString().slice(0,10),
+    runId:selection ? String(selection.id) : null,
+    selectionStatus:selection ? String(selection.status) : null,
+    selectedQuestions:Number(selection?.actual_questions || 0),
+    models:activeModels, rows:dailyRows.results, now:snapshotNow.getTime(),
+  });
   return {
     models: activeModels,
     activeModels: activeModels.map((model) => model.modelId),
@@ -685,18 +799,9 @@ export async function getForecastPipelineSnapshot(
       contextsReady: Number(counts?.contexts_ready || 0),
       completed: Number(counts?.completed || 0),
       failed: Number(counts?.failed || 0),
-      pending: Math.max(0, Number(dailySlate?.target || 0) - dailyCompleted),
+      pending: dailySlate.pending,
     },
-    dailySlate: {
-      runId: dailySlate?.run_id ? String(dailySlate.run_id) : null,
-      questionTarget: DAILY_FORECAST_QUESTION_TARGET,
-      selectedQuestions: Number(dailySlate?.selected_questions || 0),
-      activeModelCount: activeModels.length,
-      modelEventTarget: dailyTarget,
-      completed: dailyCompleted,
-      pending: Math.max(0, Number(dailySlate?.target || 0) - dailyCompleted),
-      jobsPerHourlyBatch: FORECAST_JOBS_PER_BATCH,
-    },
+    dailySlate,
     runs: runRows.results.map((row) => ({
       id: row.id,
       eventId: row.event_id,
@@ -836,7 +941,7 @@ async function mapWithConcurrency<Input, Output>(
   return output;
 }
 
-function createProviderLane() {
+function createProviderLane(signal:AbortSignal) {
   const tails = new Map<string, Promise<void>>();
   let pacingTail = Promise.resolve();
   let nextStartAt = 0;
@@ -844,7 +949,8 @@ function createProviderLane() {
   const pace = (lane: string) => {
     const turn = pacingTail.catch(() => undefined).then(async () => {
       const delay = Math.max(0, nextStartAt - Date.now(), (providerNextStartAt.get(lane) || 0) - Date.now());
-      if (delay) await wait(delay);
+      if (delay) await waitForForecast(delay, signal);
+      signal.throwIfAborted();
       nextStartAt = Date.now() + 4000;
       providerNextStartAt.set(lane, Date.now() + providerCooldownMs(lane));
     });
@@ -857,6 +963,7 @@ function createProviderLane() {
       const prior = tails.get(lane) ?? Promise.resolve();
       const result = prior.catch(() => undefined).then(async () => {
         await pace(lane);
+        signal.throwIfAborted();
         return task();
       });
       tails.set(lane, result.then(() => undefined, () => undefined));
@@ -880,8 +987,4 @@ function providerLaneForModel(modelId: string) {
   if (modelId.startsWith("minimax-")) return "minimax";
   if (modelId.startsWith("glm-")) return "zai";
   return modelId;
-}
-
-function wait(milliseconds: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }

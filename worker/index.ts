@@ -1,7 +1,8 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { runMarketScheduled } from "../lib/polymarket";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { runMarketScheduled, selectDailyBalancedSlate } from "../lib/polymarket";
 import { runForecastBatch } from "../lib/forecasting";
 
 type ImageOutputFormat = "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "image/avif" | "rgb" | "rgba";
@@ -56,31 +57,110 @@ const worker = {
 
     return handler.fetch(request, env, ctx);
   },
-  async scheduled(controller: { cron: string }, env: Env, ctx: ExecutionContext): Promise<void> {
-    let task: Promise<unknown>;
+  async scheduled(controller: { cron:string; scheduledTime?:number }, env:Env, ctx:ExecutionContext):Promise<void> {
+    let stage:string;
+    let task:()=>Promise<unknown>;
     if (controller.cron === "0 * * * *" || controller.cron === "10 0 * * *") {
-      task = runThenRefreshArenaCache(runMarketScheduled(env, controller), env, ctx);
+      stage = controller.cron === "0 * * * *" ? "market_sync" : "daily_selection";
+      task = () => runMarketScheduled(env, controller);
     } else if (controller.cron === "20 * * * *") {
-      task = runThenRefreshArenaCache(runForecastBatch(env), env, ctx);
+      stage = "forecast_batch";
+      task = () => runForecastBatch(env);
     } else {
-      console.warn(`Ignoring unknown cron schedule: ${controller.cron}`);
+      console.warn(JSON.stringify({ message:"pipeline.unknown_cron", cron:controller.cron }));
       return;
     }
-    ctx.waitUntil(task.catch((error) => {
-      console.error(`Scheduled pipeline stage failed for ${controller.cron}`, error);
-      throw error;
-    }));
+    const completion = executePipelineStage(stage, env, ctx, task, controller);
+    // waitUntil is valid for Cron; awaiting the same promise also makes the
+    // handler's returned lifecycle explicit. This does not raise platform limits.
+    ctx.waitUntil(completion);
+    await completion;
   },
 };
 
-async function runThenRefreshArenaCache<T>(task: Promise<T>, env: Env, ctx: ExecutionContext) {
+// Named RPC capability. No fetch handler and no public HTTP route is added.
+// Only same-account Workers explicitly bound to this entrypoint can invoke it.
+export class PipelineAdminEntrypoint extends WorkerEntrypoint<Env> {
+  describe() {
+    return { service:"aggrena-pipeline", version:1,
+      now:new Date().toISOString(), actions:["sync", "select", "forecast"] };
+  }
+
+  async sync() {
+    return executePipelineStage("manual_market_sync", this.env, this.ctx,
+      () => runMarketScheduled(this.env, { cron:"0 * * * *" }));
+  }
+
+  async select() {
+    return executePipelineStage("manual_daily_selection", this.env, this.ctx,
+      () => selectDailyBalancedSlate(this.env.DB));
+  }
+
+  async forecast(options: { jobLimit?:number; eventIds?:string[] } = {}) {
+    const jobLimit = Math.max(1, Math.min(20, Math.floor(Number(options.jobLimit)) || 20));
+    const eventIds = Array.isArray(options.eventIds)
+      ? [...new Set(options.eventIds.map((id) => String(id).trim()).filter(Boolean))].slice(0,20)
+      : [];
+    return executePipelineStage("manual_forecast_batch", this.env, this.ctx,
+      () => runForecastBatch(this.env, jobLimit, eventIds));
+  }
+}
+
+type PipelineTrace = { invocationId:string; stage:string; startedAt:string; cron?:string; scheduledAt?:string };
+
+async function executePipelineStage<T>(
+  stage:string, env:Env, ctx:ExecutionContext, task:()=>Promise<T>,
+  controller?:{ cron:string; scheduledTime?:number },
+) {
+  const started = Date.now();
+  const trace:PipelineTrace = { invocationId:crypto.randomUUID(), stage, startedAt:new Date(started).toISOString() };
+  if (controller) trace.cron=controller.cron;
+  if (controller?.scheduledTime !== undefined && Number.isFinite(controller.scheduledTime)) {
+    trace.scheduledAt=new Date(controller.scheduledTime).toISOString();
+  }
+  console.info(JSON.stringify({ message:"pipeline.stage_started", ...trace }));
+  try {
+    const result=await runThenRefreshArenaCache(task(), env, ctx, trace);
+    const failure=pipelineReportedFailure(result);
+    if (failure) throw new Error(failure);
+    console.info(JSON.stringify({ message:"pipeline.stage_completed", ...trace, elapsedMs:Date.now()-started }));
+    return result;
+  } catch (error) {
+    console.error(JSON.stringify({ message:"pipeline.stage_failed", ...trace,
+      elapsedMs:Date.now()-started, error:error instanceof Error ? error.message.slice(0,1000) : String(error).slice(0,1000) }));
+    throw error;
+  }
+}
+
+// runMarketScheduled uses Promise.allSettled and reports stage failures as data.
+// Do not let a completed wrapper conceal an unsuccessful market source stage.
+function pipelineReportedFailure(result:unknown):string|null {
+  if (!result || typeof result!=="object") return null;
+  const value=result as Record<string, unknown>;
+  if (value.configured===false) return String(value.message || "Forecast pipeline is not configured");
+  for (const stage of ["sync", "resolution"]) {
+    const child=value[stage];
+    if (child && typeof child==="object" && "status" in child && child.status==="failed") {
+      return `${stage} failed: ${"error" in child ? String(child.error) : "unspecified error"}`;
+    }
+  }
+  return null;
+}
+
+async function runThenRefreshArenaCache<T>(task: Promise<T>, env: Env, ctx: ExecutionContext, trace:PipelineTrace) {
   const outcome = await task.then(
     (value) => ({ ok: true as const, value }),
     (error: unknown) => ({ ok: false as const, error }),
   );
+  console.info(JSON.stringify({ message:"pipeline.work_settled", ...trace, ok:outcome.ok }));
+  const refreshStarted=Date.now();
+  console.info(JSON.stringify({ message:"pipeline.cache_started", ...trace }));
   try {
     await refreshArenaApiWarmSnapshots(env, ctx);
+    console.info(JSON.stringify({ message:"pipeline.cache_completed", ...trace, elapsedMs:Date.now()-refreshStarted }));
   } catch (refreshError) {
+    console.error(JSON.stringify({ message:"pipeline.cache_failed", ...trace, elapsedMs:Date.now()-refreshStarted,
+      error:refreshError instanceof Error ? refreshError.message.slice(0,1000) : String(refreshError).slice(0,1000) }));
     if (outcome.ok) throw refreshError;
     console.error(JSON.stringify({
       message: "arena cache refresh also failed after a scheduled pipeline failure",

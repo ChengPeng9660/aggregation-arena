@@ -1,3 +1,4 @@
+import { FORECAST_MODEL_TIMEOUT_MS, waitForForecast } from "@/lib/forecast-pipeline-core.js";
 import {
   buildCloudflareBindingRequest,
   FORECAST_REASONING_PROFILE,
@@ -9,6 +10,7 @@ import {
 
 type CloudflareAiBinding = {
   run(model: string, input: unknown, options: {
+    signal?: AbortSignal;
     gateway: {
       id: string;
       skipCache: boolean;
@@ -74,6 +76,7 @@ export async function runModelGateway(
     maxTokens: number;
     temperature: number;
     seed: number;
+    signal?: AbortSignal;
   },
 ) {
   const gatewayProblem = modelGatewayConfigurationProblem(env);
@@ -87,6 +90,9 @@ export async function runModelGateway(
   const maxAttempts = 3;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
+      request.signal?.throwIfAborted();
+      const timeout = AbortSignal.timeout(FORECAST_MODEL_TIMEOUT_MS);
+      const signal = request.signal ? AbortSignal.any([request.signal, timeout]) : timeout;
       const payload = await env.AI!.run(
         cloudflareModelId,
         buildCloudflareBindingRequest(cloudflareModelId, request.messages, {
@@ -94,6 +100,7 @@ export async function runModelGateway(
           panelModelId: request.modelId,
         }),
         {
+          signal,
           gateway: {
             id: env.PROPHET_AI_GATEWAY_ID?.trim() || "default",
             skipCache: true,
@@ -106,12 +113,14 @@ export async function runModelGateway(
           },
         },
       );
+      signal.throwIfAborted();
       const gatewayError = gatewayPayloadError(payload);
       if (gatewayError) {
         throw new ModelGatewayRequestError(`Cloudflare AI request failed for ${request.modelId}: ${gatewayError}`);
       }
       return { payload, gatewayModelId: cloudflareModelId };
     } catch (error) {
+      request.signal?.throwIfAborted();
       const wrapped = error instanceof ModelGatewayRequestError
         ? error
         : new ModelGatewayRequestError(
@@ -127,7 +136,7 @@ export async function runModelGateway(
         retryDelayMs,
         error: wrapped.message.slice(0, 500),
       }));
-      await wait(retryDelayMs);
+      await waitForForecast(retryDelayMs, request.signal);
     }
   }
   throw new ModelGatewayRequestError(`Cloudflare AI request failed for ${request.modelId}`);
@@ -153,8 +162,4 @@ function gatewayPayloadError(payload: unknown) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
-}
-
-function wait(milliseconds: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }

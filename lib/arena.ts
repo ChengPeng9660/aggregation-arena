@@ -611,7 +611,7 @@ async function buildLeaderboard(
     FROM participants
     WHERE kind='forecaster'
     ORDER BY created_at, name
-  `).all<Record<string, unknown>>();
+  `).all<{ id: unknown; name: unknown; organization: unknown; color: unknown; kind: unknown }>();
   const track = filters.track ?? "aggregators";
   const activeParticipantIds = new Set(participants.map((participant) => String(participant.id)));
   const acceptsTrack = (row: Record<string, unknown>) => {
@@ -1119,6 +1119,7 @@ async function upsertPrediction(
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(event_id, participant_id) DO UPDATE SET
         participant_name = excluded.participant_name,
+        kind = excluded.kind,
         probability = excluded.probability,
         rationale = excluded.rationale,
         version = excluded.version,

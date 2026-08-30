@@ -14,7 +14,9 @@ const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 function getLocalBindingConfig(isDev: boolean) {
   return {
     main: "./worker/index.ts",
-    compatibility_flags: isDev ? ["nodejs_compat"] : [],
+    // Wrangler already declares nodejs_compat. The Vite plugin appends
+    // overrides, so repeating it here prevents Miniflare from starting.
+    compatibility_flags: [],
     d1_databases:
       isDev && d1
         ? [

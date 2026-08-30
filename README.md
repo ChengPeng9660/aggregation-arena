@@ -243,10 +243,10 @@ Prediction History → Deterministic + Harness Aggregators → Brier Leaderboard
 
 - Tavily 免费账户每月 1,000 API Credits；Basic Search 每次 1 Credit。
 - 每日发布 20 题，每题搜索一次，30 天约使用 `20 × 30 = 600 Credits`。
-- 12 个当前活跃模型共享每天 20 个 model-event forecast 配额；配额是全体模型合计，不是每题每模型各跑一次。
-- 预测 Cron 每日 `00:20 UTC` 最多处理 20 个 model-event jobs；正常输出每个 job 只调用一次模型，只有 JSON 无法解析时才做一次格式重试。
+- 每个启用模型都预测同一批 20 个不同事件。当前 12 个模型的每日目标是 `20 × 12 = 240` 条完整入库的 event-model 预测；20 不是全体模型合计的调用量。
+- `00:10 UTC` 发布每日题集；每小时 `:20` 最多处理 20 个 event-model jobs，并发 2。失败、漏写和仍开放的跨天任务可以续跑。单批有 8 分钟取消预算、20 分钟互斥租约；单次模型请求 90 秒、搜索 30 秒。瞬时上游失败最多重试 3 次，格式解析最多 2 轮，因此每日目标不是 API 调用硬上限。
 - Agent Harness 自动聚合当前暂停，不产生新的定时模型调用；历史 Harness 结果和实现代码保留。
-- 每个来源摘要最多 1,800 字符，模型输出最多 700 tokens。模型费用由 Gateway 后面的实际供应商和 deployment alias 决定。
+- 每个来源摘要最多 1,800 字符；输出与推理预算按精确模型协议配置。模型费用由 Cloudflare Gateway 后面的实际供应商决定。
 
 ### 配置 API 密钥
 
@@ -272,12 +272,14 @@ npx wrangler secret put TAVILY_API_KEY
 
 两种 Harness 会在同一个事件的全部 active exact models 完成后自动运行（当前为 12 个）。Gateway 的网络错误、超时或上游错误会记录为可重试的 `failed`，不会永久替换为聚合结果；只有两次成功请求都返回无法解析的权重 JSON 时，才会记录 equal-mean fallback。已解决事件的维护者回填允许从至少两个完整基础预测开始。
 
-本地开发先复制 [`.dev.vars.example`](.dev.vars.example) 为 `.dev.vars` 再填入真实值；`.dev.vars` 已被 Git 忽略。部署后打开网站的 `Pipeline` 页面查看配置状态，也可以在 `Forecasts` 页面检查模型任务。配置正常时可等待每日 `00:20 UTC` 的预测 Cron，或登录后点击 `Run next forecast`。
+本地开发先复制 [`.dev.vars.example`](.dev.vars.example) 为 `.dev.vars` 再填入真实值；`.dev.vars` 已被 Git 忽略。部署后打开网站的 `Pipeline` 页面查看配置状态，也可以在 `Forecasts` 页面检查模型任务。配置正常时可等待每小时 `:20 UTC` 的预测 Cron，或登录后点击 `Run next forecast`。Individual Models 的 `Today (UTC)` 显示每个模型当天题集的实际入库数 `/ 20`；`Resolved / live` 是累计事件状态，`Awaiting outcome` 说明预测已保存、事件尚未结算。
 
-生产环境若需要立即发布当日题集并生成当日最多 20 条预测，可由维护者使用仅存于
+生产环境若需要立即发布当日题集并执行一批最多 20 个模型任务，可由维护者使用仅存于
 Cloudflare Secret 的 `PIPELINE_ADMIN_TOKEN` 调用 `run_daily_forecast_batch`。
 该操作会复用当天不可变 selection run，多次调用不会重复发布题目。
 同一密钥还可以调用 `run_pipeline_sync`，用于运维人员立即执行一次与整点 Cron 相同的同步和结算检查。
+
+每次整点市场同步都会补建缺失的每日题集、重试失败或不完整的选题。选题使用最近 3 小时内成功采集的数据，必须同时满足 Polymarket 10 + Kalshi 10、五类各 4、真实事件及标题去重；不够时记录阻断原因，不发布伪造或部分题集。写入 20 题与 completed 状态属于同一数据库事务。维护者也可通过同账户显式绑定的私有 `PipelineAdminEntrypoint` 执行 sync/select/forecast；该入口没有公共 HTTP 路由，不能用未鉴权请求替代后台授权。
 
 ### 本地测试限制
 

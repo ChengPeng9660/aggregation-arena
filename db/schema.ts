@@ -1,5 +1,5 @@
-import { sql } from "drizzle-orm";
-import { integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { desc, sql } from "drizzle-orm";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const participants = sqliteTable("participants", {
   id: text("id").primaryKey(),
@@ -181,6 +181,13 @@ export const researchContexts = sqliteTable(
   (table) => [uniqueIndex("research_context_event_version_unique").on(table.eventId, table.searchPromptVersion)],
 );
 
+export const forecastBatchLease = sqliteTable("forecast_batch_lease", {
+  id: text("id").primaryKey(),
+  owner: text("owner").notNull(),
+  acquiredAt: text("acquired_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+});
+
 export const modelForecastRuns = sqliteTable(
   "model_forecast_runs",
   {
@@ -202,7 +209,11 @@ export const modelForecastRuns = sqliteTable(
     completedAt: text("completed_at"),
     probabilitiesJson: text("probabilities_json"),
   },
-  (table) => [uniqueIndex("model_forecast_context_participant_unique").on(table.contextId, table.participantId)],
+  (table) => [
+    uniqueIndex("model_forecast_context_participant_unique").on(table.contextId, table.participantId),
+    index("idx_model_forecast_participant_version").on(table.eventId, table.participantId, table.promptVersion, desc(table.createdAt), desc(table.id)),
+    index("idx_model_forecast_created").on(desc(table.createdAt), desc(table.id)),
+  ],
 );
 
 export const aggregationHarnessRuns = sqliteTable(
