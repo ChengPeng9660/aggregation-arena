@@ -33,10 +33,10 @@ test("uses Prophet Arena's five public forecasting domains", () => {
   }
 });
 
-test("daily selection retries use the current strict-balance run identity", () => {
+test("daily selection retries use the current availability-first run identity", () => {
   assert.equal(
     dailySelectionRunId(new Date("2026-08-29T00:10:00.000Z")),
-    "live-2026-08-29-dual-market-20-v2-strict-balance",
+    "live-2026-08-29-dual-market-20-v3-availability-first",
   );
 });
 

@@ -5,12 +5,13 @@ import {
   CURATION_CONFIG,
   dailySelectionRunId,
   evaluateHardEligibility,
+  evaluateDailyEligibility,
   normalizeKalshiMarket,
   normalizePolymarketMarket,
-  rankCandidates,
+  rankDailyCandidates,
   selectPersistenceCandidates,
   selectRapidResolutionCandidates,
-  selectDiverseSourceBalancedCandidates,
+  selectDailyAvailableCandidates,
   validateDailySlate,
 } from "@/lib/curation-core";
 import {
@@ -30,6 +31,7 @@ type Candidate = Omit<ReturnType<typeof normalizePolymarketMarket>, "sourcePlatf
   volume24Percentile: number;
   alreadySelected?: boolean;
   categoryRank?: number;
+  regularEligible?: boolean;
 };
 
 type EventOutcome = {
@@ -225,7 +227,7 @@ export async function syncLiveMarketCandidates(db: D1Database = getD1(), now = n
       throw new Error(`Both market sources failed: ${detail.join("; ")}`);
     }
     const normalized = successes.flatMap((result) => result.candidates);
-    const ranked = rankCandidates(normalized, now) as Candidate[];
+    const ranked = rankDailyCandidates(normalized, now) as Candidate[];
     const regularPersisted = selectPersistenceCandidates(ranked) as Candidate[];
     const rapidEligible = selectRapidResolutionCandidates(ranked, {
       now,
@@ -413,6 +415,7 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
     runId,
     selected: Number(existing.selected_count),
     sourceCounts: safeJson(existing.source_counts_json, {}),
+    quotaMet: Number(existing.selected_count) === CURATION_CONFIG.dailyTotal,
     reused: true,
   };
 
@@ -443,16 +446,24 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
   const recentCounts = Object.fromEntries(recent.results.map((row) => [row.category, Number(row.count)]));
   const marketCandidates = rows.results.map(rowToCandidate);
   const candidates = buildEventCandidates(marketCandidates);
-  const selected = selectDiverseSourceBalancedCandidates(candidates, {
+  const selected = selectDailyAvailableCandidates(candidates, {
     sourceQuotas: CURATION_CONFIG.sourceQuotas,
     sourceTargetPerCategory: CURATION_CONFIG.sourceTargetPerCategory,
     recentCategoryCounts: recentCounts,
     recentTitles: recentTitles.results.map((row) => row.title),
   }) as EventCandidate[];
-  const validation = validateDailySlate(selected);
+  const validation = validateDailySlate(selected, { requireBalance: false });
   const { categoryCounts, sourceCounts } = validation;
   const completedAt = new Date().toISOString();
   const quotaMet = validation.valid;
+  const policy = {
+    balancePolicy: CURATION_CONFIG.balancePolicy,
+    sourceTargetsMet: validation.sourceQuotasMet,
+    categoryTargetsMet: validation.categoryQuotasMet,
+    fallbackQuestions: selected.filter(candidate => candidate.regularEligible === false).length,
+    regularMinimumVolume24h: CURATION_CONFIG.minimumVolume24h,
+    fallbackMinimumVolume24h: CURATION_CONFIG.fallbackMinimumVolume24h,
+  };
 
   await db.prepare(`
     INSERT INTO selection_runs (
@@ -481,6 +492,7 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
         dailyTotal: CURATION_CONFIG.dailyTotal,
         sourceQuotas: CURATION_CONFIG.sourceQuotas,
         targetPerCategory: CURATION_CONFIG.targetPerCategory,
+        balancePolicy: CURATION_CONFIG.balancePolicy,
         uniqueDiversityGroups: true,
         uniqueTitles: true,
       },
@@ -498,6 +510,9 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
       eventUrl ? `Event URL: ${eventUrl}` : "",
       `Selection run: ${runId}`,
       `Outcomes: ${candidate.eventOutcomes.length}`,
+      candidate.regularEligible === false
+        ? `Availability fallback: 24h volume >= ${CURATION_CONFIG.fallbackMinimumVolume24h}; regular threshold ${CURATION_CONFIG.minimumVolume24h}.`
+        : "",
     ].filter(Boolean).join("\n");
     const description = [
       candidate.description,
@@ -535,6 +550,7 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
         sourcePlatform: candidate.sourcePlatform,
         outcomeCount: candidate.eventOutcomes.length,
         category: candidate.category,
+        availabilityFallback: candidate.regularEligible === false,
       }), completedAt),
       ...candidate.eventOutcomes.map((outcome, index) => db.prepare(`
         INSERT OR IGNORE INTO event_outcomes (
@@ -552,10 +568,13 @@ export async function selectDailyBalancedSlate(db: D1Database = getD1(), now = n
   // together, never a partial slate that consumes tomorrow's diversity slots.
   await db.batch([
     ...statements,
+    db.prepare(`INSERT INTO audit_log (action, entity_type, entity_id, detail_json, actor, created_at)
+      VALUES ('curation.selection_policy', 'selection_run', ?, ?, 'market-curation-cron', ?)`)
+      .bind(runId, JSON.stringify(policy), completedAt),
     db.prepare("UPDATE selection_runs SET status='completed', completed_at=? WHERE id=?")
       .bind(new Date().toISOString(), runId),
   ]);
-  return { runId, selected: selected.length, sourceCounts, categoryCounts, quotaMet: true, reused: false };
+  return { runId, selected: selected.length, sourceCounts, categoryCounts, policy, quotaMet: true, reused: false };
   } catch (error) {
     const failedAt = new Date().toISOString();
     const message = error instanceof Error ? error.message : String(error);
@@ -1044,6 +1063,9 @@ export async function getCurationSnapshot(db: D1Database = getD1()) {
       selectedCount: Number(latestRun.selected_count),
       categoryCounts: safeJson(latestRun.category_counts_json, {}),
       sourceCounts: safeJson(latestRun.source_counts_json, {}),
+      balancePolicy: latestRun.config_version === CURATION_CONFIG.configVersion ? CURATION_CONFIG.balancePolicy : "strict",
+      fallbackQuestions: latestRun.config_version === CURATION_CONFIG.configVersion
+        ? selectedRows.results.filter(row => row.source_platform === "polymarket" && Number(row.volume_24h) < CURATION_CONFIG.minimumVolume24h).length : 0,
       completedAt: latestRun.completed_at,
     } : null,
     categories: CANONICAL_CATEGORIES.map((category) => {
@@ -1099,6 +1121,7 @@ function rowToCandidate(row: Record<string, unknown>): Candidate {
     eligible: Number(row.eligible) === 1, reasons: parseJsonList(row.rejection_reasons_json).map(String),
     selectionScore: Number(row.selection_score), volume24Percentile: Number(row.volume_percentile),
     alreadySelected: Number(row.already_selected) === 1,
+    regularEligible: Number(row.eligible) === 1 && !parseJsonList(row.rejection_reasons_json).includes("low_24h_volume"),
   };
 }
 
@@ -1112,7 +1135,8 @@ function buildEventCandidates(candidates: Candidate[]): EventCandidate[] {
   const events: EventCandidate[] = [];
   for (const group of groups.values()) {
     const ranked = [...group].sort((a, b) => b.selectionScore - a.selectionScore || b.volume24h - a.volume24h);
-    const representative = ranked.find((candidate) => candidate.eligible && isActiveNamedMarket(candidate));
+    const representative = ranked.find(candidate => candidate.eligible && candidate.regularEligible !== false && isActiveNamedMarket(candidate))
+      || ranked.find(candidate => candidate.eligible && isActiveNamedMarket(candidate));
     if (!representative) continue;
     const namedMarkets = ranked.filter((candidate) => isActiveNamedMarket(candidate));
     const isCategorical = representative.eventNegRisk && namedMarkets.length > 1;
@@ -1243,7 +1267,7 @@ async function reserveIntakeRequest(budget: IntakeBudget) {
     if (!intakeAvailable(budget)) return false;
     budget.nextRequestAt = Date.now() + budget.minimumIntervalMs;
     budget.diagnostics.requests += 1;
-    return true;
+    return budget.diagnostics.requests;
   } finally { release(); }
 }
 
@@ -1252,8 +1276,8 @@ async function fetchIntakeJson(url: URL, budget: IntakeBudget, maximumBytes = IN
     ? [url, new URL(url.pathname + url.search, KALSHI_API_FALLBACK_ORIGIN)] : [url];
   let lastError: unknown = new Error("Intake source budget exhausted");
   for (const endpoint of endpoints) {
-    if (!await reserveIntakeRequest(budget)) break;
-    const requestNumber = budget.diagnostics.requests;
+    const requestNumber = await reserveIntakeRequest(budget);
+    if (!requestNumber) break;
     const trace = { source: endpoint.hostname, path: endpoint.pathname, requestNumber };
     console.info(JSON.stringify({ message: "intake.request_started", ...trace }));
     try {
@@ -1410,14 +1434,14 @@ async function fetchPolymarketEventPayloads(now: Date, blockedGroups = new Set<s
           if (!event?.id) continue;
           const candidate = normalizePolymarketMarket(event, market, now);
           if (blockedGroups.has(candidate.diversityGroupId)) continue;
-          if (rapid ? !rapidIntakeCandidate(candidate, now) : !evaluateHardEligibility(candidate, now).eligible) continue;
+          if (rapid ? !rapidIntakeCandidate(candidate, now) : !evaluateDailyEligibility(candidate, now).eligible) continue;
           const id = String(event.id);
           const previous = discovered.get(id);
           if (!previous || candidate.volume24h > previous.volume24h) discovered.set(id, { id, rapid, volume24h: candidate.volume24h });
         }
         const next = String(payload.next_cursor || "");
         const belowVolumeFloor = !rapid && markets.length > 0
-          && Number(markets[markets.length - 1].volume24hr) < CURATION_CONFIG.minimumVolume24h;
+          && Number(markets[markets.length - 1].volume24hr) < CURATION_CONFIG.fallbackMinimumVolume24h;
         if (!next || seen.has(next) || !markets.length || belowVolumeFloor) break;
         seen.add(next);
         cursor = next;
@@ -1481,7 +1505,7 @@ type KalshiDiscoveryCandidate = Pick<ReturnType<typeof normalizeKalshiMarket>,
 
 function discoveryCapacity(candidates: SourceFetchResult["candidates"], now: Date, blockedGroups: Set<string>, recentTitles: string[]) {
   const supply = new Map<string, KalshiDiscoveryCandidate[]>(CANONICAL_CATEGORIES.map((category) => [category, []]));
-  for (const candidate of buildEventCandidates(rankCandidates(candidates, now) as Candidate[])) {
+  for (const candidate of buildEventCandidates(rankDailyCandidates(candidates, now) as Candidate[])) {
     if (recentTitles.some((title) => !validateDailySlate([candidate, { ...candidate,
       diversityGroupId: "history", sourceEventId: "history", title }]).uniqueTitles)) continue;
     recordKalshiDiscoveryCandidate(supply, candidate, blockedGroups);

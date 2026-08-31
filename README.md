@@ -4,7 +4,7 @@
 
 一个支持 Polymarket + Kalshi 自动选题、共享信息检索、LLM 自动预测、手工概率录入、自动聚合、结果结算、实时排名和审计追踪的预测聚合 Benchmark 平台。
 
-系统每小时从 Polymarket Gamma API 和 Kalshi 公开 Market API 同步活跃市场，应用平台对应的成交活跃度、截止窗口、概率区间和规则完整性筛选。每天只在两个平台都能提供足够多样的合格题时发布一个严格的 20 题批次：Polymarket 10 题、Kalshi 10 题。系统在平台内部、跨平台和最近 7 天历史之间去除同一现实事件及高度相似题目，并严格要求 Politics、Economics、Science、Sports、Entertainment 各 4 题。结算后以 Event Brier Score 实时更新 Leaderboard。
+系统每小时从 Polymarket Gamma API 和 Kalshi 公开 Market API 同步活跃市场，应用平台对应的成交活跃度、截止窗口、概率区间和规则完整性筛选。每天优先发布供所有健康模型共同预测的同一组 20 个不同事件。优先选择 Polymarket 10 题、Kalshi 10 题及五个领域各 4 题；来源或类别不足时允许其他合格题补位。系统在平台内部、跨平台和最近 7 天历史之间去除同一现实事件及高度相似题目。先尝试仅用原成交量门槛的题目凑满 20 题，不足时才允许 Polymarket 补位题的 24 小时成交量降至 $1,000，其余质量要求不变。结算后以 Event Brier Score 实时更新 Leaderboard。
 
 生产站点：
 
@@ -33,8 +33,8 @@
 
 ### Polymarket + Kalshi 自动选题
 
-- 每小时 `00` 分同时同步 Polymarket Gamma 活跃事件和 Kalshi 公开开放事件；外部请求有 15 秒超时和单页 8 MiB 响应上限。
-- Polymarket 最多通过 keyset cursor 读取前 800 个事件（每页 50 个）；Kalshi 最多读取 2,000 个事件并使用官方 cursor 分页，无需 Kalshi API key。
+- 每小时 `00` 分同时同步 Polymarket Gamma 活跃事件和 Kalshi 公开开放事件；外部请求有 8 秒超时，普通响应上限 2 MiB、批量完整事件上限 8 MiB，并设置来源总量与执行时间预算。
+- Polymarket 读取最多 3 页各 100 个常规市场和 1 页 50 个近截止市场，再批量获取最多 48 个完整父事件；Kalshi 按类别发现 series 后有界读取市场，每个来源最多 32 次请求，收到 429 后停止本轮该来源采集。
 - 候选 Market 仍先通过严格的 `Yes / No` 质量筛选；入选时按 `source_event_id` 合并为 Event。
 - Polymarket 门槛：总成交量至少 `$35,000`、24 小时成交量至少 `$7,500`、流动性至少 `$7,500`，截止时间为 `48 小时–90 天`。
 - Kalshi 门槛：总成交量至少 `250` contracts、24 小时成交量至少 `25` contracts，截止时间为 `48 小时–180 天`；由于公开字段的显示 liquidity 常为 0，使用 open interest / quoted size 作为排序深度，不设伪造的 liquidity 硬门槛。
@@ -42,9 +42,9 @@
 - 有开始时间时，市场至少存在 6 小时。
 - 题目说明与结算依据必须有足够文字。
 - 与 Prophet Arena 的公开研究设计一致，固定为五类：Politics、Economics、Science、Sports、Entertainment。
-- 每日 `00:10 UTC` 生成不可变批次，严格要求 Polymarket 10 题 + Kalshi 10 题。
-- 五类严格要求每类 4 题；选择器优先从每个平台每类取 2 题，最终发布校验不允许用其他类别补齐后形成偏科题集。
-- 如果任一平台无法提供 10 道合格题、任一类别不足 4 题，或去重后不足 20 个独立现实事件，当日批次标记为 `incomplete` 并保持未发布，不会跨平台借题、重复题目或降低质量门槛。
+- 每日 `00:10 UTC` 生成不可变 20 题批次，优先 Polymarket 10 题 + Kalshi 10 题，供所有健康模型预测相同题单。
+- 五类优先各 4 题，来源内每类优先 2 题；来源和类别目标是偏好，可在不足时跨来源、跨类别补齐。
+- 先使用符合常规门槛的题目完成 20 题；不足时仅对 Polymarket 补位题允许 24 小时成交量最低 $1,000。总成交量、流动性、截止窗口、市场年龄、概率、完整 outcome 和去重规则不变。若仍不足 20 个独立事件，批次保持 `incomplete`，不发布部分题集。每轮保存策略版本、实际来源/类别分布和补位题数量。
 - `incomplete` 或中断在 `running` 的当日批次会在后续成功的整点同步后自动重试，仍使用同一个不可变 run ID。
 - 一个 Polymarket Event 每个批次最多入选一次；若它是 `negRisk` 互斥 Event，则保留全部活跃、具名 outcomes，而不是只保留代表 Market。
 - 自动忽略 `Company A`、`Person X` 等尚未具名的 augmented negRisk 占位 Market。
@@ -54,9 +54,9 @@
 - 入选时保存价格、成交量、流动性、选题分数、类别和批次 ID。
 - Curation 页面每 30 秒刷新，显示最近同步、筛选后数量、类别配额和最新题集。
 - Pipeline 页面显示自动化健康状态、最后成功同步时间和最近一次运行状态。
-- 每轮仍以完整 800 个 Event / 全部 Market 计算门槛和类别统计，但 D1 只持久化至少含一个合格 Market 的 Event，并保留其全部 outcomes，避免无意义的大规模小时写入。
+- 每轮以有界抓取的完整 Event / 全部 Market 计算门槛和类别统计，但 D1 只持久化至少含一个合格 Market 的 Event，并保留其全部 outcomes，避免无意义的大规模小时写入。
 - 超过 20 分钟仍未完成的同步会在下一轮自动标记为 `failed`，不会永久停在 `running`。
-- 每个整点都会检查全部已选且尚未结算的 Polymarket / Kalshi 事件，不再只检查计划截止时间前 12 小时的题目。
+- 每小时 `05` 分独立检查全部已选且尚未结算的 Polymarket / Kalshi 事件，不再只检查计划截止时间前 12 小时的题目。
 - 事件到达本地 `close_time`，或来源平台提前关闭时，会先从 `open` 变为 `locked` 并立即停止接受预测；来源平台给出明确 outcome 后再变为 `resolved` 并进入评分。
 - Forecast 写入入口同时校验事件状态和 `close_time`，即使定时任务延迟，也不会接受计划截止时间之后的预测。
 
@@ -193,7 +193,7 @@ Polymarket Gamma API + Kalshi Market API
       ↓
 Prophet Arena 五领域分类 + 综合质量分数排序
       ↓ 每日 00:10 UTC
-严格 10 Polymarket + 10 Kalshi + event-family 去重 + 跨平台语义去重 + 7 天重复拦截
+20 个共享事件；优先 10 + 10 和五类各 4，允许补位；保留 event-family 去重、跨平台语义去重和 7 天重复拦截
       ↓
 不可变 selection run，例如 live-2026-08-10-v1
       ↓
@@ -279,7 +279,7 @@ Cloudflare Secret 的 `PIPELINE_ADMIN_TOKEN` 调用 `run_daily_forecast_batch`�
 该操作会复用当天不可变 selection run，多次调用不会重复发布题目。
 同一密钥还可以调用 `run_pipeline_sync`，用于运维人员立即执行一次与整点 Cron 相同的同步和结算检查。
 
-每次整点市场同步都会补建缺失的每日题集、重试失败或不完整的选题。选题使用最近 3 小时内成功采集的数据，必须同时满足 Polymarket 10 + Kalshi 10、五类各 4、真实事件及标题去重；不够时记录阻断原因，不发布伪造或部分题集。写入 20 题与 completed 状态属于同一数据库事务。维护者也可通过同账户显式绑定的私有 `PipelineAdminEntrypoint` 执行 sync/select/forecast；该入口没有公共 HTTP 路由，不能用未鉴权请求替代后台授权。
+每次整点市场同步都会补建缺失的每日题集、重试失败或不完整的选题。选题使用最近 3 小时内成功采集的数据，必须满足 20 个不同真实事件及标题去重；优先 Polymarket 10 + Kalshi 10、五类各 4，不足时按上述补位门槛完成题单，仍不够则记录阻断原因，不发布伪造或部分题集。写入 20 题与 completed 状态属于同一数据库事务。维护者也可通过同账户显式绑定的私有 `PipelineAdminEntrypoint` 执行 sync/select/forecast；该入口没有公共 HTTP 路由，不能用未鉴权请求替代后台授权。
 
 ### 本地测试限制
 

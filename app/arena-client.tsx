@@ -90,6 +90,7 @@ type CurationSnapshot = {
     recentDiversityDays: number;
     minimumTotalVolume: number;
     minimumVolume24h: number;
+    fallbackMinimumVolume24h: number;
     minimumLiquidity: number;
     minimumCloseHours: number;
     maximumCloseDays: number;
@@ -125,6 +126,8 @@ type CurationSnapshot = {
     selectedCount: number;
     categoryCounts: Record<string, number>;
     sourceCounts: Record<string, number>;
+    balancePolicy?: string;
+    fallbackQuestions?: number;
     completedAt: string | null;
   };
   categories: {
@@ -290,7 +293,8 @@ const ACTION_LABELS: Record<string, string> = {
   "curation.event_selected": "Market event selected",
   "curation.event_locked": "Market event locked",
   "curation.event_resolved": "Market event resolved",
-  "curation.selection_incomplete": "Daily release held for source quota",
+  "curation.selection_incomplete": "Daily release awaiting 20 eligible questions",
+  "curation.selection_policy": "Daily selection and fallback policy recorded",
 };
 
 export function ArenaClient() {
@@ -534,7 +538,7 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       <section id="pipeline-stage-2" className="story-stage">
         <StageHeader number="02" eyebrow="FILTERS" title="Quality gates" summary="Source-specific activity gates feed one shared diversity policy." />
         <div className="gate-line">
-          <Gate label="Daily mix" value={`${curation.config.sourceQuotas.polymarket} + ${curation.config.sourceQuotas.kalshi}`} />
+          <Gate label="Preferred mix" value={`${curation.config.sourceQuotas.polymarket} + ${curation.config.sourceQuotas.kalshi}`} />
           <Gate label="Market probability" value={`${curation.config.minimumYesPrice * 100}–${curation.config.maximumYesPrice * 100}%`} />
           <Gate label="Close window" value={`Poly ${curation.config.maximumCloseDays}d · Kalshi ${curation.config.kalshiMaximumCloseDays}d`} />
           <Gate label="Repeat block" value={`${curation.config.recentDiversityDays} days`} />
@@ -551,12 +555,13 @@ function PipelineView({ snapshot, onOpenEvent }: { snapshot: Snapshot; onOpenEve
       </section>
 
       <section id="pipeline-stage-3" className="story-stage">
-        <StageHeader number="03" eyebrow="SELECTION" title="Daily question slate" summary="Exactly 10 questions per provider and 4 per domain, with cross-market and recent-history deduplication." />
+        <StageHeader number="03" eyebrow="SELECTION" title="Daily question slate" summary="20 shared questions every day. Prefer 10 per provider and 4 per domain; fill shortages from available eligible questions, retaining all diversity checks." />
         <div className="release-summary">
           <div><small>Release ID</small><strong>{curation.latestSelection?.id || "Pending"}</strong></div>
           <div><small>Eligible candidates</small><strong>{curation.latestSelection?.eligibleCount || 0}</strong></div>
           <div><small>Selected events</small><strong>{selected}</strong></div>
           <div><small>Source mix</small><strong>{curation.latestSelection ? `${curation.latestSelection.sourceCounts.polymarket || 0} + ${curation.latestSelection.sourceCounts.kalshi || 0}` : "10 + 10"}</strong></div>
+          <div><small>Activity fallback</small><strong>{curation.latestSelection?.fallbackQuestions || 0} questions</strong></div>
         </div>
         <div className="stage-table-wrap"><table className="stage-table"><thead><tr><th>Source</th><th>Category</th><th>Selected question</th><th>Selection score</th><th>24h volume</th><th>Market probability</th></tr></thead><tbody>
           {curation.selectedMarkets.slice(0, 8).map((market) => <tr key={market.marketId}><td>{sourceLabel(market.sourcePlatform)}</td><td>{market.category}</td><td><button onClick={() => { const event = snapshot.events.find((item) => item.id === market.eventId); if (event) onOpenEvent(event); }}>{market.title}</button></td><td>{market.score.toFixed(3)}</td><td>{formatCompactMoney(market.volume24h)}</td><td>{(market.yesPrice * 100).toFixed(1)}%</td></tr>)}
@@ -847,14 +852,14 @@ function CurationView({ snapshot }: { snapshot: Snapshot }) {
       </section>
 
       <section className="curation-rules">
-        <div><small>SOURCE QUOTA</small><b>{curation.config.sourceQuotas.polymarket} + {curation.config.sourceQuotas.kalshi}</b><span>Polymarket + Kalshi, never substituted</span></div>
-        <div><small>POLYMARKET ACTIVITY</small><b>{formatCompactMoney(curation.config.minimumVolume24h)} / 24h</b><span>{formatCompactMoney(curation.config.minimumTotalVolume)} total · {formatCompactMoney(curation.config.minimumLiquidity)} liquidity</span></div>
+        <div><small>PREFERRED SOURCE MIX</small><b>{curation.config.sourceQuotas.polymarket} + {curation.config.sourceQuotas.kalshi}</b><span>Available sources fill shortages to reach 20</span></div>
+        <div><small>POLYMARKET ACTIVITY</small><b>{formatCompactMoney(curation.config.minimumVolume24h)} / 24h</b><span>{formatCompactMoney(curation.config.fallbackMinimumVolume24h || 1000)} for fallback only · {formatCompactMoney(curation.config.minimumTotalVolume)} total · {formatCompactMoney(curation.config.minimumLiquidity)} liquidity</span></div>
         <div><small>KALSHI ACTIVITY</small><b>{formatCompactMoney(curation.config.kalshiMinimumVolume24h)} / 24h</b><span>{formatCompactMoney(curation.config.kalshiMinimumTotalVolume)} total · open-interest depth ranking</span></div>
         <div><small>DIVERSITY</small><b>5 domains · {curation.config.recentDiversityDays}d</b><span>Event-family and semantic duplicate blocking</span></div>
       </section>
 
       <section className="balance-board">
-        <div className="section-title"><div><span className="eyebrow">DOMAIN TARGETS</span><h2>Prophet Arena five-domain balance</h2></div><span>{curation.config.targetPerCategory} per domain required / release</span></div>
+        <div className="section-title"><div><span className="eyebrow">DOMAIN TARGETS</span><h2>Prophet Arena five-domain balance</h2></div><span>{curation.config.targetPerCategory} per domain preferred / release</span></div>
         <div className="balance-grid">
           {curation.categories.map((item) => (
             <article key={item.category}>
@@ -1085,7 +1090,7 @@ function ForecastsView({
       </section>
 
       <section className="pipeline-flow" aria-label="Forecast pipeline">
-        <div><span>01</span><b>Selected event</b><small>10 Polymarket + 10 Kalshi</small></div>
+        <div><span>01</span><b>Selected event</b><small>20 shared questions · balanced when available</small></div>
         <i>→</i>
         <div><span>02</span><b>Tavily Search</b><small>up to 10 ranked sources</small></div>
         <i>→</i>

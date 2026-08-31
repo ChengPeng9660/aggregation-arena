@@ -12,6 +12,14 @@ test('unavailable resolution sources are failures instead of silently successful
   assert.equal(pipelineReportedFailure({resolution:{checked:4,resolved:0,failed:0}}), null);
 });
 
+test('source outage does not block a complete approved daily fallback slate', () => {
+  const result = { sync: { sourceStats: { kalshi: { status: 'failed', error: '429' } } },
+    selection: { selected: 20, quotaMet: true } };
+  assert.equal(pipelineReportedFailure(result), null);
+  assert.match(pipelineReportedFailure({ ...result, selection: { selected: 19, quotaMet: false } }), /kalshi intake failed/);
+  assert.match(pipelineReportedFailure({ ...result, outcomes: [{ status: 'failed', error: 'timeout' }] }), /model forecasts failed/);
+});
+
 test('zero or incomplete daily selection is a failure for combined and direct invocations', () => {
   assert.match(pipelineReportedFailure({selection:{selected:0,quotaMet:false}}), /20 questions/);
   assert.match(pipelineReportedFailure({selected:18,quotaMet:false}), /20 questions/);
