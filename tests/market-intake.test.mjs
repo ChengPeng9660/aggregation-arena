@@ -15,8 +15,8 @@ const moduleBody = stripTypeScriptTypes(source.statements
   .filter((node) => !ts.isImportDeclaration(node))
   .map((node) => node.getText(source).replace(/^export\s+/, ''))
   .join('\n'));
-function load(fetch, getD1 = () => { throw new Error('No test database'); }) {
-  const dependencies = { ...curation, createKalshiGetHeaders, fetch, getD1 };
+function load(fetch, getD1 = () => { throw new Error('No test database'); }, runtime = {}) {
+  const dependencies = { ...curation, createKalshiGetHeaders, fetch, getD1, ...runtime };
   return new Function(...Object.keys(dependencies), `${moduleBody}\nreturn {
     fetchPolymarketEventPayloads, fetchKalshiEventPayloads, readJsonLimited,
     fetchIntakeJson, intakeBudget,
@@ -124,8 +124,14 @@ test('market discovery hydrates all categorical siblings, skips used groups, and
   const lib = load(async (input) => {
     const url = new URL(input);
     calls.push(url.pathname + url.search);
+    if (url.pathname === '/markets/keyset' && url.searchParams.has('volume_num_min')) {
+      assert.equal(url.searchParams.get('volume_num_min'), '35000');
+      assert.equal(url.searchParams.get('liquidity_num_min'), '7500');
+      assert.equal(url.searchParams.has('volume_min'), false);
+      assert.equal(url.searchParams.has('liquidity_min'), false);
+    }
     if (url.pathname === '/markets/keyset') return Response.json({
-      markets: url.searchParams.has('volume_min') ? [polyMarket('a', 'A'), polyMarket('b', 'B'), polyMarket('c', 'C')] : [],
+      markets: url.searchParams.has('volume_num_min') ? [polyMarket('a', 'A'), polyMarket('b', 'B'), polyMarket('c', 'C')] : [],
     });
     if (url.pathname === '/events') {
       assert.deepEqual(url.searchParams.getAll('id'), ['A', 'C']);
@@ -153,7 +159,7 @@ test('bulk parent hydration uses bounded requests while retaining every child ou
   const lib = load(async (input) => {
     const url = new URL(input);
     if (url.pathname === '/markets/keyset') return Response.json({
-      markets: url.searchParams.has('volume_min') ? ids.map((id) => polyMarket(`m-${id}`, id)) : [],
+      markets: url.searchParams.has('volume_num_min') ? ids.map((id) => polyMarket(`m-${id}`, id)) : [],
     });
     assert.equal(url.pathname, '/events');
     const selectedIds = url.searchParams.getAll('id');
@@ -217,12 +223,57 @@ test('concurrent callers obey the shared request pace and cannot overrun the sou
   assert.ok(budget.diagnostics.limitsReached.includes('source_request_budget'));
 });
 
+test('request admission terminates when a platform timer wakes without advancing its wall clock', async () => {
+  let waits = 0;
+  let calls = 0;
+  class FrozenDate extends Date { static now() { return 1000; } }
+  const lib = load(async () => { calls += 1; return Response.json({ events: [] }); }, undefined, {
+    Date: FrozenDate,
+    setTimeout(callback) {
+      assert.ok(++waits <= 3, 'a frozen clock must not cause repeated timer polling');
+      return setTimeout(callback, 0);
+    },
+  });
+  const budget = lib.intakeBudget(3, 30);
+  const outcomes = await Promise.allSettled(Array.from({ length: 5 }, () =>
+    lib.fetchIntakeJson(new URL('https://external-api.kalshi.com/trade-api/v2/events'), budget)));
+  assert.equal(calls, 3);
+  assert.equal(waits, 2);
+  assert.equal(outcomes.filter((outcome) => outcome.status === 'fulfilled').length, 3);
+});
+
+test('Kalshi discovery prioritizes categories missing from the other source without dropping any category', async () => {
+  let clock = now.getTime();
+  const seriesQueries = [];
+  class IntakeDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [clock])); }
+    static now() { return clock; }
+  }
+  const lib = load(async (input) => {
+    const url = new URL(input);
+    if (url.pathname.endsWith('/series')) return Response.json({ series: [
+      { ticker: ticker(url.searchParams.get('category')), volume_fp: '1000' },
+    ] });
+    seriesQueries.push(url.searchParams.get('series_ticker'));
+    return Response.json({ events: [] });
+  }, undefined, {
+    Date: IntakeDate,
+    setTimeout(callback, delay) { return setTimeout(() => { clock += delay; callback(); }, 0); },
+  });
+  const result = await lib.fetchKalshiEventPayloads(now, new Set(), {}, () => ({
+    Politics: 4, Economics: 0, Science: 1, Sports: 2, Entertainment: 1,
+  }));
+  assert.deepEqual(seriesQueries, ['T1', 'T2', 'T4', 'T3', 'T0']);
+  assert.equal(result.diagnostics.requests, 10);
+  assert.equal(result.events.length, 0, 'discovery hints never fabricate a selected event');
+});
+
 test('real sync SQL stores complete outcomes across bounded multirow batches and timeout diagnostics preserve progress', async () => {
   const kalshi = kalshiFixture();
   const fixture = sqliteFixture(async (input) => {
     const url = new URL(input);
     if (url.hostname.includes('polymarket')) {
-      if (url.pathname === '/markets/keyset') return Response.json({ markets: url.searchParams.has('volume_min') ? [polyMarket('a', 'A')] : [] });
+      if (url.pathname === '/markets/keyset') return Response.json({ markets: url.searchParams.has('volume_num_min') ? [polyMarket('a', 'A')] : [] });
       if (url.pathname === '/events') return Response.json([polyEvent('A', 97)]);
     }
     return kalshi.fetch(input);

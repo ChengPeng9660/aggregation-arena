@@ -199,21 +199,45 @@ export async function runForecastBatch(
   requestedEventIds: string[] = [],
 ) {
   const deadline = Date.now() + FORECAST_BATCH_ELAPSED_MS;
+  const scheduledDailySlate = !requestedEventIds.some((value) => String(value).trim());
+  // Report today's readiness after useful work, even when an older valid slate
+  // supplied the jobs. Explicit event-targeted calls retain their current scope.
+  const finish = async <Result extends object>(result: Result) => scheduledDailySlate
+    ? { ...result, selection: await getScheduledForecastSelection(env.DB) }
+    : result;
   await ensureForecastingReady(env.DB, env.PROPHET_DISABLED_MODEL_IDS);
   const startedAt = new Date();
-  if (startedAt.getTime() >= deadline) return { configured:true, processed:0, completed:0, deferred:true };
+  if (startedAt.getTime() >= deadline) return finish({ configured:true, processed:0, completed:0, deferred:true });
   const owner = crypto.randomUUID();
   const lease = await env.DB.prepare(FORECAST_LEASE_CLAIM_SQL).bind(
     owner, startedAt.toISOString(), new Date(startedAt.getTime()+FORECAST_BATCH_LEASE_MS).toISOString(),
   ).first<{ owner:string }>();
-  if (lease?.owner !== owner) return { configured:true, processed:0, completed:0, busy:true };
+  if (lease?.owner !== owner) return finish({ configured:true, processed:0, completed:0, busy:true });
   try {
-    if (Date.now() >= deadline) return { configured:true, processed:0, completed:0, deferred:true };
+    if (Date.now() >= deadline) return finish({ configured:true, processed:0, completed:0, deferred:true });
     const signal = AbortSignal.timeout(Math.max(1, deadline-Date.now()));
-    return await runLeasedForecastBatch(env, jobLimit, requestedEventIds, signal);
+    return await finish(await runLeasedForecastBatch(env, jobLimit, requestedEventIds, signal));
   } finally {
     await env.DB.prepare("DELETE FROM forecast_batch_lease WHERE id='forecast' AND owner=?").bind(owner).run();
   }
+}
+
+async function getScheduledForecastSelection(db: D1Database, now = new Date()) {
+  const runId = dailySelectionRunId(now);
+  const selection = await db.prepare(`
+    WITH ${VALID_FORECAST_SLATES_SQL}
+    SELECT sr.status,
+      (SELECT COUNT(DISTINCT si.event_id) FROM selection_items si WHERE si.run_id=sr.id) AS actual_questions,
+      EXISTS(SELECT 1 FROM valid_daily_runs valid WHERE valid.run_id=sr.id) AS quota_met
+    FROM selection_runs sr WHERE sr.id=?
+  `).bind(CURATION_CONFIG.configVersion, DAILY_FORECAST_QUESTION_TARGET, runId)
+    .first<{ status:string; actual_questions:number; quota_met:number }>();
+  return {
+    runId,
+    status: selection?.status || "missing",
+    selected: Number(selection?.actual_questions || 0),
+    quotaMet: Number(selection?.quota_met || 0) === 1,
+  };
 }
 
 async function runLeasedForecastBatch(

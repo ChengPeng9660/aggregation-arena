@@ -181,6 +181,7 @@ export async function syncLiveMarketCandidates(db: D1Database = getD1(), now = n
   };
   const collectSource = async (source: string, collect: () => Promise<SourceFetchResult>) => {
     try {
+      await checkpoint(`${source}_started`, {}, `sourceProgress.${source}`);
       const result = await collect();
       await checkpoint(`${source}_fetched`, result.diagnostics, `sourceProgress.${source}`);
       return result;
@@ -193,16 +194,26 @@ export async function syncLiveMarketCandidates(db: D1Database = getD1(), now = n
   try {
     await checkpoint("intake_started");
     const used = await db.prepare(`
-      SELECT DISTINCT c.diversity_group_id
+      SELECT DISTINCT c.diversity_group_id,
+        CASE WHEN c.source_platform='polymarket' AND c.event_title!='' THEN c.event_title ELSE c.title END AS title,
+        si.selected_at
       FROM selection_items si
       JOIN selection_runs sr ON sr.id=si.run_id AND sr.status='completed'
       JOIN polymarket_candidates c ON c.market_id=si.market_id
       WHERE c.diversity_group_id!=''
-    `).all<{ diversity_group_id: string }>();
+    `).all<{ diversity_group_id: string; title: string; selected_at: string }>();
     const blockedGroups = new Set(used.results.map((row) => row.diversity_group_id));
+    const recentTitles = used.results.filter((row) =>
+      Date.parse(row.selected_at) >= now.getTime() - 7 * 86_400_000).map((row) => row.title);
+    await checkpoint("history_loaded", { blockedGroups: blockedGroups.size });
+    let otherSourceCapacity: Readonly<Record<string, number>> = {};
     const sourceResults = await Promise.allSettled([
-      collectSource("polymarket", () => fetchPolymarketCandidates(now, blockedGroups)),
-      collectSource("kalshi", () => fetchKalshiCandidates(now, blockedGroups, kalshiEnv)),
+      collectSource("polymarket", async () => {
+        const result = await fetchPolymarketCandidates(now, blockedGroups);
+        otherSourceCapacity = discoveryCapacity(result.candidates, now, blockedGroups, recentTitles);
+        return result;
+      }),
+      collectSource("kalshi", () => fetchKalshiCandidates(now, blockedGroups, kalshiEnv, () => otherSourceCapacity)),
     ]);
     const successes = sourceResults
       .filter((result): result is PromiseFulfilledResult<SourceFetchResult> => result.status === "fulfilled")
@@ -1167,6 +1178,7 @@ type IntakeBudget = {
   maximumRequests: number;
   minimumIntervalMs: number;
   nextRequestAt: number;
+  pacing: Promise<void>;
   rateLimitedUntil?: number;
   diagnostics: IntakeDiagnostics;
 };
@@ -1191,6 +1203,7 @@ function intakeBudget(maximumRequests: number, minimumIntervalMs = 0, timeoutMs 
     maximumRequests,
     minimumIntervalMs,
     nextRequestAt: Date.now(),
+    pacing: Promise.resolve(),
     diagnostics: {
       startedAt, elapsedMs: 0, requests: 0, bytes: 0, fetchedMarkets: 0,
       discoveredEvents: 0, hydratedEvents: 0, errors: [], limitsReached: [],
@@ -1211,22 +1224,34 @@ function intakeFailure(budget: IntakeBudget, stage: string, error: unknown) {
   budget.diagnostics.errors.push({ stage, error: error instanceof Error ? error.message : String(error) });
 }
 
+async function reserveIntakeRequest(budget: IntakeBudget) {
+  // Serialize admission, not the network requests. A timer may wake without a
+  // new Date.now() value in Workers; repeatedly polling that clock can spin.
+  // Each queued caller waits once, then releases the next caller in FIFO order.
+  const previous = budget.pacing;
+  let release!: () => void;
+  budget.pacing = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    if (!intakeAvailable(budget)) return false;
+    const delay = Math.min(budget.nextRequestAt, budget.deadline) - Date.now();
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    if (!intakeAvailable(budget)) return false;
+    budget.nextRequestAt = Date.now() + budget.minimumIntervalMs;
+    budget.diagnostics.requests += 1;
+    return true;
+  } finally { release(); }
+}
+
 async function fetchIntakeJson(url: URL, budget: IntakeBudget, maximumBytes = INTAKE_PAGE_MAX_BYTES, kalshiHeaders?: KalshiGetHeaders) {
   const endpoints = url.origin === new URL(KALSHI_API).origin
     ? [url, new URL(url.pathname + url.search, KALSHI_API_FALLBACK_ORIGIN)] : [url];
   let lastError: unknown = new Error("Intake source budget exhausted");
   for (const endpoint of endpoints) {
-    if (!intakeAvailable(budget)) break;
-    // Both source workers share one start pace. Recheck after every wait so a
-    // delayed timer cannot release a burst of previously reserved requests.
-    while (intakeAvailable(budget) && Date.now() < budget.nextRequestAt) {
-      const delay = Math.min(budget.nextRequestAt, budget.deadline) - Date.now();
-      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-    // Another in-flight request may have returned 429 while this one waited.
-    if (!intakeAvailable(budget)) break;
-    budget.nextRequestAt = Date.now() + budget.minimumIntervalMs;
-    budget.diagnostics.requests += 1;
+    if (!await reserveIntakeRequest(budget)) break;
+    const requestNumber = budget.diagnostics.requests;
+    const trace = { source: endpoint.hostname, path: endpoint.pathname, requestNumber };
+    console.info(JSON.stringify({ message: "intake.request_started", ...trace }));
     try {
       const authHeaders = kalshiHeaders ? await kalshiHeaders(endpoint) : {};
       const response = await fetch(endpoint, {
@@ -1234,6 +1259,7 @@ async function fetchIntakeJson(url: URL, budget: IntakeBudget, maximumBytes = IN
         redirect: authHeaders["KALSHI-ACCESS-KEY"] ? "error" : "follow",
         signal: AbortSignal.timeout(Math.max(1, Math.min(INTAKE_REQUEST_TIMEOUT_MS, budget.deadline - Date.now()))),
       });
+      console.info(JSON.stringify({ message: "intake.response_received", ...trace, status: response.status }));
       if (!response.ok) {
         if (response.status === 429) {
           const hint = response.headers.get('retry-after');
@@ -1254,11 +1280,13 @@ async function fetchIntakeJson(url: URL, budget: IntakeBudget, maximumBytes = IN
         if (response.status < 500) break;
         continue;
       }
-      return await readJsonLimited(
+      const payload = await readJsonLimited(
         response,
         Math.min(maximumBytes, INTAKE_SOURCE_MAX_BYTES - budget.diagnostics.bytes),
         (bytes) => { budget.diagnostics.bytes += bytes; },
       ) as Record<string, unknown>;
+      console.info(JSON.stringify({ message: "intake.response_read", ...trace, bytes: budget.diagnostics.bytes }));
+      return payload;
     } catch (error) {
       lastError = error;
     }
@@ -1364,8 +1392,8 @@ async function fetchPolymarketEventPayloads(now: Date, blockedGroups = new Set<s
         end_date_min: new Date(minimumClose).toISOString(), end_date_max: new Date(maximumClose).toISOString(),
       })) url.searchParams.set(key, value);
       if (!rapid) {
-        url.searchParams.set("liquidity_min", String(CURATION_CONFIG.minimumLiquidity));
-        url.searchParams.set("volume_min", String(CURATION_CONFIG.minimumTotalVolume));
+        url.searchParams.set("liquidity_num_min", String(CURATION_CONFIG.minimumLiquidity));
+        url.searchParams.set("volume_num_min", String(CURATION_CONFIG.minimumTotalVolume));
       }
       if (cursor) url.searchParams.set("after_cursor", cursor);
       try {
@@ -1437,8 +1465,8 @@ const KALSHI_DISCOVERY_CATEGORIES = [
   ["Sports", "Sports"], ["Entertainment", "Entertainment"],
 ] as const;
 
-async function fetchKalshiCandidates(now: Date, blockedGroups = new Set<string>(), kalshiEnv: KalshiAuthEnv = {}): Promise<SourceFetchResult> {
-  const result = await fetchKalshiEventPayloads(now, blockedGroups, kalshiEnv);
+async function fetchKalshiCandidates(now: Date, blockedGroups = new Set<string>(), kalshiEnv: KalshiAuthEnv = {}, getOtherSourceCapacity: () => Readonly<Record<string, number>> = () => ({})): Promise<SourceFetchResult> {
+  const result = await fetchKalshiEventPayloads(now, blockedGroups, kalshiEnv, getOtherSourceCapacity);
   const candidates = result.events.flatMap((event) => objectRows(event.markets)
     .map((market) => normalizeKalshiMarket(event, market, now))).filter((candidate) => candidate.marketId !== "kalshi:");
   return { source: "kalshi", eventCount: result.events.length, pages: result.diagnostics.requests, candidates, diagnostics: result.diagnostics };
@@ -1446,6 +1474,16 @@ async function fetchKalshiCandidates(now: Date, blockedGroups = new Set<string>(
 
 type KalshiDiscoveryCandidate = Pick<ReturnType<typeof normalizeKalshiMarket>,
   "sourcePlatform" | "sourceEventId" | "diversityGroupId" | "category" | "title">;
+
+function discoveryCapacity(candidates: SourceFetchResult["candidates"], now: Date, blockedGroups: Set<string>, recentTitles: string[]) {
+  const supply = new Map<string, KalshiDiscoveryCandidate[]>(CANONICAL_CATEGORIES.map((category) => [category, []]));
+  for (const candidate of buildEventCandidates(rankCandidates(candidates, now) as Candidate[])) {
+    if (recentTitles.some((title) => !validateDailySlate([candidate, { ...candidate,
+      diversityGroupId: "history", sourceEventId: "history", title }]).uniqueTitles)) continue;
+    recordKalshiDiscoveryCandidate(supply, candidate, blockedGroups);
+  }
+  return Object.fromEntries([...supply].map(([category, items]) => [category, items.length]));
+}
 
 function recordKalshiDiscoveryCandidate(
   supply: Map<string, KalshiDiscoveryCandidate[]>, candidate: KalshiDiscoveryCandidate,
@@ -1466,7 +1504,7 @@ function recordKalshiDiscoveryCandidate(
   }
 }
 
-async function fetchKalshiEventPayloads(now: Date, blockedGroups = new Set<string>(), kalshiEnv: KalshiAuthEnv = {}): Promise<EventPayloadResult> {
+async function fetchKalshiEventPayloads(now: Date, blockedGroups = new Set<string>(), kalshiEnv: KalshiAuthEnv = {}, getOtherSourceCapacity: () => Readonly<Record<string, number>> = () => ({})): Promise<EventPayloadResult> {
   const kalshiHeaders = createKalshiGetHeaders(kalshiEnv);
   const budget = intakeBudget(MAX_KALSHI_INTAKE_REQUESTS, KALSHI_REQUEST_INTERVAL_MS, KALSHI_SOURCE_TIMEOUT_MS);
   const pools = new Map<string, Array<{ ticker: string; volume: number }>>();
@@ -1489,11 +1527,17 @@ async function fetchKalshiEventPayloads(now: Date, blockedGroups = new Set<strin
   const supply = new Map<string, KalshiDiscoveryCandidate[]>(CANONICAL_CATEGORIES.map((category) => [category, []]));
   const attempts = new Map(CANONICAL_CATEGORIES.map((category) => [category, 0]));
   while (queried.size < MAX_KALSHI_SERIES_REQUESTS && intakeAvailable(budget)) {
+    // Spend scarce discovery calls on the joint slate's missing categories.
+    // This invocation's Polymarket result is only a hint; it never changes the
+    // hard quotas or blocks exploration when that source is unavailable.
+    const otherCapacity = getOtherSourceCapacity();
+    const deficit = (category: string) => Math.max(0, CURATION_CONFIG.targetPerCategory
+      - (otherCapacity[category] || 0) - (supply.get(category)?.length || 0));
     const categories = [...CANONICAL_CATEGORIES].filter((category) =>
       (supply.get(category)?.length || 0) < KALSHI_DISCOVERY_GROUP_TARGET
       && pools.get(category)?.some((series) => !queried.has(series.ticker)),
     ).sort((left, right) =>
-      (supply.get(left)?.length || 0) - (supply.get(right)?.length || 0)
+      deficit(right) - deficit(left)
       || (attempts.get(left) || 0) - (attempts.get(right) || 0));
     if (!categories.length) break;
     const queue: Array<{ category: string; ticker: string }> = [];
