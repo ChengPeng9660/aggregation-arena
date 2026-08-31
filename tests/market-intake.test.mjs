@@ -19,7 +19,7 @@ function load(fetch, getD1 = () => { throw new Error('No test database'); }, run
   const dependencies = { ...curation, createKalshiGetHeaders, fetch, getD1, ...runtime };
   return new Function(...Object.keys(dependencies), `${moduleBody}\nreturn {
     fetchPolymarketEventPayloads, fetchKalshiEventPayloads, readJsonLimited,
-    fetchIntakeJson, intakeBudget,
+    fetchIntakeJson, intakeBudget, buildEventCandidates,
     syncLiveMarketCandidates, closeStaleSyncRuns, CURATION_SCHEMA,
   };`)(...Object.values(dependencies));
 }
@@ -173,6 +173,35 @@ test('bulk parent hydration uses bounded requests while retaining every child ou
   assert.ok(batches.every((batch) => batch.length <= 12));
   assert.equal(result.events.flatMap((event) => event.markets).length,325);
   assert.deepEqual(result.diagnostics.errors,[]);
+});
+
+test('independent binary siblings contribute one explicit question while categorical siblings remain a complete vector', () => {
+  const lib = load(() => { throw new Error('No network needed'); });
+  const event = polyEvent('release-dates', 2);
+  event.title = 'New science model released by…?';
+  event.negRisk = false;
+  event.markets.forEach((market, index) => {
+    market.negRisk = false;
+    market.question = `New science model released by September ${index ? '30' : '15'}, 2026?`;
+    market.volume24hr = index ? 10_000 : 20_000;
+  });
+  const candidates = curation.rankCandidates(event.markets.map(market => curation.normalizePolymarketMarket(event, market, now)), now);
+  const binary = lib.buildEventCandidates(candidates);
+  assert.equal(binary.length, 1);
+  assert.equal(binary[0].eventType, 'binary');
+  assert.equal(binary[0].title, event.markets[0].question);
+  assert.equal(binary[0].eventTitle, event.markets[0].question, 'published title must identify the selected date');
+  assert.equal(binary[0].diversityGroupId, 'polymarket-event:release-dates');
+  assert.deepEqual(binary[0].eventOutcomes.map(outcome => [outcome.key, outcome.marketId]), [
+    ['yes', event.markets[0].id], ['no', event.markets[0].id],
+  ]);
+  const categoricalEvent = polyEvent('award-winner', 13);
+  const categorical = lib.buildEventCandidates(curation.rankCandidates(categoricalEvent.markets.map(market =>
+    curation.normalizePolymarketMarket(categoricalEvent, market, now)), now));
+  assert.equal(categorical.length, 1);
+  assert.equal(categorical[0].eventType, 'categorical');
+  assert.equal(categorical[0].title, categoricalEvent.title);
+  assert.equal(categorical[0].eventOutcomes.length, 13);
 });
 
 test('next-day Kalshi discovery looks past used groups and retains official categories with at most two concurrent requests', async () => {

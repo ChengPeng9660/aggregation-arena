@@ -1112,11 +1112,14 @@ function buildEventCandidates(candidates: Candidate[]): EventCandidate[] {
   const events: EventCandidate[] = [];
   for (const group of groups.values()) {
     const ranked = [...group].sort((a, b) => b.selectionScore - a.selectionScore || b.volume24h - a.volume24h);
-    const representative = ranked.find((candidate) => candidate.eligible);
+    const representative = ranked.find((candidate) => candidate.eligible && isActiveNamedMarket(candidate));
     if (!representative) continue;
     const namedMarkets = ranked.filter((candidate) => isActiveNamedMarket(candidate));
     const isCategorical = representative.eventNegRisk && namedMarkets.length > 1;
-    if (!isCategorical && namedMarkets.length > 1) continue;
+    // A non-NegRisk parent may group independent binary dates/thresholds.
+    // Select one actual Yes/No question from that family, just as for Kalshi;
+    // do not discard every question or pretend the siblings sum to one.
+    // The parent diversity group still prevents selecting a second sibling.
     const eventOutcomes: EventOutcome[] = isCategorical
       ? namedMarkets.map((candidate) => ({
           key: candidate.marketId,
@@ -1144,7 +1147,8 @@ function buildEventCandidates(candidates: Candidate[]): EventCandidate[] {
         ];
     events.push({
       ...representative,
-      title: representative.eventTitle || representative.title,
+      title: isCategorical ? representative.eventTitle || representative.title : representative.title,
+      eventTitle: isCategorical ? representative.eventTitle || representative.title : representative.title,
       eventType: isCategorical ? "categorical" : "binary",
       eventOutcomes,
     });
